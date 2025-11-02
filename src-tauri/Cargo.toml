@@ -1,0 +1,30 @@
+[package]
+name = "promptlibrary-explorer"
+version = "0.1.0"
+description = "PromptLibrary Explorer desktop app"
+authors = ["Kareem King"]
+edition = "2021"
+license = "MIT"
+
+# --- Build script (generates bindings from tauri.conf.json) ---
+[build-dependencies]
+tauri-build = { version = "1", features = [] }
+
+# --- App deps ---
+[dependencies]
+tauri = { version = "1", features = [ "fs-rename-file",
+  # match your allowlist in tauri.conf.json
+  "dialog-open",
+  "fs-read-file",
+  "fs-read-dir",
+  "path-all"
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Optional but recommended for smaller/faster release builds
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "s"
+strip = "symbols"

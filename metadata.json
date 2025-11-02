@@ -1,0 +1,6 @@
+{
+  "$schema": "./app-metadata.schema.json",
+  "appName": "PromptLibrary Explorer",
+  "description": "A browser to view generative images and their prompts.",
+  "features": { "requestFramePermissions": [] }
+}
