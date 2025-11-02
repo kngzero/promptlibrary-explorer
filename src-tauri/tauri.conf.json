@@ -25,6 +25,12 @@
         "readDir": true,
         "renameFile": true
       },
+      "protocol": {
+        "asset": true,
+        "assetScope": [
+          "$HOME/**"
+        ]
+      },
       "path": {
         "all": true
       }
@@ -63,7 +69,7 @@
       }
     },
     "security": {
-        "csp": "default-src 'self'; img-src 'self' asset: tauri: blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'"
+        "csp": "default-src 'self'; img-src 'self' asset: tauri: https://asset.localhost blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'"
     },
     "updater": {
       "active": false

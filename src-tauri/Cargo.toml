@@ -12,7 +12,7 @@ tauri-build = { version = "1", features = [] }
 
 # --- App deps ---
 [dependencies]
-tauri = { version = "1", features = [ "fs-rename-file",
+tauri = { version = "1", features = [ "protocol-asset", "fs-rename-file",
   # match your allowlist in tauri.conf.json
   "dialog-open",
   "fs-read-file",

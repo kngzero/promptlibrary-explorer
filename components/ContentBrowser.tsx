@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import ExplorerItem from './ExplorerItem';
 import type { PromptEntry, FsFileEntry } from '../types';
 

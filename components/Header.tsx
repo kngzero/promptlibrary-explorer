@@ -3,7 +3,7 @@ import { BrandLogo, ChevronRightIcon, SortIcon, FilterIcon, CheckIcon, OpenIcon,
 import type { SortConfig, FilterConfig, Breadcrumb } from '../types';
 
 // Custom hook to detect clicks outside of a component
-function useOnClickOutside(ref: React.RefObject<HTMLElement>, handler: (event: MouseEvent | TouchEvent) => void) {
+function useOnClickOutside<T extends HTMLElement>(ref: React.RefObject<T | null>, handler: (event: MouseEvent | TouchEvent) => void) {
   useEffect(() => {
     const listener = (event: MouseEvent | TouchEvent) => {
       if (!ref.current || ref.current.contains(event.target as Node)) {
@@ -48,8 +48,8 @@ const Header: React.FC<HeaderProps> = ({
   const [sortOpen, setSortOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
 
-  const sortRef = useRef<HTMLDivElement>(null);
-  const filterRef = useRef<HTMLDivElement>(null);
+  const sortRef = useRef<HTMLDivElement | null>(null);
+  const filterRef = useRef<HTMLDivElement | null>(null);
 
   useOnClickOutside(sortRef, () => setSortOpen(false));
   useOnClickOutside(filterRef, () => setFilterOpen(false));

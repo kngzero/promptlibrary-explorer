@@ -37,7 +37,7 @@ const App: React.FC = () => {
   const [lightboxEntry, setLightboxEntry] = useState<PromptEntry | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   
-  const isDemoMode = useMemo(() => explorerRootPath?.startsWith('/demo'), [explorerRootPath]);
+  const isDemoMode = useMemo(() => !!(explorerRootPath && explorerRootPath.startsWith('/demo')), [explorerRootPath]);
 
   const handleOpenFolder = useCallback(async () => {
     const folderPath = await openFolderDialog();
@@ -120,7 +120,7 @@ const App: React.FC = () => {
     }
 
     const relativePath = selectedFolderPath.substring(explorerRootPath.length).replace(/^[\\/]/, '');
-    const rootName = explorerRootPath.split(/[\\/]/).pop();
+    const rootName = explorerRootPath.split(/[\\/]/).pop() || explorerRootPath;
 
     const crumbs: Breadcrumb[] = [{ name: rootName, path: explorerRootPath }];
     if (!relativePath) return crumbs;
