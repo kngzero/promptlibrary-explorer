@@ -22,6 +22,10 @@ tauri = { version = "1", features = [ "protocol-asset", "fs-rename-file",
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol", "tauri/protocol-asset"]
+
 # Optional but recommended for smaller/faster release builds
 [profile.release]
 lto = true
