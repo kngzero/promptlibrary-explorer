@@ -24,11 +24,12 @@ interface ExplorerProps {
     onSelectFolder: (path: string) => void;
     onSelectItem: (item: FsFileEntry, index: number) => void;
     onSelectItemByIndex: (index: number) => void;
-    onOpenLightbox: (item: PromptEntry, index: number) => void;
+    onOpenLightbox: (folderIndex: number) => void;
     onStartDemo: () => void;
     onSelectFavorite: (favorite: 'desktop' | 'documents' | 'pictures') => void;
     onMoveItem: (sourcePath: string, destinationDir: string) => void;
     isDemoMode: boolean;
+    onItemContextMenu: (event: React.MouseEvent, item: FsFileEntry, index: number) => void;
 }
 
 const Explorer: React.FC<ExplorerProps> = ({
@@ -53,6 +54,7 @@ const Explorer: React.FC<ExplorerProps> = ({
     onSelectFavorite,
     onMoveItem,
     isDemoMode,
+    onItemContextMenu,
 }) => {
     
     if (!rootPath) {
@@ -114,6 +116,7 @@ const Explorer: React.FC<ExplorerProps> = ({
                     onSelectItemByIndex={onSelectItemByIndex}
                     thumbnailSize={thumbnailSize}
                     thumbnailsOnly={thumbnailsOnly}
+                    onItemContextMenu={onItemContextMenu}
                 />
                 <InfoBar
                     shownCount={folderContents.length}

@@ -1,6 +1,6 @@
 import type { FsFileEntry } from '../types';
 import { renameFile } from '@tauri-apps/api/fs';
-import { basename, join } from '@tauri-apps/api/path';
+import { basename, join, dirname } from '@tauri-apps/api/path';
 
 
 /**
@@ -119,5 +119,46 @@ export const moveFile = async (sourcePath: string, destinationDir: string): Prom
   } catch (error) {
     console.error(`Failed to move file from ${sourcePath} to ${destinationDir}`, error);
     throw error; // Re-throw to be caught by the calling component
+  }
+};
+
+/**
+ * Renames a file or folder within its current directory.
+ * @param sourcePath Full path to the item to rename.
+ * @param newName New filename (without directory path).
+ */
+export const renameEntry = async (sourcePath: string, newName: string): Promise<void> => {
+  try {
+    const directory = await dirname(sourcePath);
+    const destinationPath = await join(directory, newName);
+
+    if (destinationPath === sourcePath) {
+      console.log("Source and destination are the same, skipping rename.");
+      return;
+    }
+
+    await renameFile(sourcePath, destinationPath);
+  } catch (error) {
+    console.error(`Failed to rename ${sourcePath} to ${newName}`, error);
+    throw error;
+  }
+};
+
+/**
+ * Reveals a file or folder in the native file manager.
+ * On macOS this opens Finder, on Windows Explorer, and on Linux the containing folder.
+ */
+export const revealInFileManager = async (targetPath: string): Promise<boolean> => {
+  if (!targetPath) {
+    return false;
+  }
+
+  try {
+    const { invoke } = await import('@tauri-apps/api/tauri');
+    await invoke('reveal_in_file_manager', { targetPath });
+    return true;
+  } catch (error) {
+    console.error(`Failed to reveal item in file manager: ${targetPath}`, error);
+    return false;
   }
 };

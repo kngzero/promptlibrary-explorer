@@ -39,6 +39,12 @@ export const CopyIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   </svg>
 );
 
+export const RefreshIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" {...props}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.477V4.87m-9.704 9.704l-.342.342a4.5 4.5 0 01-6.364-6.364l.342-.342m12.45 12.45l.342-.342a4.5 4.5 0 000-6.364 4.5 4.5 0 00-6.364 0l-.342.342m-2.136-2.136H2.25v4.477" />
+  </svg>
+);
+
 export const CloseIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" {...props}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />

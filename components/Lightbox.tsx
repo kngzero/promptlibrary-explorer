@@ -6,20 +6,23 @@ import ImageDisplay from './ImageDisplay';
 interface LightboxProps {
   isOpen: boolean;
   entry: PromptEntry;
-  currentIndex: number;
+  currentImageIndex: number;
   onClose: () => void;
-  onNext: () => void;
-  onPrev: () => void;
+  onNextFile: () => void;
+  onPrevFile: () => void;
+  onSelectImage: (index: number) => void;
+  canGoNext: boolean;
+  canGoPrev: boolean;
 }
 
-const Lightbox: React.FC<LightboxProps> = ({ isOpen, entry, currentIndex, onClose, onNext, onPrev }) => {
+const Lightbox: React.FC<LightboxProps> = ({ isOpen, entry, currentImageIndex, onClose, onNextFile, onPrevFile, onSelectImage, canGoNext, canGoPrev }) => {
   const [isCopied, setIsCopied] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
-      if (e.key === 'ArrowRight') onNext();
-      if (e.key === 'ArrowLeft') onPrev();
+      if (e.key === 'ArrowRight') onNextFile();
+      if (e.key === 'ArrowLeft') onPrevFile();
     };
     if (isOpen) {
       window.addEventListener('keydown', handleKeyDown);
@@ -27,19 +30,19 @@ const Lightbox: React.FC<LightboxProps> = ({ isOpen, entry, currentIndex, onClos
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, onClose, onNext, onPrev]);
+  }, [isOpen, onClose, onNextFile, onPrevFile]);
 
   const handleDownload = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation(); // Prevent the lightbox from closing
-    if (entry && entry.images[currentIndex]) {
+    if (entry && entry.images[currentImageIndex]) {
       const link = document.createElement("a");
-      link.href = entry.images[currentIndex];
-      link.download = `generated_image_${currentIndex + 1}_${Date.now()}.png`;
+      link.href = entry.images[currentImageIndex];
+      link.download = `generated_image_${currentImageIndex + 1}_${Date.now()}.png`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
     }
-  }, [entry, currentIndex]);
+  }, [entry, currentImageIndex]);
 
   const handleSavePlib = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
@@ -74,6 +77,7 @@ const Lightbox: React.FC<LightboxProps> = ({ isOpen, entry, currentIndex, onClos
   if (!isOpen || !entry) return null;
 
   const { images, prompt, generationInfo, referenceImages } = entry;
+  const activeImage = images[currentImageIndex] ?? images[0] ?? '';
 
   return (
     <div
@@ -90,31 +94,54 @@ const Lightbox: React.FC<LightboxProps> = ({ isOpen, entry, currentIndex, onClos
         {/* Main content: Image Viewer */}
         <div className="w-full md:w-[calc(100%-400px)] h-2/3 md:h-full bg-black flex items-center justify-center relative group p-4">
           <ImageDisplay
-            src={images[currentIndex]}
-            alt={`Generated content ${currentIndex + 1}`}
+            src={activeImage}
+            alt={`Generated content ${currentImageIndex + 1}`}
             containerClassName="w-full h-full"
             className="w-full h-full object-contain"
           />
 
           {/* Prev/Next buttons */}
           <button
-            onClick={onPrev}
+            onClick={onPrevFile}
             className="absolute left-4 top-1/2 -translate-y-1/2 text-white bg-neutral-800/50 rounded-full p-2 hover:bg-neutral-700 transition-colors disabled:opacity-0 disabled:cursor-not-allowed opacity-0 group-hover:opacity-100 focus:opacity-100"
-            aria-label="Previous image"
-            disabled={currentIndex === 0}
-            title="Previous image (Left arrow)"
+            aria-label="Previous file"
+            disabled={!canGoPrev}
+            title="Previous file (Left arrow)"
           >
             <ChevronLeftIcon className="h-8 w-8" />
           </button>
           <button
-            onClick={onNext}
+            onClick={onNextFile}
             className="absolute right-4 top-1/2 -translate-y-1/2 text-white bg-neutral-800/50 rounded-full p-2 hover:bg-neutral-700 transition-colors disabled:opacity-0 disabled:cursor-not-allowed opacity-0 group-hover:opacity-100 focus:opacity-100"
-            aria-label="Next image"
-            disabled={currentIndex === images.length - 1}
-            title="Next image (Right arrow)"
+            aria-label="Next file"
+            disabled={!canGoNext}
+            title="Next file (Right arrow)"
           >
             <ChevronRightIcon className="h-8 w-8" />
           </button>
+
+          {images.length > 1 && (
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 bg-neutral-900/80 backdrop-blur-sm rounded-xl p-2 max-w-full overflow-x-auto">
+              {images.map((img, index) => (
+                <button
+                  key={index}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectImage(index);
+                  }}
+                  className={`w-16 h-16 rounded-md border transition-colors ${index === currentImageIndex ? 'border-fuchsia-500' : 'border-transparent hover:border-neutral-500'}`}
+                  title={`View image ${index + 1}`}
+                >
+                  <ImageDisplay
+                    src={img}
+                    alt={`Image option ${index + 1}`}
+                    containerClassName="w-full h-full"
+                    className="w-full h-full object-cover rounded-md"
+                  />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Right Side: Details Panel */}
@@ -194,7 +221,7 @@ const Lightbox: React.FC<LightboxProps> = ({ isOpen, entry, currentIndex, onClos
                 className="w-full flex items-center justify-center gap-2 px-4 py-3 text-base font-semibold rounded-lg text-neutral-200 bg-neutral-700 hover:bg-neutral-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-neutral-800 focus:ring-white transition-colors duration-200"
               >
                 <DownloadIcon className="w-5 h-5" />
-                Download Image ({currentIndex + 1} of {images.length})
+                Download Image ({currentImageIndex + 1} of {images.length})
               </button>
               <button
                 onClick={handleSavePlib}

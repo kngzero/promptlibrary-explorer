@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BrandLogo, ChevronRightIcon, SortIcon, FilterIcon, CheckIcon, OpenIcon, PowerIcon } from './icons';
+import { BrandLogo, ChevronRightIcon, SortIcon, FilterIcon, CheckIcon, OpenIcon, PowerIcon, RefreshIcon } from './icons';
 import type { SortConfig, FilterConfig, Breadcrumb } from '../types';
 
 // Custom hook to detect clicks outside of a component
@@ -31,6 +31,7 @@ interface HeaderProps {
     isDemoMode: boolean;
     onChangeFolder: () => void;
     onExitDemo: () => void;
+    onRefreshFolder: () => void;
 }
 
 const Header: React.FC<HeaderProps> = ({
@@ -43,7 +44,8 @@ const Header: React.FC<HeaderProps> = ({
     isFolderOpen,
     isDemoMode,
     onChangeFolder,
-    onExitDemo
+    onExitDemo,
+    onRefreshFolder
 }) => {
   const [sortOpen, setSortOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -140,6 +142,14 @@ const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center gap-2">
         {isFolderOpen && (
           <>
+            <button
+              onClick={onRefreshFolder}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-zinc-300 bg-zinc-800 border border-zinc-700 rounded-md hover:bg-zinc-700 hover:border-zinc-600 transition-colors"
+              title="Refresh folder"
+            >
+              <RefreshIcon className="w-4 h-4" />
+              Refresh
+            </button>
             {/* Sort Dropdown */}
             <div ref={sortRef} className="relative">
               <button 

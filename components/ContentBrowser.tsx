@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import ExplorerItem from './ExplorerItem';
-import type { PromptEntry, FsFileEntry } from '../types';
+import type { FsFileEntry } from '../types';
 
 interface ContentBrowserProps {
     items: FsFileEntry[];
@@ -9,11 +9,12 @@ interface ContentBrowserProps {
     onSelectItemByIndex: (index: number) => void;
     selectedItemIndex: number;
     onNavigate: (path: string) => void;
-    onOpenLightbox: (item: PromptEntry, index: number) => void;
+    onOpenLightbox: (index: number) => void;
     onMoveItem: (sourcePath: string, destinationDir: string) => void;
     isDemoMode: boolean;
     thumbnailSize: number;
     thumbnailsOnly: boolean;
+    onItemContextMenu: (event: React.MouseEvent, item: FsFileEntry, index: number) => void;
 }
 
 const ContentBrowser: React.FC<ContentBrowserProps> = ({ 
@@ -27,7 +28,8 @@ const ContentBrowser: React.FC<ContentBrowserProps> = ({
     selectedItemIndex, 
     onSelectItemByIndex,
     thumbnailSize,
-    thumbnailsOnly
+    thumbnailsOnly,
+    onItemContextMenu
 }) => {
     
     const gridRef = useRef<HTMLDivElement>(null);
@@ -35,11 +37,9 @@ const ContentBrowser: React.FC<ContentBrowserProps> = ({
     
     // Effect to auto-focus the grid when a folder is opened
     useEffect(() => {
-        if (!isLoading && items.length > 0 && gridRef.current) {
+        if (!isLoading && items.length > 0 && gridRef.current && selectedItemIndex === -1) {
             gridRef.current.focus();
-            if (selectedItemIndex === -1) {
-                onSelectItemByIndex(0);
-            }
+            onSelectItemByIndex(0);
         }
     }, [isLoading, items.length, selectedItemIndex, onSelectItemByIndex]);
     
@@ -142,11 +142,12 @@ const ContentBrowser: React.FC<ContentBrowserProps> = ({
                                 item={item}
                                 onSelect={() => onSelectItem(item, index)}
                                 onDoubleClick={() => handleDoubleClick(item)}
-                                onOpenLightbox={onOpenLightbox}
+                                onOpenLightbox={() => onOpenLightbox(index)}
                                 onMoveItem={onMoveItem}
                                 isDemoMode={isDemoMode}
                                 isFocused={index === selectedItemIndex}
                                 thumbnailsOnly={thumbnailsOnly}
+                                onContextMenu={(event) => onItemContextMenu(event, item, index)}
                             />
                         </div>
                     ))}

@@ -3,10 +3,18 @@ import Header from './components/Header';
 import Lightbox from './components/Lightbox';
 import Toast from './components/Toast';
 import Explorer from './components/Explorer';
-import { openFolderDialog, readDirectory, convertFileSrc, getDesktopDir, getDocumentsDir, getPicturesDir, moveFile } from './services/tauriService';
+import { openFolderDialog, readDirectory, convertFileSrc, getDesktopDir, getDocumentsDir, getPicturesDir, moveFile, renameEntry, revealInFileManager } from './services/tauriService';
 import { getDemoTree, getDemoFolderContents, getDemoPlibFile, getDemoImageEntry } from './services/demoService';
 import { getPlibData, clearPlibCache } from './services/plibService';
 import type { PromptEntry, FsFileEntry, SortConfig, FilterConfig, Breadcrumb } from './types';
+
+const isImageFile = (name: string) => /\.(png|jpe?g|webp|gif)$/i.test(name);
+const isPlibFile = (name: string) => /\.plib$/i.test(name);
+const isPreviewableItem = (item: FsFileEntry) => {
+  if (item.children) return false;
+  const name = item.name?.toLowerCase() || '';
+  return isPlibFile(name) || isImageFile(name);
+};
 
 const App: React.FC = () => {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -23,7 +31,7 @@ const App: React.FC = () => {
   // Sort & Filter State
   const [sortConfig, setSortConfig] = useState<SortConfig>({ field: 'type', direction: 'asc' });
   const [filterConfig, setFilterConfig] = useState<FilterConfig>({
-    hideOther: false,
+    hideOther: true,
     hideJpg: false,
     hidePng: false,
   });
@@ -36,6 +44,9 @@ const App: React.FC = () => {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxEntry, setLightboxEntry] = useState<PromptEntry | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [lightboxPreviewIndex, setLightboxPreviewIndex] = useState<number>(-1);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: FsFileEntry } | null>(null);
+  const [renameState, setRenameState] = useState<{ item: FsFileEntry; value: string; originalName: string } | null>(null);
   
   const isDemoMode = useMemo(() => !!(explorerRootPath && explorerRootPath.startsWith('/demo')), [explorerRootPath]);
 
@@ -163,18 +174,18 @@ const App: React.FC = () => {
     };
   }, [handleOpenFolder, handleSelectFolder, breadcrumbs, lightboxOpen]);
 
-  useEffect(() => {
-      const buildTree = async () => {
-          if (explorerRootPath && !isDemoMode) {
-              const contents = await readDirectory(explorerRootPath);
-              const dirs = contents.filter(item => item.children);
-              // Sort directories alphabetically by name
-              dirs.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-              setFolderTree(dirs);
-          }
-      };
-      buildTree();
+  const refreshFolderTree = useCallback(async () => {
+      if (explorerRootPath && !isDemoMode) {
+          const contents = await readDirectory(explorerRootPath);
+          const dirs = contents.filter(item => item.children);
+          dirs.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+          setFolderTree(dirs);
+      }
   }, [explorerRootPath, isDemoMode]);
+
+  useEffect(() => {
+      refreshFolderTree();
+  }, [refreshFolderTree]);
   
   const fetchFolderContents = useCallback(async (path: string | null) => {
     if (path) {
@@ -200,6 +211,14 @@ const App: React.FC = () => {
     fetchFolderContents(selectedFolderPath);
   }, [selectedFolderPath, fetchFolderContents]);
 
+  const handleRefreshFolder = useCallback(async () => {
+    if (!selectedFolderPath) {
+        return;
+    }
+    await fetchFolderContents(selectedFolderPath);
+    await refreshFolderTree();
+  }, [selectedFolderPath, fetchFolderContents, refreshFolderTree]);
+
   const handleMoveItem = useCallback(async (sourcePath: string, destinationDir: string) => {
     if (isDemoMode) {
         setToast({ message: 'Drag and drop is disabled in demo mode.', type: 'info' });
@@ -212,12 +231,77 @@ const App: React.FC = () => {
         setSelectedItemIndex(-1);
         // Refresh the current folder view
         await fetchFolderContents(selectedFolderPath);
+        await refreshFolderTree();
         setToast({ message: 'Item moved successfully.', type: 'success' });
     } catch (e) {
         console.error("Failed to move item:", e);
         setToast({ message: "Failed to move item.", type: 'error' });
     }
-  }, [isDemoMode, selectedFolderPath, fetchFolderContents]);
+  }, [isDemoMode, selectedFolderPath, fetchFolderContents, refreshFolderTree]);
+
+  const handleItemContextMenu = useCallback((event: React.MouseEvent, item: FsFileEntry, _index?: number) => {
+    event.preventDefault();
+    if (isDemoMode) {
+        setToast({ message: 'Context menu actions are disabled in demo mode.', type: 'info' });
+        return;
+    }
+    setContextMenu({ x: event.clientX, y: event.clientY, item });
+  }, [isDemoMode]);
+
+  const handleRenameChange = useCallback((value: string) => {
+    setRenameState(prev => (prev ? { ...prev, value } : prev));
+  }, []);
+
+  const handleRenameCancel = useCallback(() => {
+    setRenameState(null);
+  }, []);
+
+  const handleRenameConfirm = useCallback(async () => {
+    if (!renameState) return;
+    if (isDemoMode) {
+        setToast({ message: 'Renaming is disabled in demo mode.', type: 'info' });
+        setRenameState(null);
+        return;
+    }
+
+    const newName = renameState.value.trim();
+    if (!newName) {
+        setToast({ message: 'Name cannot be empty.', type: 'error' });
+        return;
+    }
+
+    if (/[\\/]/.test(newName)) {
+        setToast({ message: 'Name cannot contain path separators.', type: 'error' });
+        return;
+    }
+
+    if (newName === renameState.originalName) {
+        setRenameState(null);
+        return;
+    }
+
+    try {
+        await renameEntry(renameState.item.path, newName);
+        setToast({ message: 'Item renamed successfully.', type: 'success' });
+        setRenameState(null);
+        setSelectedExplorerItem(null);
+        setSelectedItemIndex(-1);
+        setLightboxOpen(false);
+        setLightboxEntry(null);
+        setLightboxPreviewIndex(-1);
+        setLightboxIndex(0);
+        await fetchFolderContents(selectedFolderPath);
+        await refreshFolderTree();
+    } catch (error) {
+        console.error('Failed to rename item', error);
+        setToast({ message: 'Failed to rename item.', type: 'error' });
+    }
+  }, [renameState, isDemoMode, fetchFolderContents, selectedFolderPath, refreshFolderTree]);
+
+  useEffect(() => {
+    setContextMenu(null);
+    setRenameState(null);
+  }, [selectedFolderPath, isDemoMode]);
 
 
   // FIX: Moved getItemTypeRank and processedFolderContents before their usage in other hooks to prevent "used before declaration" errors.
@@ -267,7 +351,65 @@ const App: React.FC = () => {
   }, [folderContents, sortConfig, filterConfig, getItemTypeRank]);
 
   const hiddenItemCount = useMemo(() => folderContents.length - processedFolderContents.length, [folderContents, processedFolderContents]);
+
+  const previewableItems = useMemo(
+    () => processedFolderContents
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => isPreviewableItem(item)),
+    [processedFolderContents]
+  );
+
+  const previewIndexByFolderIndex = useMemo(() => {
+    const map = new Map<number, number>();
+    previewableItems.forEach(({ index }, previewIdx) => {
+      map.set(index, previewIdx);
+    });
+    return map;
+  }, [previewableItems]);
   
+  const loadPromptEntryForItem = useCallback(async (item: FsFileEntry): Promise<PromptEntry | null> => {
+    if (item.children) return null;
+    const name = (item.name || item.path).toLowerCase();
+
+    if (isDemoMode) {
+        if (isPlibFile(name)) {
+            return getDemoPlibFile(item.path);
+        }
+        if (isImageFile(name)) {
+            return getDemoImageEntry(item.path);
+        }
+        return null;
+    }
+
+    if (isPlibFile(name)) {
+        const data = await getPlibData(item.path);
+        if (!data) return null;
+
+        const convertIfNeeded = async (img: string) =>
+            !img.startsWith('data:') && !/^https?:\/\//i.test(img) ? await convertFileSrc(img) : img;
+
+        const images = await Promise.all((data.images ?? []).map(convertIfNeeded));
+        const referenceImages = await Promise.all((data.referenceImages ?? []).map(convertIfNeeded));
+        return { ...data, images, referenceImages };
+    }
+
+    if (isImageFile(name)) {
+        const imageUrl = await convertFileSrc(item.path);
+        return {
+            prompt: item.name || item.path.split(/[\\/]/).pop() || 'Image',
+            images: [imageUrl],
+            generationInfo: {
+                model: 'Image File',
+                aspectRatio: 'N/A', // Could use file metadata in future
+                timestamp: 'N/A',
+                numberOfImages: 1,
+            }
+        };
+    }
+
+    return null;
+  }, [isDemoMode]);
+
   const handleSelectItem = useCallback(async (item: FsFileEntry | null) => {
     if (!item) {
       setSelectedExplorerItem(null);
@@ -280,38 +422,9 @@ const App: React.FC = () => {
       return;
     }
 
-    if (isDemoMode) {
-        if (item.path.endsWith('.plib')) {
-            setSelectedExplorerItem(getDemoPlibFile(item.path));
-        } else if (/\.(png|jpe?g|webp|gif)$/i.test(item.name || item.path)) {
-            setSelectedExplorerItem(getDemoImageEntry(item.path));
-        } else {
-            setSelectedExplorerItem(null);
-        }
-        return;
-    }
-
-    // Real file system logic
-    if (item.path.endsWith('.plib')) {
-        const entry = await getPlibData(item.path);
-        setSelectedExplorerItem(entry);
-    } else if (/\.(png|jpe?g|webp|gif)$/i.test(item.name || item.path)) {
-        const imageUrl = await convertFileSrc(item.path);
-        const mockEntry: PromptEntry = {
-            prompt: item.name || item.path.split(/[\\/]/).pop() || 'Image',
-            images: [imageUrl],
-            generationInfo: {
-                model: 'Image File',
-                aspectRatio: 'N/A',
-                timestamp: 'N/A', // Could use file modified date here later
-                numberOfImages: 1,
-            }
-        };
-        setSelectedExplorerItem(mockEntry);
-    } else {
-        setSelectedExplorerItem(null);
-    }
-  }, [isDemoMode]);
+    const entry = await loadPromptEntryForItem(item);
+    setSelectedExplorerItem(entry);
+  }, [loadPromptEntryForItem]);
 
   const handleSelectItemByIndex = useCallback((index: number) => {
     // FIX: Check against the length of the processed (filtered and sorted) list.
@@ -329,23 +442,62 @@ const App: React.FC = () => {
     handleSelectItem(item);
   }, [handleSelectItem]);
   
-  const openLightbox = (entry: PromptEntry, index: number) => {
-    setLightboxEntry(entry);
-    setLightboxIndex(index);
-    setLightboxOpen(true);
-  };
+  const openLightboxAtPreviewIndex = useCallback(async (previewIndex: number) => {
+    const target = previewableItems[previewIndex];
+    if (!target) return;
 
-  const closeLightbox = () => setLightboxOpen(false);
-  const nextImage = () => {
-    if (lightboxEntry && lightboxIndex < lightboxEntry.images.length - 1) {
-      setLightboxIndex(lightboxIndex + 1);
+    try {
+        const entry = await loadPromptEntryForItem(target.item);
+        if (!entry || !entry.images || entry.images.length === 0) {
+            setToast({ message: 'Unable to preview this item.', type: 'error' });
+            return;
+        }
+
+        setLightboxEntry(entry);
+        setLightboxIndex(0);
+        setLightboxPreviewIndex(previewIndex);
+        setLightboxOpen(true);
+        setSelectedExplorerItem(entry);
+        setSelectedItemIndex(target.index);
+        setContextMenu(null);
+    } catch (error) {
+        console.error('Failed to open item in lightbox', error);
+        setToast({ message: 'Failed to open item.', type: 'error' });
     }
-  };
-  const prevImage = () => {
-    if (lightboxIndex > 0) {
-      setLightboxIndex(lightboxIndex - 1);
-    }
-  };
+  }, [loadPromptEntryForItem, previewableItems]);
+
+  const openLightboxAtFolderIndex = useCallback((folderIndex: number) => {
+    const previewIndex = previewIndexByFolderIndex.get(folderIndex);
+    if (previewIndex === undefined) return;
+    openLightboxAtPreviewIndex(previewIndex);
+  }, [previewIndexByFolderIndex, openLightboxAtPreviewIndex]);
+
+  const closeLightbox = useCallback(() => {
+    setLightboxOpen(false);
+    setLightboxEntry(null);
+    setLightboxPreviewIndex(-1);
+    setLightboxIndex(0);
+  }, []);
+
+  const goToAdjacentPreview = useCallback((direction: 1 | -1) => {
+    if (lightboxPreviewIndex === -1) return;
+    const targetIndex = lightboxPreviewIndex + direction;
+    if (targetIndex < 0 || targetIndex >= previewableItems.length) return;
+    openLightboxAtPreviewIndex(targetIndex);
+  }, [lightboxPreviewIndex, previewableItems, openLightboxAtPreviewIndex]);
+
+  const nextFile = useCallback(() => goToAdjacentPreview(1), [goToAdjacentPreview]);
+  const prevFile = useCallback(() => goToAdjacentPreview(-1), [goToAdjacentPreview]);
+
+  const handleLightboxImageChange = useCallback((index: number) => {
+    if (!lightboxEntry) return;
+    const maxIndex = Math.max(0, (lightboxEntry.images?.length ?? 1) - 1);
+    const clamped = Math.min(Math.max(index, 0), maxIndex);
+    setLightboxIndex(clamped);
+  }, [lightboxEntry]);
+
+  const canNavigatePrev = lightboxPreviewIndex > 0;
+  const canNavigateNext = lightboxPreviewIndex >= 0 && lightboxPreviewIndex < previewableItems.length - 1;
   
   return (
     <div className="bg-zinc-900 text-white h-screen flex flex-col font-sans">
@@ -367,6 +519,7 @@ const App: React.FC = () => {
         isDemoMode={isDemoMode}
         onChangeFolder={handleOpenFolder}
         onExitDemo={handleExitDemo}
+        onRefreshFolder={handleRefreshFolder}
       />
       
       <main className="flex-grow flex flex-col overflow-hidden">
@@ -387,11 +540,12 @@ const App: React.FC = () => {
             onSelectFolder={handleSelectFolder}
             onSelectItem={handleSelectItemAndSetIndex}
             onSelectItemByIndex={handleSelectItemByIndex}
-            onOpenLightbox={(item, index) => openLightbox(item, index)}
+            onOpenLightbox={openLightboxAtFolderIndex}
             onStartDemo={handleStartDemoMode}
             onSelectFavorite={handleSelectFavorite}
             onMoveItem={handleMoveItem}
             isDemoMode={isDemoMode}
+            onItemContextMenu={handleItemContextMenu}
         />
       </main>
 
@@ -399,11 +553,96 @@ const App: React.FC = () => {
         <Lightbox
           isOpen={lightboxOpen}
           entry={lightboxEntry}
-          currentIndex={lightboxIndex}
+          currentImageIndex={lightboxIndex}
           onClose={closeLightbox}
-          onNext={nextImage}
-          onPrev={prevImage}
+          onNextFile={nextFile}
+          onPrevFile={prevFile}
+          onSelectImage={handleLightboxImageChange}
+          canGoNext={canNavigateNext}
+          canGoPrev={canNavigatePrev}
         />
+      )}
+
+      {contextMenu && (
+        <div
+          className="fixed inset-0 z-40"
+          onClick={() => setContextMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setContextMenu(null);
+          }}
+        >
+          <div
+            className="absolute bg-neutral-800 border border-neutral-700 rounded-md shadow-lg py-1 min-w-[160px] text-sm"
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={async () => {
+                if (!contextMenu) return;
+                const targetPath = contextMenu.item.path;
+                setContextMenu(null);
+                const revealed = await revealInFileManager(targetPath);
+                if (!revealed) {
+                  setToast({ message: 'Unable to show item in Finder.', type: 'error' });
+                }
+              }}
+              className="w-full text-left px-3 py-2 hover:bg-neutral-700 text-neutral-200"
+            >
+              Show in Finder
+            </button>
+            <button
+              onClick={() => {
+                const fallbackName = contextMenu.item.name || contextMenu.item.path.split(/[\\/]/).pop() || '';
+                setRenameState({ item: contextMenu.item, value: fallbackName, originalName: fallbackName });
+                setContextMenu(null);
+              }}
+              className="w-full text-left px-3 py-2 hover:bg-neutral-700 text-neutral-200"
+            >
+              Rename
+            </button>
+          </div>
+        </div>
+      )}
+
+      {renameState && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+          onClick={handleRenameCancel}
+        >
+          <div
+            className="bg-neutral-900 border border-neutral-700 rounded-xl p-6 w-full max-w-md shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold mb-4">Rename Item</h2>
+            <input
+              type="text"
+              value={renameState.value}
+              onChange={(e) => handleRenameChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleRenameConfirm();
+                if (e.key === 'Escape') handleRenameCancel();
+              }}
+              autoFocus
+              className="w-full px-3 py-2 rounded-md bg-neutral-800 border border-neutral-700 text-white focus:outline-none focus:ring-2 focus:ring-fuchsia-500"
+              placeholder="Enter a new name"
+            />
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={handleRenameCancel}
+                className="px-4 py-2 rounded-md border border-neutral-600 text-neutral-300 hover:bg-neutral-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRenameConfirm}
+                className="px-4 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-700 text-white"
+              >
+                Rename
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

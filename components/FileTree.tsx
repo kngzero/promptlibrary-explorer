@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { FolderIcon, DesktopIcon, DocumentsIcon, PicturesIcon } from './icons';
+import { extractDragSourcePath } from '../utils/drag';
 import type { FsFileEntry } from '../types';
 
 interface FileTreeProps {
@@ -47,7 +48,7 @@ const NavItem: React.FC<{
         if (!isDropTarget || !path || !onMoveItem) return;
         e.preventDefault();
         setIsDraggingOver(false);
-        const sourcePath = e.dataTransfer.getData('text/plain');
+        const sourcePath = extractDragSourcePath(e.dataTransfer);
         if (sourcePath && path !== sourcePath) {
             onMoveItem(sourcePath, path);
         }
@@ -79,7 +80,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, folderTree, selectedPath,
     
     return (
         <div className="p-3 h-full bg-zinc-800/50 flex flex-col select-none">
-            <nav className="flex flex-col space-y-4">
+            <nav className="flex flex-col space-y-4 h-full">
                 <div>
                     <h3 className="px-2 text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Favorites</h3>
                     <ul className="space-y-1">
@@ -88,21 +89,23 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, folderTree, selectedPath,
                         <NavItem icon={<PicturesIcon />} label="Pictures" onClick={() => onSelectFavorite('pictures')} isSelected={false} isDimmed={isDemoMode} />
                     </ul>
                 </div>
-                <div>
+                <div className="flex-1 min-h-0 flex flex-col">
                     <h3 className="px-2 text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Folders</h3>
-                    <ul className="space-y-1">
-                       <NavItem
-                            icon={<FolderIcon />}
-                            label={rootName}
-                            onClick={() => onSelect(rootPath)}
-                            isSelected={selectedPath === rootPath}
-                            path={rootPath}
-                            onMoveItem={onMoveItem}
-                            isDimmed={isDemoMode}
-                        />
-                       <div className="pl-4 border-l border-zinc-700 ml-2.5">
-                           <ul className="space-y-1 mt-1">
-                               {folderTree.map(dir => (
+                    <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+                        <ul className="space-y-1">
+                            <NavItem
+                                icon={<FolderIcon />}
+                                label={rootName}
+                                onClick={() => onSelect(rootPath)}
+                                isSelected={selectedPath === rootPath}
+                                path={rootPath}
+                                onMoveItem={onMoveItem}
+                                isDimmed={isDemoMode}
+                            />
+                        </ul>
+                        <div className="pl-4 border-l border-zinc-700 ml-2.5">
+                            <ul className="space-y-1 mt-1">
+                                {folderTree.map(dir => (
                                     <NavItem
                                         key={dir.path}
                                         icon={<FolderIcon />}
@@ -113,10 +116,10 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, folderTree, selectedPath,
                                         onMoveItem={onMoveItem}
                                         isDimmed={isDemoMode}
                                     />
-                               ))}
-                           </ul>
-                       </div>
-                    </ul>
+                                ))}
+                            </ul>
+                        </div>
+                    </div>
                 </div>
             </nav>
         </div>

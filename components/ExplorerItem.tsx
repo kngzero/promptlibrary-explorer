@@ -4,23 +4,25 @@ import { FolderIcon, FileIcon } from './icons';
 import { getPlibData } from '../services/plibService';
 import { convertFileSrc, getBasename } from '../services/tauriService';
 import { getDemoPlibFile, getDemoImageEntry } from '../services/demoService';
-import type { PromptEntry, FsFileEntry } from '../types';
+import { extractDragSourcePath } from '../utils/drag';
+import type { FsFileEntry } from '../types';
 
 interface ExplorerItemProps {
     item: FsFileEntry;
     onSelect: () => void;
     onDoubleClick: (item: FsFileEntry) => void;
-    onOpenLightbox: (item: PromptEntry, index: number) => void;
+    onOpenLightbox: () => void;
     onMoveItem: (sourcePath: string, destinationDir: string) => void;
     isDemoMode: boolean;
     isFocused: boolean;
     thumbnailsOnly: boolean;
+    onContextMenu?: (event: React.MouseEvent<HTMLDivElement>) => void;
 }
 
 const isImageAsset = (filename: string) => /\.(png|jpe?g|webp|gif)$/i.test(filename);
 const isPlibAsset = (filename: string) => /\.plib$/i.test(filename);
 
-const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleClick, onOpenLightbox, onMoveItem, isDemoMode, isFocused, thumbnailsOnly }) => {
+const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleClick, onOpenLightbox, onMoveItem, isDemoMode, isFocused, thumbnailsOnly, onContextMenu }) => {
     const [thumbnailSrc, setThumbnailSrc] = useState<string | null>(null);
     const [title, setTitle] = useState(item.name || 'Loading...');
     const [isDragging, setIsDragging] = useState(false);
@@ -82,53 +84,15 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
         return () => { isCancelled = true; };
     }, [item, isDemoMode, isFolder]);
     
-    const handleDoubleClick = async () => {
+    const handleDoubleClick = () => {
         if (item.children) {
             onDoubleClick(item);
             return;
         }
 
-        const itemName = title;
-        if (isDemoMode) {
-            if (isPlibAsset(itemName)) {
-                const data = getDemoPlibFile(item.path);
-                if (data) onOpenLightbox(data, 0);
-            } else if (isImageAsset(itemName)) {
-                const data = getDemoImageEntry(item.path);
-                onOpenLightbox(data, 0);
-            }
-            return;
-        }
-
-        if (isPlibAsset(itemName)) {
-            const data = await getPlibData(item.path);
-            if (data) {
-                // NEW: convert each image path for Tauri before opening lightbox
-                const convertedImages = await Promise.all(
-                    (data.images ?? []).map(async (img: string) =>
-                        !img.startsWith('data:') && !/^https?:\/\//i.test(img) ? await convertFileSrc(img) : img
-                    )
-                );
-                const convertedReferenceImages = await Promise.all(
-                    (data.referenceImages ?? []).map(async (img: string) =>
-                        !img.startsWith('data:') && !/^https?:\/\//i.test(img) ? await convertFileSrc(img) : img
-                    )
-                );
-                onOpenLightbox({ ...data, images: convertedImages, referenceImages: convertedReferenceImages }, 0);
-            }
-        } else if (isImageAsset(itemName)) {
-            const imageUrl = await convertFileSrc(item.path);
-            const mockEntry: PromptEntry = {
-                prompt: title,
-                images: [imageUrl],
-                generationInfo: {
-                    model: 'Image File',
-                    aspectRatio: 'N/A',
-                    timestamp: 'N/A',
-                    numberOfImages: 1,
-                },
-            };
-            onOpenLightbox(mockEntry, 0);
+        const itemName = (item.name || item.path).toLowerCase();
+        if (isPlibAsset(itemName) || isImageAsset(itemName)) {
+            onOpenLightbox();
         }
     };
     
@@ -139,8 +103,12 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
             return;
         }
         setIsDragging(true);
-        e.dataTransfer.setData('text/plain', item.path);
-        e.dataTransfer.effectAllowed = 'move';
+        const { dataTransfer } = e;
+        dataTransfer.setData('text/plain', item.path);
+        dataTransfer.setData('text/uri-list', item.path);
+        dataTransfer.setData('application/json', JSON.stringify({ path: item.path }));
+        dataTransfer.setData('application/x-plib-entry', item.path);
+        dataTransfer.effectAllowed = 'move';
     };
 
     const handleDragEnd = () => setIsDragging(false);
@@ -167,10 +135,11 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
         if (!isFolder || isDemoMode) return;
         e.preventDefault();
         setIsDraggingOver(false);
-        const sourcePath = e.dataTransfer.getData('text/plain');
+        const sourcePath = extractDragSourcePath(e.dataTransfer);
         if (sourcePath && item.path !== sourcePath) {
             onMoveItem(sourcePath, item.path);
         }
+        setIsDragging(false);
     };
 
     const renderThumbnail = () => {
@@ -215,6 +184,11 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
             onDrop={handleDrop}
             onClick={onSelect}
             onDoubleClick={handleDoubleClick}
+            onContextMenu={(event) => {
+                if (onContextMenu) {
+                    onContextMenu(event);
+                }
+            }}
             className={`text-left group cursor-pointer focus:outline-none rounded-lg transition-opacity duration-200 ${focusClasses} ${isDragging ? 'is-dragging' : ''}`}
             tabIndex={-1}
         >
