@@ -1,4 +1,4 @@
-import type { FsFileEntry } from '../types';
+import type { FsFileEntry, FileMetadata } from '../types';
 import { renameFile } from '@tauri-apps/api/fs';
 import { basename, join, dirname } from '@tauri-apps/api/path';
 
@@ -145,6 +145,38 @@ export const renameEntry = async (sourcePath: string, newName: string): Promise<
 };
 
 /**
+ * Deletes a file or directory at the specified path.
+ * Directories are removed recursively.
+ */
+export const deleteEntry = async (targetPath: string, isDirectory: boolean): Promise<void> => {
+  try {
+    const fs = await import('@tauri-apps/api/fs');
+    if (isDirectory) {
+      await fs.removeDir(targetPath, { recursive: true });
+    } else {
+      await fs.removeFile(targetPath);
+    }
+  } catch (error) {
+    console.error(`Failed to delete ${targetPath}`, error);
+    throw error;
+  }
+};
+
+/**
+ * Moves the given file or directory to the operating system's trash.
+ */
+export const moveEntryToTrash = async (targetPath: string): Promise<void> => {
+  if (!targetPath) return;
+  try {
+    const { invoke } = await import('@tauri-apps/api/tauri');
+    await invoke('move_to_trash', { targetPath });
+  } catch (error) {
+    console.error(`Failed to move ${targetPath} to trash`, error);
+    throw error;
+  }
+};
+
+/**
  * Reveals a file or folder in the native file manager.
  * On macOS this opens Finder, on Windows Explorer, and on Linux the containing folder.
  */
@@ -160,5 +192,23 @@ export const revealInFileManager = async (targetPath: string): Promise<boolean> 
   } catch (error) {
     console.error(`Failed to reveal item in file manager: ${targetPath}`, error);
     return false;
+  }
+};
+
+/**
+ * Retrieves metadata for a given file path such as name, type, dimensions and timestamps.
+ */
+export const getFileMetadata = async (targetPath: string): Promise<FileMetadata | null> => {
+  if (!targetPath) {
+    return null;
+  }
+
+  try {
+    const { invoke } = await import('@tauri-apps/api/tauri');
+    const metadata = await invoke<FileMetadata>('get_file_metadata', { targetPath });
+    return metadata;
+  } catch (error) {
+    console.warn(`Failed to fetch metadata for ${targetPath}`, error);
+    return null;
   }
 };

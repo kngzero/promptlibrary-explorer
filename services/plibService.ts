@@ -17,13 +17,23 @@ export const getPlibData = async (filePath: string): Promise<PromptEntry | null>
     try {
         const contents = await readTextFile(filePath);
         const data = JSON.parse(contents);
-        if (data.prompt && data.images && data.generationInfo) {
-            const entry = data as PromptEntry;
-            cache.set(filePath, entry);
-            return entry;
+        const hasPrompt = typeof data.prompt === 'string' && data.prompt.trim().length > 0;
+        const hasBlindPrompt = typeof data.blindPrompt === 'string' && data.blindPrompt.trim().length > 0;
+        const hasImages = Array.isArray(data.images) && data.images.length > 0;
+        const hasGenerationInfo = typeof data.generationInfo === 'object' && data.generationInfo !== null;
+
+        if ((!hasPrompt && !hasBlindPrompt) || !hasImages || !hasGenerationInfo) {
+            console.warn(`Invalid .plib file format: ${filePath}`);
+            return null;
         }
-        console.warn(`Invalid .plib file format: ${filePath}`);
-        return null;
+
+        const normalizedPrompt = hasPrompt ? data.prompt : data.blindPrompt || '';
+        const entry: PromptEntry = {
+            ...data,
+            prompt: normalizedPrompt,
+        };
+        cache.set(filePath, entry);
+        return entry;
     } catch (error) {
         console.error(`Failed to read or parse .plib file: ${filePath}`, error);
         return null;

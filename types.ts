@@ -18,11 +18,24 @@ export interface GenerationInfo {
   numberOfImages: number;
 }
 
+export interface FileMetadata {
+  fileName: string;
+  fileType: string;
+  width?: number | null;
+  height?: number | null;
+  modifiedMs?: number | null;
+}
+
 export interface PromptEntry {
   prompt: string;
+  blindPrompt?: string;
   generationInfo: GenerationInfo;
-  images: string[]; // base64 encoded strings
-  referenceImages?: string[]; // base64 encoded strings
+  images: string[]; // base64 encoded strings or Tauri file URLs for display
+  referenceImages?: string[]; // base64 encoded strings or Tauri file URLs for display
+  sourcePath?: string; // original filesystem path for the .plib or image file
+  rawImages?: string[]; // unmodified data as read from the source .plib or file path
+  rawReferenceImages?: string[]; // unmodified data for reference images
+  fileMetadata?: FileMetadata | null;
 }
 
 // Type for file entries from Tauri's readDir

@@ -1,13 +1,14 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import ExplorerItem from './ExplorerItem';
 import type { FsFileEntry } from '../types';
 
 interface ContentBrowserProps {
     items: FsFileEntry[];
     isLoading: boolean;
-    onSelectItem: (item: FsFileEntry, index: number) => void;
+    onSelectItem: (item: FsFileEntry, index: number, event?: React.MouseEvent) => void;
     onSelectItemByIndex: (index: number) => void;
     selectedItemIndex: number;
+    selectedIndices: number[];
     onNavigate: (path: string) => void;
     onOpenLightbox: (index: number) => void;
     onMoveItem: (sourcePath: string, destinationDir: string) => void;
@@ -15,6 +16,9 @@ interface ContentBrowserProps {
     thumbnailSize: number;
     thumbnailsOnly: boolean;
     onItemContextMenu: (event: React.MouseEvent, item: FsFileEntry, index: number) => void;
+    dragSourcePath: string | null;
+    onDragStartItem: (path: string) => void;
+    onDragEndItem: () => void;
 }
 
 const ContentBrowser: React.FC<ContentBrowserProps> = ({ 
@@ -26,14 +30,22 @@ const ContentBrowser: React.FC<ContentBrowserProps> = ({
     onMoveItem,
     isDemoMode, 
     selectedItemIndex, 
+    selectedIndices,
     onSelectItemByIndex,
     thumbnailSize,
     thumbnailsOnly,
-    onItemContextMenu
+    onItemContextMenu,
+    dragSourcePath,
+    onDragStartItem,
+    onDragEndItem,
 }) => {
     
     const gridRef = useRef<HTMLDivElement>(null);
     const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+    const selectedPaths = useMemo(
+        () => selectedIndices.map((idx) => items[idx]?.path).filter((p): p is string => !!p),
+        [selectedIndices, items]
+    );
     
     // Effect to auto-focus the grid when a folder is opened
     useEffect(() => {
@@ -140,14 +152,19 @@ const ContentBrowser: React.FC<ContentBrowserProps> = ({
                         <div key={item.path} ref={el => { itemRefs.current[index] = el; }}>
                             <ExplorerItem
                                 item={item}
-                                onSelect={() => onSelectItem(item, index)}
+                                onSelect={(event) => onSelectItem(item, index, event)}
                                 onDoubleClick={() => handleDoubleClick(item)}
                                 onOpenLightbox={() => onOpenLightbox(index)}
                                 onMoveItem={onMoveItem}
                                 isDemoMode={isDemoMode}
                                 isFocused={index === selectedItemIndex}
+                                isSelected={selectedIndices.includes(index)}
                                 thumbnailsOnly={thumbnailsOnly}
                                 onContextMenu={(event) => onItemContextMenu(event, item, index)}
+                                isDragActive={!!dragSourcePath}
+                                onDragStartFile={onDragStartItem}
+                                onDragEndFile={onDragEndItem}
+                                selectedPaths={selectedPaths}
                             />
                         </div>
                     ))}

@@ -7,7 +7,7 @@ interface ImageDisplayProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   containerClassName?: string;
 }
 
-const ImageDisplay: React.FC<ImageDisplayProps> = ({ src, alt, className, containerClassName, ...props }) => {
+const ImageDisplay: React.FC<ImageDisplayProps> = ({ src, alt, className, containerClassName, draggable = false, ...props }) => {
   const [isLoaded, setIsLoaded] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [isInView, setIsInView] = useState(false);
@@ -70,6 +70,7 @@ const ImageDisplay: React.FC<ImageDisplayProps> = ({ src, alt, className, contai
       {/* Actual Image */}
       {isInView && (
         <img
+          draggable={draggable}
           src={src}
           alt={alt}
           onLoad={handleLoad}

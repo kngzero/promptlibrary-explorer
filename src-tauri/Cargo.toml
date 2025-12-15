@@ -12,7 +12,7 @@ tauri-build = { version = "1", features = [] }
 
 # --- App deps ---
 [dependencies]
-tauri = { version = "1", features = [ "protocol-asset", "fs-rename-file",
+tauri = { version = "1", features = [ "fs-remove-file", "fs-remove-dir", "dialog-save", "fs-write-file", "protocol-asset", "fs-rename-file",
   # match your allowlist in tauri.conf.json
   "dialog-open",
   "fs-read-file",
@@ -21,6 +21,9 @@ tauri = { version = "1", features = [ "protocol-asset", "fs-rename-file",
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+arboard = "3"
+image = { version = "0.24", default-features = false, features = ["png", "jpeg", "gif", "bmp", "ico", "tiff", "webp"] }
+trash = "3"
 
 [features]
 default = ["custom-protocol"]

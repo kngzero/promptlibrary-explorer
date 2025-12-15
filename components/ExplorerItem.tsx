@@ -4,31 +4,37 @@ import { FolderIcon, FileIcon } from './icons';
 import { getPlibData } from '../services/plibService';
 import { convertFileSrc, getBasename } from '../services/tauriService';
 import { getDemoPlibFile, getDemoImageEntry } from '../services/demoService';
-import { extractDragSourcePath } from '../utils/drag';
+import { extractDragSourcePath, setActiveDragSource } from '../utils/drag';
 import type { FsFileEntry } from '../types';
 
 interface ExplorerItemProps {
     item: FsFileEntry;
-    onSelect: () => void;
+    onSelect: (event: React.MouseEvent<HTMLDivElement>) => void;
     onDoubleClick: (item: FsFileEntry) => void;
     onOpenLightbox: () => void;
     onMoveItem: (sourcePath: string, destinationDir: string) => void;
     isDemoMode: boolean;
     isFocused: boolean;
+    isSelected: boolean;
     thumbnailsOnly: boolean;
     onContextMenu?: (event: React.MouseEvent<HTMLDivElement>) => void;
+    isDragActive: boolean;
+    onDragStartFile: (path: string) => void;
+    onDragEndFile: () => void;
+    selectedPaths: string[];
 }
 
 const isImageAsset = (filename: string) => /\.(png|jpe?g|webp|gif)$/i.test(filename);
 const isPlibAsset = (filename: string) => /\.plib$/i.test(filename);
 
-const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleClick, onOpenLightbox, onMoveItem, isDemoMode, isFocused, thumbnailsOnly, onContextMenu }) => {
+const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleClick, onOpenLightbox, onMoveItem, isDemoMode, isFocused, isSelected, thumbnailsOnly, onContextMenu, isDragActive, onDragStartFile, onDragEndFile, selectedPaths }) => {
     const [thumbnailSrc, setThumbnailSrc] = useState<string | null>(null);
     const [title, setTitle] = useState(item.name || 'Loading...');
     const [isDragging, setIsDragging] = useState(false);
     const [isDraggingOver, setIsDraggingOver] = useState(false);
     
     const isFolder = !!item.children;
+    const canDrag = !isFolder && !isDemoMode;
 
     useEffect(() => {
         let isCancelled = false;
@@ -97,21 +103,40 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
     };
     
     // --- Drag and Drop Handlers ---
+    const toFileUri = (path: string) => {
+        const normalized = path.replace(/\\/g, '/');
+        return `file://${encodeURI(normalized)}`;
+    };
+
     const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
-        if (isFolder || isDemoMode) {
+        if (!canDrag) {
             e.preventDefault();
             return;
         }
+        const dragPaths =
+            selectedPaths.includes(item.path) && selectedPaths.length > 0
+                ? selectedPaths
+                : [item.path];
+        const primaryPath = dragPaths[0];
         setIsDragging(true);
+        setActiveDragSource(primaryPath);
+        onDragStartFile(primaryPath);
         const { dataTransfer } = e;
-        dataTransfer.setData('text/plain', item.path);
-        dataTransfer.setData('text/uri-list', item.path);
-        dataTransfer.setData('application/json', JSON.stringify({ path: item.path }));
-        dataTransfer.setData('application/x-plib-entry', item.path);
-        dataTransfer.effectAllowed = 'move';
+        const uriList = dragPaths.map(toFileUri).join('\n');
+        dataTransfer.setData('text/plain', primaryPath);
+        dataTransfer.setData('text/uri-list', uriList);
+        dataTransfer.setData('application/json', JSON.stringify({ path: primaryPath, paths: dragPaths }));
+        dataTransfer.setData('application/x-plib-entry', primaryPath);
+        const primaryName = item.name || primaryPath.split(/[\\/]/).pop() || 'file';
+        dataTransfer.setData('DownloadURL', `application/octet-stream:${primaryName}:${toFileUri(primaryPath)}`);
+        dataTransfer.effectAllowed = 'copyMove';
     };
 
-    const handleDragEnd = () => setIsDragging(false);
+    const handleDragEnd = () => {
+        setIsDragging(false);
+        setActiveDragSource(null);
+        onDragEndFile();
+    };
     
     const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
         if (!isFolder || isDemoMode) return;
@@ -139,7 +164,9 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
         if (sourcePath && item.path !== sourcePath) {
             onMoveItem(sourcePath, item.path);
         }
+        setActiveDragSource(null);
         setIsDragging(false);
+        onDragEndFile();
     };
 
     const renderThumbnail = () => {
@@ -171,11 +198,21 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
         return <div className="w-full h-full bg-zinc-800 animate-pulse"></div>;
     };
 
-    const focusClasses = isFocused ? 'ring-2 ring-fuchsia-500 ring-offset-2 ring-offset-zinc-900' : '';
+    const selectionClasses = isSelected ? 'ring-2 ring-fuchsia-500 ring-offset-2 ring-offset-zinc-900 bg-zinc-800/70' : '';
+    const focusClasses = !isSelected && isFocused ? 'ring-2 ring-fuchsia-400 ring-offset-2 ring-offset-zinc-900' : '';
+    const draggingClasses = isDragging ? 'ring-2 ring-fuchsia-400 ring-offset-2 ring-offset-zinc-900 opacity-80 scale-[0.98]' : '';
+    const dropReady = isDragActive && isFolder;
+    const dropHighlightClasses = isDraggingOver
+        ? 'border-fuchsia-400 bg-fuchsia-500/10 shadow-inner shadow-fuchsia-500/40'
+        : dropReady
+        ? 'border-dashed border-zinc-600 bg-zinc-800/60'
+        : '';
+    const labelColor = isSelected ? 'text-white' : 'text-zinc-300';
 
     return (
         <div
-            draggable={!isFolder && !isDemoMode}
+            data-draggable-item={canDrag ? 'true' : undefined}
+            draggable={canDrag}
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
             onDragOver={handleDragOver}
@@ -189,14 +226,14 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
                     onContextMenu(event);
                 }
             }}
-            className={`text-left group cursor-pointer focus:outline-none rounded-lg transition-opacity duration-200 ${focusClasses} ${isDragging ? 'is-dragging' : ''}`}
+            className={`text-left group cursor-pointer focus:outline-none rounded-lg transition-all duration-200 select-none ${selectionClasses} ${focusClasses} ${draggingClasses}`}
             tabIndex={-1}
         >
-            <div className={`aspect-square rounded-lg overflow-hidden bg-zinc-800 border border-zinc-700/50 group-hover:border-zinc-600 transition-all duration-200 ${isDraggingOver ? 'is-drop-target' : ''}`}>
+            <div className={`aspect-square rounded-lg overflow-hidden bg-zinc-800 border border-zinc-700/50 group-hover:border-zinc-600 transition-all duration-200 ${dropHighlightClasses}`}>
                 {renderThumbnail()}
             </div>
             {!thumbnailsOnly && (
-                 <p className="text-sm mt-2 text-zinc-300 truncate group-hover:text-white" title={title}>
+                 <p className={`text-sm mt-2 truncate group-hover:text-white ${labelColor}`} title={title}>
                     {title}
                 </p>
             )}

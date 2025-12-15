@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { FolderIcon, DesktopIcon, DocumentsIcon, PicturesIcon } from './icons';
-import { extractDragSourcePath } from '../utils/drag';
+import { extractDragSourcePath, setActiveDragSource } from '../utils/drag';
 import type { FsFileEntry } from '../types';
 
 interface FileTreeProps {
@@ -11,6 +11,7 @@ interface FileTreeProps {
     onSelectFavorite: (favorite: 'desktop' | 'documents' | 'pictures') => void;
     onMoveItem: (sourcePath: string, destinationDir: string) => void;
     isDemoMode: boolean;
+    isDragActive: boolean;
 }
 
 const NavItem: React.FC<{
@@ -21,7 +22,8 @@ const NavItem: React.FC<{
     isDimmed?: boolean;
     path?: string;
     onMoveItem?: (sourcePath: string, destinationDir: string) => void;
-}> = ({ icon, label, onClick, isSelected, isDimmed, path, onMoveItem }) => {
+    isDragActive: boolean;
+}> = ({ icon, label, onClick, isSelected, isDimmed, path, onMoveItem, isDragActive }) => {
     const [isDraggingOver, setIsDraggingOver] = useState(false);
 
     const isDropTarget = !!(path && onMoveItem && !isDimmed);
@@ -52,7 +54,14 @@ const NavItem: React.FC<{
         if (sourcePath && path !== sourcePath) {
             onMoveItem(sourcePath, path);
         }
+        setActiveDragSource(null);
     };
+
+    const dropClasses = isDraggingOver
+        ? 'ring-2 ring-fuchsia-400/70 bg-fuchsia-500/10 text-white'
+        : isDragActive && isDropTarget
+        ? 'border border-dashed border-zinc-600/80 bg-zinc-800/60'
+        : '';
 
     return (
         <li>
@@ -65,7 +74,7 @@ const NavItem: React.FC<{
                 onDrop={handleDrop}
                 className={`w-full flex items-center gap-3 p-2 text-left rounded-md text-sm transition-all duration-200 ${
                     isSelected ? 'bg-fuchsia-600/20 text-fuchsia-300' : 'text-zinc-300 hover:bg-zinc-700/50'
-                } ${isDimmed ? 'text-zinc-500 cursor-not-allowed' : ''} ${isDraggingOver ? 'is-drop-target' : ''}`}
+                } ${isDimmed ? 'text-zinc-500 cursor-not-allowed' : ''} ${dropClasses}`}
             >
                 <span className="flex-shrink-0 w-5 h-5">{icon}</span>
                 <span className="truncate flex-grow">{label}</span>
@@ -75,7 +84,7 @@ const NavItem: React.FC<{
 };
 
 
-const FileTree: React.FC<FileTreeProps> = ({ rootPath, folderTree, selectedPath, onSelect, onSelectFavorite, onMoveItem, isDemoMode }) => {
+const FileTree: React.FC<FileTreeProps> = ({ rootPath, folderTree, selectedPath, onSelect, onSelectFavorite, onMoveItem, isDemoMode, isDragActive }) => {
     const rootName = rootPath.split(/[\/\\]/).pop() || 'Root';
     
     return (
@@ -84,9 +93,9 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, folderTree, selectedPath,
                 <div>
                     <h3 className="px-2 text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Favorites</h3>
                     <ul className="space-y-1">
-                        <NavItem icon={<DesktopIcon />} label="Desktop" onClick={() => onSelectFavorite('desktop')} isSelected={false} isDimmed={isDemoMode} />
-                        <NavItem icon={<DocumentsIcon />} label="Documents" onClick={() => onSelectFavorite('documents')} isSelected={false} isDimmed={isDemoMode} />
-                        <NavItem icon={<PicturesIcon />} label="Pictures" onClick={() => onSelectFavorite('pictures')} isSelected={false} isDimmed={isDemoMode} />
+                        <NavItem icon={<DesktopIcon />} label="Desktop" onClick={() => onSelectFavorite('desktop')} isSelected={false} isDimmed={isDemoMode} isDragActive={false} />
+                        <NavItem icon={<DocumentsIcon />} label="Documents" onClick={() => onSelectFavorite('documents')} isSelected={false} isDimmed={isDemoMode} isDragActive={false} />
+                        <NavItem icon={<PicturesIcon />} label="Pictures" onClick={() => onSelectFavorite('pictures')} isSelected={false} isDimmed={isDemoMode} isDragActive={false} />
                     </ul>
                 </div>
                 <div className="flex-1 min-h-0 flex flex-col">
@@ -101,6 +110,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, folderTree, selectedPath,
                                 path={rootPath}
                                 onMoveItem={onMoveItem}
                                 isDimmed={isDemoMode}
+                                isDragActive={isDragActive}
                             />
                         </ul>
                         <div className="pl-4 border-l border-zinc-700 ml-2.5">
@@ -115,6 +125,7 @@ const FileTree: React.FC<FileTreeProps> = ({ rootPath, folderTree, selectedPath,
                                         path={dir.path}
                                         onMoveItem={onMoveItem}
                                         isDimmed={isDemoMode}
+                                        isDragActive={isDragActive}
                                     />
                                 ))}
                             </ul>

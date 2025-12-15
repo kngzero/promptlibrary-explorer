@@ -41,10 +41,10 @@ const Toast: React.FC<ToastProps> = ({ message, type, onClose }) => {
 
   return (
     <div
-      className={`fixed top-5 left-1/2 -translate-x-1/2 z-50 w-full max-w-sm p-4 rounded-xl shadow-lg flex items-center gap-4 text-white backdrop-blur-md ${BG_COLORS[type]} ${isExiting ? 'animate-slide-out-up' : 'animate-slide-in-down'}`}
+      className={`fixed top-5 left-1/2 -translate-x-1/2 z-[1200] pointer-events-none max-w-sm w-auto px-6 py-4 rounded-xl shadow-lg flex flex-col items-center text-center gap-3 text-white backdrop-blur-md ${BG_COLORS[type]} ${isExiting ? 'animate-slide-out-up' : 'animate-slide-in-down'}`}
       role="alert"
     >
-      <div className="flex-shrink-0">{ICONS[type]}</div>
+      <div className="flex items-center justify-center">{ICONS[type]}</div>
       <p className="text-sm font-medium">{message}</p>
     </div>
   );

@@ -15,6 +15,7 @@ interface ExplorerProps {
     hiddenItemCount: number;
     selectedItem: PromptEntry | null;
     selectedItemIndex: number;
+    selectedIndices: number[];
     isLoading: boolean;
     thumbnailSize: number;
     onThumbnailSizeChange: (size: number) => void;
@@ -22,7 +23,7 @@ interface ExplorerProps {
     onThumbnailsOnlyChange: (checked: boolean) => void;
     onOpenFolder: () => void;
     onSelectFolder: (path: string) => void;
-    onSelectItem: (item: FsFileEntry, index: number) => void;
+    onSelectItem: (item: FsFileEntry, index: number, event?: React.MouseEvent) => void;
     onSelectItemByIndex: (index: number) => void;
     onOpenLightbox: (folderIndex: number) => void;
     onStartDemo: () => void;
@@ -30,6 +31,9 @@ interface ExplorerProps {
     onMoveItem: (sourcePath: string, destinationDir: string) => void;
     isDemoMode: boolean;
     onItemContextMenu: (event: React.MouseEvent, item: FsFileEntry, index: number) => void;
+    dragSourcePath: string | null;
+    onDragStartItem: (path: string) => void;
+    onDragEndItem: () => void;
 }
 
 const Explorer: React.FC<ExplorerProps> = ({
@@ -40,6 +44,7 @@ const Explorer: React.FC<ExplorerProps> = ({
     hiddenItemCount,
     selectedItem,
     selectedItemIndex,
+    selectedIndices,
     isLoading,
     thumbnailSize,
     onThumbnailSizeChange,
@@ -55,6 +60,9 @@ const Explorer: React.FC<ExplorerProps> = ({
     onMoveItem,
     isDemoMode,
     onItemContextMenu,
+    dragSourcePath,
+    onDragStartItem,
+    onDragEndItem,
 }) => {
     
     if (!rootPath) {
@@ -100,6 +108,7 @@ const Explorer: React.FC<ExplorerProps> = ({
                     onSelectFavorite={onSelectFavorite}
                     onMoveItem={onMoveItem}
                     isDemoMode={isDemoMode}
+                    isDragActive={!!dragSourcePath}
                 />
             </div>
             <div className="flex-grow h-full flex flex-col bg-zinc-900">
@@ -113,10 +122,14 @@ const Explorer: React.FC<ExplorerProps> = ({
                     onMoveItem={onMoveItem}
                     isDemoMode={isDemoMode}
                     selectedItemIndex={selectedItemIndex}
+                    selectedIndices={selectedIndices}
                     onSelectItemByIndex={onSelectItemByIndex}
                     thumbnailSize={thumbnailSize}
                     thumbnailsOnly={thumbnailsOnly}
                     onItemContextMenu={onItemContextMenu}
+                    dragSourcePath={dragSourcePath}
+                    onDragStartItem={onDragStartItem}
+                    onDragEndItem={onDragEndItem}
                 />
                 <InfoBar
                     shownCount={folderContents.length}

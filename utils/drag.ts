@@ -2,6 +2,12 @@
  * Attempts to extract a file path that was attached to a drag event.
  * Uses multiple MIME types so the operation remains reliable across browsers.
  */
+let activeDragSource: string | null = null;
+
+export const setActiveDragSource = (path: string | null) => {
+    activeDragSource = path;
+};
+
 export const extractDragSourcePath = (dataTransfer: DataTransfer): string => {
     const formats = [
         'text/plain',
@@ -22,6 +28,9 @@ export const extractDragSourcePath = (dataTransfer: DataTransfer): string => {
                 if (parsed && typeof parsed.path === 'string' && parsed.path) {
                     return parsed.path;
                 }
+                if (parsed && Array.isArray(parsed.paths) && parsed.paths[0]) {
+                    return parsed.paths[0];
+                }
             } catch {
                 // Ignore malformed JSON payloads
             }
@@ -30,5 +39,5 @@ export const extractDragSourcePath = (dataTransfer: DataTransfer): string => {
         }
     }
 
-    return '';
+    return activeDragSource || '';
 };

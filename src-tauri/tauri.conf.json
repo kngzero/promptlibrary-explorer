@@ -15,7 +15,8 @@
     "allowlist": {
       "all": false,
       "dialog": {
-        "open": true
+        "open": true,
+        "save": true
       },
       "fs": {
         "scope": [
@@ -23,7 +24,10 @@
         ],
         "readFile": true,
         "readDir": true,
-        "renameFile": true
+        "renameFile": true,
+        "writeFile": true,
+        "removeFile": true,
+        "removeDir": true
       },
       "protocol": {
         "asset": true,
@@ -71,7 +75,7 @@
       }
     },
     "security": {
-        "csp": "default-src 'self'; img-src 'self' asset: tauri: https://asset.localhost blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'"
+        "csp": "default-src 'self'; img-src 'self' asset: tauri: https://asset.localhost blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' asset: tauri: https://asset.localhost blob: data:"
     },
     "updater": {
       "active": false
