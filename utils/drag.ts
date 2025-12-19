@@ -4,8 +4,23 @@
  */
 let activeDragSource: string | null = null;
 
+const normalizeDraggedPath = (raw: string): string => {
+    if (!raw) return '';
+    const firstLine = raw.split('\n')[0] || raw;
+    if (firstLine.startsWith('file://')) {
+        try {
+            const url = new URL(firstLine);
+            return url.pathname || '';
+        } catch {
+            // fallback: strip scheme manually
+            return firstLine.replace(/^file:\/\//, '');
+        }
+    }
+    return firstLine;
+};
+
 export const setActiveDragSource = (path: string | null) => {
-    activeDragSource = path;
+    activeDragSource = path ? normalizeDraggedPath(path) : null;
 };
 
 export const extractDragSourcePath = (dataTransfer: DataTransfer): string => {
@@ -26,16 +41,17 @@ export const extractDragSourcePath = (dataTransfer: DataTransfer): string => {
             try {
                 const parsed = JSON.parse(data);
                 if (parsed && typeof parsed.path === 'string' && parsed.path) {
-                    return parsed.path;
+                    return normalizeDraggedPath(parsed.path);
                 }
                 if (parsed && Array.isArray(parsed.paths) && parsed.paths[0]) {
-                    return parsed.paths[0];
+                    return normalizeDraggedPath(parsed.paths[0]);
                 }
             } catch {
                 // Ignore malformed JSON payloads
             }
         } else {
-            return data;
+            const normalized = normalizeDraggedPath(data);
+            if (normalized) return normalized;
         }
     }
 

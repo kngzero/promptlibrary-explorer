@@ -598,19 +598,15 @@ const Lightbox: React.FC<LightboxProps> = ({
 
   return (
     <div
-      className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center transition-opacity animate-fade-in p-4"
-      onClick={onClose}
+      className="fixed inset-0 bg-black/95 backdrop-blur-sm z-50 flex flex-col md:flex-row transition-opacity animate-fade-in"
       role="dialog"
       aria-modal="true"
       aria-label="Image detail view"
     >
-      <div
-        className="bg-neutral-900 rounded-2xl w-full max-w-7xl h-full max-h-[90vh] flex flex-col md:flex-row overflow-hidden shadow-2xl border border-neutral-700"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="flex flex-col md:flex-row w-full h-full overflow-hidden">
         {/* Main content: Image Viewer */}
         <div
-          className="w-full md:w-[calc(100%-400px)] h-2/3 md:h-full bg-black flex items-center justify-center relative group p-4"
+          className="flex-1 h-[55vh] md:h-full bg-black flex items-center justify-center relative group p-4"
           onContextMenu={(event) => {
             const targetElement = event.target as HTMLElement | null;
             if (targetElement?.closest('button')) {
@@ -706,7 +702,7 @@ const Lightbox: React.FC<LightboxProps> = ({
         </div>
 
         {/* Right Side: Details Panel */}
-        <div className="w-full md:w-[400px] flex-shrink-0 h-1/3 md:h-full flex flex-col p-6 relative overflow-y-auto bg-neutral-800 border-l border-neutral-700">
+        <div className="w-full md:w-[420px] flex-shrink-0 h-[45vh] md:h-full flex flex-col p-6 relative overflow-y-auto bg-neutral-800 border-l border-neutral-700">
           <button
             onClick={onClose}
             className="absolute top-4 right-4 p-2 text-neutral-400 hover:text-white hover:bg-neutral-700 rounded-full transition-colors z-10"

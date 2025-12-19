@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BrandLogo, ChevronRightIcon, SortIcon, FilterIcon, CheckIcon, OpenIcon, PowerIcon, RefreshIcon } from './icons';
+import { BrandLogo, ChevronRightIcon, ChevronLeftIcon, SortIcon, FilterIcon, CheckIcon, OpenIcon, PowerIcon, RefreshIcon, SearchIcon } from './icons';
 import type { SortConfig, FilterConfig, Breadcrumb } from '../types';
 
 // Custom hook to detect clicks outside of a component
@@ -22,9 +22,12 @@ function useOnClickOutside<T extends HTMLElement>(ref: React.RefObject<T | null>
 
 interface HeaderProps {
     breadcrumbs: Breadcrumb[];
+    parentCrumb: Breadcrumb | null;
     onNavigate: (path: string) => void;
     sortConfig: SortConfig;
     onSortChange: (config: SortConfig) => void;
+    searchQuery: string;
+    onSearchChange: (value: string) => void;
     filterConfig: FilterConfig;
     onFilterChange: (config: FilterConfig) => void;
     isFolderOpen: boolean;
@@ -36,9 +39,12 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({
     breadcrumbs,
+    parentCrumb,
     onNavigate,
     sortConfig,
     onSortChange,
+    searchQuery,
+    onSearchChange,
     filterConfig,
     onFilterChange,
     isFolderOpen,
@@ -124,7 +130,17 @@ const Header: React.FC<HeaderProps> = ({
               </button>
             )
         )}
-        <div className="flex items-center text-sm text-zinc-400 flex-shrink min-w-0 border-l border-zinc-700/50 ml-2 pl-4">
+        <div className="flex items-center text-sm text-zinc-400 flex-shrink min-w-0 border-l border-zinc-700/50 ml-2 pl-4 gap-2">
+          {parentCrumb && (
+            <button
+              onClick={() => onNavigate(parentCrumb.path)}
+              className="flex items-center gap-1 px-2 py-1 rounded-md text-zinc-200 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:border-zinc-600 transition-colors"
+              title={`Up to ${parentCrumb.name}`}
+            >
+              <ChevronLeftIcon className="w-4 h-4" />
+              <span className="hidden sm:inline">Up</span>
+            </button>
+          )}
           {breadcrumbs.map((crumb, index) => (
             <React.Fragment key={crumb.path}>
               <button
@@ -142,6 +158,34 @@ const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center gap-2">
         {isFolderOpen && (
           <>
+            <div className="hidden md:block">
+              <label className="sr-only" htmlFor="file-search-input">Search files</label>
+              <div className="relative">
+                <SearchIcon className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  id="file-search-input"
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => onSearchChange(e.target.value)}
+                  placeholder="Search files"
+                  className="pl-9 pr-3 py-1.5 text-sm rounded-md bg-zinc-800 border border-zinc-700 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500 focus:border-fuchsia-500 w-48"
+                />
+              </div>
+            </div>
+            <div className="md:hidden">
+              <label className="sr-only" htmlFor="file-search-input-mobile">Search files</label>
+              <div className="relative w-40">
+                <SearchIcon className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  id="file-search-input-mobile"
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => onSearchChange(e.target.value)}
+                  placeholder="Search files"
+                  className="pl-9 pr-3 py-1.5 text-sm rounded-md bg-zinc-800 border border-zinc-700 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500 focus:border-fuchsia-500 w-full"
+                />
+              </div>
+            </div>
             <button
               onClick={onRefreshFolder}
               className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-zinc-300 bg-zinc-800 border border-zinc-700 rounded-md hover:bg-zinc-700 hover:border-zinc-600 transition-colors"

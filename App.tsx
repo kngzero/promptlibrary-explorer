@@ -63,6 +63,7 @@ const App: React.FC = () => {
   // Display State
   const [thumbnailSize, setThumbnailSize] = useState(5); // Range 1-10
   const [thumbnailsOnly, setThumbnailsOnly] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Lightbox state
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -210,6 +211,11 @@ const App: React.FC = () => {
     return crumbs;
   }, [selectedFolderPath, explorerRootPath, isDemoMode]);
 
+  const parentBreadcrumb = useMemo(
+    () => (breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null),
+    [breadcrumbs]
+  );
+
   // Global Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -225,7 +231,7 @@ const App: React.FC = () => {
       }
 
       // Backspace to go up one directory level
-      const parentCrumb = breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null;
+      const parentCrumb = parentBreadcrumb;
       if (e.key === 'Backspace' && parentCrumb) {
           e.preventDefault();
           handleSelectFolder(parentCrumb.path);
@@ -236,7 +242,7 @@ const App: React.FC = () => {
     return () => {
         window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [handleOpenFolder, handleSelectFolder, breadcrumbs, lightboxOpen]);
+  }, [handleOpenFolder, handleSelectFolder, parentBreadcrumb, lightboxOpen]);
 
   const refreshFolderTree = useCallback(async () => {
       if (explorerRootPath && !isDemoMode) {
@@ -499,6 +505,10 @@ const App: React.FC = () => {
 
       items = items.filter(item => {
         const name = item.name?.toLowerCase() || '';
+        if (searchQuery.trim()) {
+            const query = searchQuery.toLowerCase();
+            if (!name.includes(query)) return false;
+        }
         if (filterConfig.hideJpg && (name.endsWith('.jpg') || name.endsWith('.jpeg'))) return false;
         if (filterConfig.hidePng && name.endsWith('.png')) return false;
 
@@ -529,7 +539,7 @@ const App: React.FC = () => {
       });
       
       return items;
-  }, [folderContents, sortConfig, filterConfig, getItemTypeRank]);
+  }, [folderContents, sortConfig, filterConfig, getItemTypeRank, searchQuery]);
 
   const hiddenItemCount = useMemo(() => folderContents.length - processedFolderContents.length, [folderContents, processedFolderContents]);
 
@@ -832,9 +842,12 @@ const App: React.FC = () => {
       )}
       <Header
         breadcrumbs={breadcrumbs}
+        parentCrumb={parentBreadcrumb}
         onNavigate={handleSelectFolder}
         sortConfig={sortConfig}
         onSortChange={setSortConfig}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
         filterConfig={filterConfig}
         onFilterChange={setFilterConfig}
         isFolderOpen={!!explorerRootPath}

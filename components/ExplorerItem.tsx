@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import ImageDisplay from './ImageDisplay';
-import { FolderIcon, FileIcon } from './icons';
+import { BrandLogo, FolderIcon, FileIcon, PicturesIcon } from './icons';
 import { getPlibData } from '../services/plibService';
 import { convertFileSrc, getBasename } from '../services/tauriService';
 import { getDemoPlibFile, getDemoImageEntry } from '../services/demoService';
 import { extractDragSourcePath, setActiveDragSource } from '../utils/drag';
+import { getCachedThumbnail } from '../services/thumbnailCache';
 import type { FsFileEntry } from '../types';
 
 interface ExplorerItemProps {
@@ -32,9 +33,12 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
     const [title, setTitle] = useState(item.name || 'Loading...');
     const [isDragging, setIsDragging] = useState(false);
     const [isDraggingOver, setIsDraggingOver] = useState(false);
-    
+
     const isFolder = !!item.children;
     const canDrag = !isFolder && !isDemoMode;
+    const itemLabel = item.name || item.path.split(/[\\/]/).pop() || '';
+    const lowerName = itemLabel.toLowerCase();
+    const itemType = isFolder ? 'folder' : isPlibAsset(lowerName) ? 'plib' : isImageAsset(lowerName) ? 'image' : 'file';
 
     useEffect(() => {
         let isCancelled = false;
@@ -43,7 +47,12 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
             const itemName = item.name || (isDemoMode ? item.path.split('/').pop() : await getBasename(item.path));
             if (isCancelled) return;
             setTitle(itemName || '');
-            
+            const cached = getCachedThumbnail(item.path);
+            if (cached) {
+                setThumbnailSrc(cached);
+                return;
+            }
+
             if (isFolder) { // Is directory
                 setThumbnailSrc('dir');
                 return;
@@ -108,6 +117,20 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
         return `file://${encodeURI(normalized)}`;
     };
 
+    const tryAttachFileBlob = async (dt: DataTransfer, path: string, name: string) => {
+        // Attach an actual File object when possible so external drops (e.g., browser upload areas) receive real file data.
+        try {
+            const fileUrl = await convertFileSrc(path);
+            const response = await fetch(fileUrl);
+            if (!response.ok) return;
+            const blob = await response.blob();
+            const file = new File([blob], name, { type: blob.type || 'application/octet-stream' });
+            dt.items.add(file);
+        } catch (error) {
+            console.error('Failed to attach file blob to drag payload', error);
+        }
+    };
+
     const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
         if (!canDrag) {
             e.preventDefault();
@@ -123,13 +146,16 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
         onDragStartFile(primaryPath);
         const { dataTransfer } = e;
         const uriList = dragPaths.map(toFileUri).join('\n');
+        dataTransfer.effectAllowed = 'copyMove';
         dataTransfer.setData('text/plain', primaryPath);
         dataTransfer.setData('text/uri-list', uriList);
         dataTransfer.setData('application/json', JSON.stringify({ path: primaryPath, paths: dragPaths }));
         dataTransfer.setData('application/x-plib-entry', primaryPath);
         const primaryName = item.name || primaryPath.split(/[\\/]/).pop() || 'file';
         dataTransfer.setData('DownloadURL', `application/octet-stream:${primaryName}:${toFileUri(primaryPath)}`);
-        dataTransfer.effectAllowed = 'copyMove';
+        if (!isDemoMode && !isFolder && primaryPath) {
+            void tryAttachFileBlob(dataTransfer, primaryPath, primaryName);
+        }
     };
 
     const handleDragEnd = () => {
@@ -198,6 +224,26 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
         return <div className="w-full h-full bg-zinc-800 animate-pulse"></div>;
     };
 
+    const renderTypeBadge = () => {
+        switch (itemType) {
+            case 'plib':
+                return <BrandLogo className="w-4 h-4 text-fuchsia-200" />;
+            case 'image':
+                return <PicturesIcon className="w-4 h-4" />;
+            default:
+                return <FileIcon className="w-4 h-4" />;
+        }
+    };
+
+    const showTypeBadge = itemType !== 'folder';
+
+    const badgeColor =
+        itemType === 'plib'
+            ? 'bg-fuchsia-500/80 border-fuchsia-200/40 text-white'
+            : itemType === 'image'
+            ? 'bg-sky-500/80 border-sky-200/40 text-white'
+            : 'bg-zinc-700/80 border-zinc-200/30 text-white';
+
     const selectionClasses = isSelected ? 'ring-2 ring-fuchsia-500 ring-offset-2 ring-offset-zinc-900 bg-zinc-800/70' : '';
     const focusClasses = !isSelected && isFocused ? 'ring-2 ring-fuchsia-400 ring-offset-2 ring-offset-zinc-900' : '';
     const draggingClasses = isDragging ? 'ring-2 ring-fuchsia-400 ring-offset-2 ring-offset-zinc-900 opacity-80 scale-[0.98]' : '';
@@ -229,8 +275,13 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
             className={`text-left group cursor-pointer focus:outline-none rounded-lg transition-all duration-200 select-none ${selectionClasses} ${focusClasses} ${draggingClasses}`}
             tabIndex={-1}
         >
-            <div className={`aspect-square rounded-lg overflow-hidden bg-zinc-800 border border-zinc-700/50 group-hover:border-zinc-600 transition-all duration-200 ${dropHighlightClasses}`}>
+            <div className={`relative aspect-square rounded-lg overflow-hidden bg-zinc-800 border border-zinc-700/50 group-hover:border-zinc-600 transition-all duration-200 ${dropHighlightClasses}`}>
                 {renderThumbnail()}
+                {showTypeBadge && (
+                    <div className={`absolute bottom-1 right-1 inline-flex items-center justify-center rounded-md border shadow-sm backdrop-blur-sm px-1.5 py-1 ${badgeColor}`}>
+                        {renderTypeBadge()}
+                    </div>
+                )}
             </div>
             {!thumbnailsOnly && (
                  <p className={`text-sm mt-2 truncate group-hover:text-white ${labelColor}`} title={title}>
