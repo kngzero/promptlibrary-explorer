@@ -28,6 +28,7 @@ fn describe_file_type(extension: &str) -> String {
     "webp" => "WebP Image".into(),
     "tiff" | "tif" => "TIFF Image".into(),
     "plib" => "Prompt Library File".into(),
+    "aoe" => "Art Official Elements File".into(),
     "" => "File".into(),
     other => format!("{} File", other.to_uppercase()),
   }

@@ -26,10 +26,8 @@ interface ExplorerProps {
     onSelectItem: (item: FsFileEntry, index: number, event?: React.MouseEvent) => void;
     onSelectItemByIndex: (index: number) => void;
     onOpenLightbox: (folderIndex: number) => void;
-    onStartDemo: () => void;
     onSelectFavorite: (favorite: 'desktop' | 'documents' | 'pictures') => void;
     onMoveItem: (sourcePath: string, destinationDir: string) => void;
-    isDemoMode: boolean;
     onItemContextMenu: (event: React.MouseEvent, item: FsFileEntry, index: number) => void;
     dragSourcePath: string | null;
     onDragStartItem: (path: string) => void;
@@ -55,10 +53,8 @@ const Explorer: React.FC<ExplorerProps> = ({
     onSelectItem,
     onSelectItemByIndex,
     onOpenLightbox,
-    onStartDemo,
     onSelectFavorite,
     onMoveItem,
-    isDemoMode,
     onItemContextMenu,
     dragSourcePath,
     onDragStartItem,
@@ -73,26 +69,15 @@ const Explorer: React.FC<ExplorerProps> = ({
                 </div>
                 <h2 className="text-2xl font-bold text-white">Open a Folder to Begin</h2>
                 <p className="mt-2 text-zinc-400 max-w-sm">
-                    Select a folder on your computer containing your `.plib` files and images to start browsing your creative library.
+                    Select a folder on your computer containing your `.plib` or `.aoe` files and images to start browsing your creative library.
                 </p>
-                <div className="flex flex-col items-center mt-8 space-y-4">
-                    <button
-                        onClick={onOpenFolder}
-                        className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-fuchsia-600 hover:bg-fuchsia-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-zinc-900 focus:ring-fuchsia-500"
-                    >
-                        <OpenIcon className="h-5 w-5 mr-3" />
-                        Open Folder
-                    </button>
-                    <div className="text-center">
-                        <button
-                            onClick={onStartDemo}
-                            className="text-sm text-fuchsia-400 hover:text-fuchsia-300 hover:underline"
-                        >
-                            Or, try a demo
-                        </button>
-                        <p className="text-xs text-zinc-500 mt-1">No files on your computer will be used.</p>
-                    </div>
-                </div>
+                <button
+                    onClick={onOpenFolder}
+                    className="mt-8 inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-fuchsia-600 hover:bg-fuchsia-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-zinc-900 focus:ring-fuchsia-500"
+                >
+                    <OpenIcon className="h-5 w-5 mr-3" />
+                    Open Folder
+                </button>
             </div>
         );
     }
@@ -107,7 +92,6 @@ const Explorer: React.FC<ExplorerProps> = ({
                     onSelect={onSelectFolder}
                     onSelectFavorite={onSelectFavorite}
                     onMoveItem={onMoveItem}
-                    isDemoMode={isDemoMode}
                     isDragActive={!!dragSourcePath}
                 />
             </div>
@@ -120,7 +104,6 @@ const Explorer: React.FC<ExplorerProps> = ({
                     onNavigate={onSelectFolder}
                     onOpenLightbox={onOpenLightbox}
                     onMoveItem={onMoveItem}
-                    isDemoMode={isDemoMode}
                     selectedItemIndex={selectedItemIndex}
                     selectedIndices={selectedIndices}
                     onSelectItemByIndex={onSelectItemByIndex}

@@ -12,7 +12,6 @@ interface ContentBrowserProps {
     onNavigate: (path: string) => void;
     onOpenLightbox: (index: number) => void;
     onMoveItem: (sourcePath: string, destinationDir: string) => void;
-    isDemoMode: boolean;
     thumbnailSize: number;
     thumbnailsOnly: boolean;
     onItemContextMenu: (event: React.MouseEvent, item: FsFileEntry, index: number) => void;
@@ -28,7 +27,6 @@ const ContentBrowser: React.FC<ContentBrowserProps> = ({
     onNavigate, 
     onOpenLightbox, 
     onMoveItem,
-    isDemoMode, 
     selectedItemIndex, 
     selectedIndices,
     onSelectItemByIndex,
@@ -156,7 +154,6 @@ const ContentBrowser: React.FC<ContentBrowserProps> = ({
                                 onDoubleClick={() => handleDoubleClick(item)}
                                 onOpenLightbox={() => onOpenLightbox(index)}
                                 onMoveItem={onMoveItem}
-                                isDemoMode={isDemoMode}
                                 isFocused={index === selectedItemIndex}
                                 isSelected={selectedIndices.includes(index)}
                                 thumbnailsOnly={thumbnailsOnly}

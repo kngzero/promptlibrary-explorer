@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BrandLogo, ChevronRightIcon, ChevronLeftIcon, SortIcon, FilterIcon, CheckIcon, OpenIcon, PowerIcon, RefreshIcon, SearchIcon } from './icons';
+import { BrandLogo, ChevronRightIcon, ChevronLeftIcon, SortIcon, FilterIcon, CheckIcon, OpenIcon, RefreshIcon, SearchIcon } from './icons';
 import type { SortConfig, FilterConfig, Breadcrumb } from '../types';
 
 // Custom hook to detect clicks outside of a component
@@ -31,10 +31,9 @@ interface HeaderProps {
     filterConfig: FilterConfig;
     onFilterChange: (config: FilterConfig) => void;
     isFolderOpen: boolean;
-    isDemoMode: boolean;
     onChangeFolder: () => void;
-    onExitDemo: () => void;
     onRefreshFolder: () => void;
+    isLoadingFolder: boolean;
 }
 
 const Header: React.FC<HeaderProps> = ({
@@ -48,13 +47,13 @@ const Header: React.FC<HeaderProps> = ({
     filterConfig,
     onFilterChange,
     isFolderOpen,
-    isDemoMode,
     onChangeFolder,
-    onExitDemo,
-    onRefreshFolder
+    onRefreshFolder,
+    isLoadingFolder,
 }) => {
   const [sortOpen, setSortOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const sortRef = useRef<HTMLDivElement | null>(null);
   const filterRef = useRef<HTMLDivElement | null>(null);
@@ -70,15 +69,24 @@ const Header: React.FC<HeaderProps> = ({
         }
 
         if (isFolderOpen && (e.metaKey || e.ctrlKey)) {
-            if (e.key.toLowerCase() === 's') {
+            const key = e.key.toLowerCase();
+            if (key === 's') {
                 e.preventDefault();
                 setSortOpen(prev => !prev);
                 setFilterOpen(false); // Close other menu
+                return;
             }
-            if (e.key.toLowerCase() === 'f') {
+            if (key === 'f' && e.shiftKey) {
                 e.preventDefault();
                 setFilterOpen(prev => !prev);
                 setSortOpen(false); // Close other menu
+                return;
+            }
+            if (key === 'f') {
+                e.preventDefault();
+                searchInputRef.current?.focus();
+                setFilterOpen(false);
+                setSortOpen(false);
             }
         }
     };
@@ -105,30 +113,30 @@ const Header: React.FC<HeaderProps> = ({
     onFilterChange({ ...filterConfig, [key]: !filterConfig[key] });
   };
 
+  const clearFiltersAndSearch = () => {
+    onSearchChange('');
+    onFilterChange({ hideJpg: false, hidePng: false, hideOther: true });
+  };
+
+  const activeFilters =
+    (filterConfig.hideJpg ? 1 : 0) +
+    (filterConfig.hidePng ? 1 : 0) +
+    (!filterConfig.hideOther ? 1 : 0) +
+    (searchQuery.trim() ? 1 : 0);
+
   return (
     <header className="relative w-full p-3 flex justify-between items-center border-b border-zinc-700/50 flex-shrink-0 z-20 select-none">
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <BrandLogo className="w-8 h-auto text-white flex-shrink-0" />
         {isFolderOpen && (
-            isDemoMode ? (
-              <button 
-                onClick={onExitDemo} 
-                className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white px-2 py-1 rounded-md hover:bg-zinc-700 transition-colors"
-                title="Exit Demo Mode"
-              >
-                <PowerIcon className="w-4 h-4" />
-                Exit Demo
-              </button>
-            ) : (
-              <button 
-                onClick={onChangeFolder} 
-                className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white px-2 py-1 rounded-md hover:bg-zinc-700 transition-colors"
-                title="Open a different folder (Ctrl+O)"
-              >
-                <OpenIcon className="w-4 h-4" />
-                Change Folder
-              </button>
-            )
+          <button 
+            onClick={onChangeFolder} 
+            className="flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white px-2 py-1 rounded-md hover:bg-zinc-700 transition-colors"
+            title="Open a different folder (Ctrl+O)"
+          >
+            <OpenIcon className="w-4 h-4" />
+            Change Folder
+          </button>
         )}
         <div className="flex items-center text-sm text-zinc-400 flex-shrink min-w-0 border-l border-zinc-700/50 ml-2 pl-4 gap-2">
           {parentCrumb && (
@@ -153,6 +161,12 @@ const Header: React.FC<HeaderProps> = ({
               {index < breadcrumbs.length - 1 && <ChevronRightIcon className="h-4 w-4 text-zinc-600 flex-shrink-0" />}
             </React.Fragment>
           ))}
+          {isLoadingFolder && (
+            <div className="flex items-center gap-1 text-xs text-zinc-400 pl-1">
+              <span className="h-2 w-2 rounded-full bg-fuchsia-400 animate-pulse" />
+              Loading…
+            </div>
+          )}
         </div>
       </div>
       <div className="flex items-center gap-2">
@@ -167,6 +181,7 @@ const Header: React.FC<HeaderProps> = ({
                   type="text"
                   value={searchQuery}
                   onChange={(e) => onSearchChange(e.target.value)}
+                  ref={searchInputRef}
                   placeholder="Search files"
                   className="pl-9 pr-3 py-1.5 text-sm rounded-md bg-zinc-800 border border-zinc-700 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500 focus:border-fuchsia-500 w-48"
                 />
@@ -181,6 +196,7 @@ const Header: React.FC<HeaderProps> = ({
                   type="text"
                   value={searchQuery}
                   onChange={(e) => onSearchChange(e.target.value)}
+                  ref={searchInputRef}
                   placeholder="Search files"
                   className="pl-9 pr-3 py-1.5 text-sm rounded-md bg-zinc-800 border border-zinc-700 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500 focus:border-fuchsia-500 w-full"
                 />
@@ -223,7 +239,7 @@ const Header: React.FC<HeaderProps> = ({
               <button 
                 onClick={() => setFilterOpen(!filterOpen)} 
                 className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-zinc-300 bg-zinc-800 border border-zinc-700 rounded-md hover:bg-zinc-700 hover:border-zinc-600 transition-colors"
-                title="Filter files (Ctrl+F)"
+                title="Filter files (Ctrl+Shift+F)"
               >
                 <FilterIcon className="w-4 h-4" />
                 Filter
@@ -245,6 +261,18 @@ const Header: React.FC<HeaderProps> = ({
                 </div>
               )}
             </div>
+            {activeFilters > 0 && (
+              <div className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md bg-zinc-800 border border-zinc-700 text-zinc-200">
+                <span>{activeFilters} active</span>
+                <button
+                  onClick={clearFiltersAndSearch}
+                  className="text-fuchsia-300 hover:text-white hover:underline"
+                  title="Clear search and filters"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>

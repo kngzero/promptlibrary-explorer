@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import ImageDisplay from './ImageDisplay';
 import { BrandLogo, FolderIcon, FileIcon, PicturesIcon } from './icons';
+import { getAoeData } from '../services/aoeService';
 import { getPlibData } from '../services/plibService';
 import { convertFileSrc, getBasename } from '../services/tauriService';
-import { getDemoPlibFile, getDemoImageEntry } from '../services/demoService';
 import { extractDragSourcePath, setActiveDragSource } from '../utils/drag';
 import { getCachedThumbnail } from '../services/thumbnailCache';
 import type { FsFileEntry } from '../types';
@@ -14,7 +14,6 @@ interface ExplorerItemProps {
     onDoubleClick: (item: FsFileEntry) => void;
     onOpenLightbox: () => void;
     onMoveItem: (sourcePath: string, destinationDir: string) => void;
-    isDemoMode: boolean;
     isFocused: boolean;
     isSelected: boolean;
     thumbnailsOnly: boolean;
@@ -26,25 +25,28 @@ interface ExplorerItemProps {
 }
 
 const isImageAsset = (filename: string) => /\.(png|jpe?g|webp|gif)$/i.test(filename);
-const isPlibAsset = (filename: string) => /\.plib$/i.test(filename);
+const isPromptAsset = (filename: string) => /\.(plib|aoe)$/i.test(filename);
+const isAoeAsset = (filename: string) => /\.aoe$/i.test(filename);
+const fileSrcCache = new Map<string, string>();
 
-const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleClick, onOpenLightbox, onMoveItem, isDemoMode, isFocused, isSelected, thumbnailsOnly, onContextMenu, isDragActive, onDragStartFile, onDragEndFile, selectedPaths }) => {
+const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleClick, onOpenLightbox, onMoveItem, isFocused, isSelected, thumbnailsOnly, onContextMenu, isDragActive, onDragStartFile, onDragEndFile, selectedPaths }) => {
     const [thumbnailSrc, setThumbnailSrc] = useState<string | null>(null);
     const [title, setTitle] = useState(item.name || 'Loading...');
     const [isDragging, setIsDragging] = useState(false);
     const [isDraggingOver, setIsDraggingOver] = useState(false);
 
     const isFolder = !!item.children;
-    const canDrag = !isFolder && !isDemoMode;
+    const canDrag = !isFolder;
     const itemLabel = item.name || item.path.split(/[\\/]/).pop() || '';
     const lowerName = itemLabel.toLowerCase();
-    const itemType = isFolder ? 'folder' : isPlibAsset(lowerName) ? 'plib' : isImageAsset(lowerName) ? 'image' : 'file';
+    const itemType = isFolder ? 'folder' : isPromptAsset(lowerName) ? 'prompt' : isImageAsset(lowerName) ? 'image' : 'file';
+    const promptVariant = !isFolder && isPromptAsset(lowerName) ? (isAoeAsset(lowerName) ? 'aoe' : 'plib') : null;
 
     useEffect(() => {
         let isCancelled = false;
         
         const loadItem = async () => {
-            const itemName = item.name || (isDemoMode ? item.path.split('/').pop() : await getBasename(item.path));
+            const itemName = item.name || (await getBasename(item.path));
             if (isCancelled) return;
             setTitle(itemName || '');
             const cached = getCachedThumbnail(item.path);
@@ -58,36 +60,35 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
                 return;
             }
 
-            if (isDemoMode) {
-                if (isPlibAsset(itemName || '')) {
-                    const data = getDemoPlibFile(item.path);
-                    if (data?.images?.[0]) setThumbnailSrc(data.images[0]);
-                    else setThumbnailSrc('file');
-                } else if (isImageAsset(itemName || '')) {
-                    const data = getDemoImageEntry(item.path);
-                    setThumbnailSrc(data.images[0]);
-                } else {
-                    setThumbnailSrc('file');
-                }
-                return;
-            }
-
             // --- Real filesystem logic ---
-            if (isPlibAsset(itemName || '')) {
-                const data = await getPlibData(item.path);
+            if (isPromptAsset(itemName || '')) {
+                const data = /\.aoe$/i.test(itemName || '') ? await getAoeData(item.path) : await getPlibData(item.path);
                 if (!isCancelled && data?.images?.[0]) {
                     const first = data.images[0];
-                    // NEW: convert local file paths for Tauri
-                    const src =
-                        typeof first === 'string' && !first.startsWith('data:') && !/^https?:\/\//i.test(first)
-                        ? await convertFileSrc(first)
-                        : first;
+                    const isBase64 = typeof first === 'string' && /^[A-Za-z0-9+/=\s]+$/.test(first) && first.length > 100;
+                    let src = first;
+                    if (typeof first === 'string' && !first.startsWith('data:') && !/^https?:\/\//i.test(first)) {
+                        if (isBase64) {
+                            src = `data:image/png;base64,${first.replace(/\s+/g, '')}`;
+                        } else if (fileSrcCache.has(first)) {
+                            src = fileSrcCache.get(first) as string;
+                        } else {
+                            src = await convertFileSrc(first);
+                            fileSrcCache.set(first, src);
+                        }
+                    }
                     setThumbnailSrc(src);
                 } else {
                     setThumbnailSrc('file');
                 }
             } else if (isImageAsset(itemName || '')) {
-                const src = await convertFileSrc(item.path); // already correct
+                let src: string;
+                if (fileSrcCache.has(item.path)) {
+                    src = fileSrcCache.get(item.path) as string;
+                } else {
+                    src = await convertFileSrc(item.path); // already correct
+                    fileSrcCache.set(item.path, src);
+                }
                 if (!isCancelled) setThumbnailSrc(src);
             } else {
                 setThumbnailSrc('file');
@@ -97,7 +98,7 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
         loadItem();
         
         return () => { isCancelled = true; };
-    }, [item, isDemoMode, isFolder]);
+    }, [item, isFolder]);
     
     const handleDoubleClick = () => {
         if (item.children) {
@@ -106,7 +107,7 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
         }
 
         const itemName = (item.name || item.path).toLowerCase();
-        if (isPlibAsset(itemName) || isImageAsset(itemName)) {
+        if (isPromptAsset(itemName) || isImageAsset(itemName)) {
             onOpenLightbox();
         }
     };
@@ -145,15 +146,15 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
         setActiveDragSource(primaryPath);
         onDragStartFile(primaryPath);
         const { dataTransfer } = e;
-        const uriList = dragPaths.map(toFileUri).join('\n');
         dataTransfer.effectAllowed = 'copyMove';
+        const uriList = dragPaths.map(toFileUri).join('\n');
         dataTransfer.setData('text/plain', primaryPath);
         dataTransfer.setData('text/uri-list', uriList);
         dataTransfer.setData('application/json', JSON.stringify({ path: primaryPath, paths: dragPaths }));
         dataTransfer.setData('application/x-plib-entry', primaryPath);
         const primaryName = item.name || primaryPath.split(/[\\/]/).pop() || 'file';
         dataTransfer.setData('DownloadURL', `application/octet-stream:${primaryName}:${toFileUri(primaryPath)}`);
-        if (!isDemoMode && !isFolder && primaryPath) {
+        if (!isFolder && primaryPath) {
             void tryAttachFileBlob(dataTransfer, primaryPath, primaryName);
         }
     };
@@ -165,25 +166,25 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
     };
     
     const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-        if (!isFolder || isDemoMode) return;
+        if (!isFolder) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
     };
 
     const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
-        if (!isFolder || isDemoMode) return;
+        if (!isFolder) return;
         e.preventDefault();
         setIsDraggingOver(true);
     };
 
     const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-        if (!isFolder || isDemoMode) return;
+        if (!isFolder) return;
         e.preventDefault();
         setIsDraggingOver(false);
     };
 
     const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-        if (!isFolder || isDemoMode) return;
+        if (!isFolder) return;
         e.preventDefault();
         setIsDraggingOver(false);
         const sourcePath = extractDragSourcePath(e.dataTransfer);
@@ -226,7 +227,14 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
 
     const renderTypeBadge = () => {
         switch (itemType) {
-            case 'plib':
+            case 'prompt':
+                if (promptVariant === 'aoe') {
+                    return (
+                        <div className="w-6 h-6 rounded-md bg-emerald-500/90 border border-emerald-100/50 text-[10px] font-black flex items-center justify-center text-white">
+                            AOE
+                        </div>
+                    );
+                }
                 return <BrandLogo className="w-4 h-4 text-fuchsia-200" />;
             case 'image':
                 return <PicturesIcon className="w-4 h-4" />;
@@ -238,8 +246,10 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
     const showTypeBadge = itemType !== 'folder';
 
     const badgeColor =
-        itemType === 'plib'
-            ? 'bg-fuchsia-500/80 border-fuchsia-200/40 text-white'
+        itemType === 'prompt'
+            ? promptVariant === 'aoe'
+                ? 'bg-emerald-500/80 border-emerald-200/40 text-white'
+                : 'bg-fuchsia-500/80 border-fuchsia-200/40 text-white'
             : itemType === 'image'
             ? 'bg-sky-500/80 border-sky-200/40 text-white'
             : 'bg-zinc-700/80 border-zinc-200/30 text-white';

@@ -4,18 +4,20 @@ import Lightbox from './components/Lightbox';
 import Toast from './components/Toast';
 import Explorer from './components/Explorer';
 import { openFolderDialog, readDirectory, convertFileSrc, getDesktopDir, getDocumentsDir, getPicturesDir, moveFile, renameEntry, revealInFileManager, deleteEntry, moveEntryToTrash, getFileMetadata } from './services/tauriService';
-import { getDemoTree, getDemoFolderContents, getDemoPlibFile, getDemoImageEntry } from './services/demoService';
 import { getPlibData, clearPlibCache } from './services/plibService';
+import { getAoeData, clearAoeCache } from './services/aoeService';
 import type { PromptEntry, FsFileEntry, SortConfig, FilterConfig, Breadcrumb, FileMetadata } from './types';
 
 const isImageFile = (name: string) => /\.(png|jpe?g|webp|gif)$/i.test(name);
 const isPlibFile = (name: string) => /\.plib$/i.test(name);
+const isAoeFile = (name: string) => /\.aoe$/i.test(name);
+const isPromptSnapshotFile = (name: string) => isPlibFile(name) || isAoeFile(name);
 const isPreviewableItem = (item: FsFileEntry) => {
   if (item.children) return false;
   const name = item.name?.toLowerCase() || '';
-  return isPlibFile(name) || isImageFile(name);
+  return isPromptSnapshotFile(name) || isImageFile(name);
 };
-const isDroppableFile = (path: string) => /\.(plib|png|jpe?g)$/i.test(path.toLowerCase());
+const isDroppableFile = (path: string) => /\.(plib|aoe|png|jpe?g)$/i.test(path.toLowerCase());
 
 const buildFallbackMetadata = (path: string): FileMetadata => {
   const fileName = path.split(/[\\/]/).pop() || 'File';
@@ -25,6 +27,8 @@ const buildFallbackMetadata = (path: string): FileMetadata => {
 
   if (lowerExt === 'plib') {
     fileType = 'Prompt Library File';
+  } else if (lowerExt === 'aoe') {
+    fileType = 'Art Official Elements File';
   } else if (lowerExt) {
     fileType = `${lowerExt.toUpperCase()} File`;
   }
@@ -37,6 +41,8 @@ const buildFallbackMetadata = (path: string): FileMetadata => {
     modifiedMs: null,
   };
 };
+
+const fileUrlCache = new Map<string, string>();
 
 const App: React.FC = () => {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -89,12 +95,12 @@ const App: React.FC = () => {
     window.addEventListener('dragstart', handleDragStart, true);
     return () => window.removeEventListener('dragstart', handleDragStart, true);
   }, []);
-  const isDemoMode = useMemo(() => !!(explorerRootPath && explorerRootPath.startsWith('/demo')), [explorerRootPath]);
 
   const handleOpenFolder = useCallback(async () => {
     const folderPath = await openFolderDialog();
     if (folderPath) {
       clearPlibCache();
+      clearAoeCache();
       setExplorerRootPath(folderPath);
       setSelectedFolderPath(folderPath);
       setSelectedExplorerItem(null);
@@ -112,34 +118,6 @@ const App: React.FC = () => {
     setDragSourcePath(null);
   }, []);
 
-  const handleStartDemoMode = () => {
-      clearPlibCache();
-      setExplorerRootPath('/demo');
-      const demoTree = getDemoTree();
-      // Sort the demo folders alphabetically
-      demoTree.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-      setFolderTree(demoTree);
-      setSelectedFolderPath('/demo');
-      setSelectedExplorerItem(null);
-      setSelectedItemIndex(-1);
-      setSelectedIndices([]);
-      setSelectionAnchorIndex(null);
-      setToast({ message: 'Demo mode started.', type: 'info' });
-  };
-
-  const handleExitDemo = () => {
-    clearPlibCache();
-    setExplorerRootPath(null);
-    setFolderTree([]);
-    setSelectedFolderPath(null);
-    setFolderContents([]);
-    setSelectedExplorerItem(null);
-    setSelectedItemIndex(-1);
-    setSelectedIndices([]);
-    setSelectionAnchorIndex(null);
-    setToast({ message: "Exited demo mode.", type: 'info' });
-  };
-
   const handleSelectFolder = useCallback(async (path: string) => {
       setSelectedFolderPath(path);
       setSelectedExplorerItem(null);
@@ -149,10 +127,6 @@ const App: React.FC = () => {
   }, []);
 
   const handleSelectFavorite = useCallback(async (favorite: 'desktop' | 'documents' | 'pictures') => {
-    if (isDemoMode) {
-        setToast({ message: "Favorites are disabled in demo mode.", type: 'info' });
-        return;
-    }
     try {
         let path: string | null = null;
         switch (favorite) {
@@ -168,6 +142,7 @@ const App: React.FC = () => {
         }
         if (path) {
             clearPlibCache();
+            clearAoeCache();
             setExplorerRootPath(path);
             setSelectedFolderPath(path);
             setSelectedExplorerItem(null);
@@ -179,21 +154,10 @@ const App: React.FC = () => {
         console.error("Could not access favorite directory", e);
         setToast({ message: "Could not access that directory.", type: 'error' });
     }
-  }, [isDemoMode]);
+  }, []);
 
   const breadcrumbs = useMemo<Breadcrumb[]>(() => {
     if (!selectedFolderPath || !explorerRootPath) return [];
-
-    if (isDemoMode) {
-        const parts = selectedFolderPath.split('/').filter(p => p);
-        const crumbs: Breadcrumb[] = [{ name: 'Demo', path: '/demo' }];
-        let currentPath = '/demo';
-        for (let i = 1; i < parts.length; i++) {
-            currentPath += `/${parts[i]}`;
-            crumbs.push({ name: parts[i], path: currentPath });
-        }
-        return crumbs;
-    }
 
     const relativePath = selectedFolderPath.substring(explorerRootPath.length).replace(/^[\\/]/, '');
     const rootName = explorerRootPath.split(/[\\/]/).pop() || explorerRootPath;
@@ -209,7 +173,7 @@ const App: React.FC = () => {
         crumbs.push({ name: part, path: currentCrumbPath });
     }
     return crumbs;
-  }, [selectedFolderPath, explorerRootPath, isDemoMode]);
+  }, [selectedFolderPath, explorerRootPath]);
 
   const parentBreadcrumb = useMemo(
     () => (breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null),
@@ -236,6 +200,17 @@ const App: React.FC = () => {
           e.preventDefault();
           handleSelectFolder(parentCrumb.path);
       }
+
+      if ((e.altKey && e.key === 'ArrowUp') && parentCrumb) {
+          e.preventDefault();
+          handleSelectFolder(parentCrumb.path);
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
+          e.preventDefault();
+          setSearchQuery('');
+          setFilterConfig({ hideJpg: false, hidePng: false, hideOther: true });
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -245,13 +220,13 @@ const App: React.FC = () => {
   }, [handleOpenFolder, handleSelectFolder, parentBreadcrumb, lightboxOpen]);
 
   const refreshFolderTree = useCallback(async () => {
-      if (explorerRootPath && !isDemoMode) {
+      if (explorerRootPath) {
           const contents = await readDirectory(explorerRootPath);
           const dirs = contents.filter(item => item.children);
           dirs.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
           setFolderTree(dirs);
       }
-  }, [explorerRootPath, isDemoMode]);
+  }, [explorerRootPath]);
 
   useEffect(() => {
       refreshFolderTree();
@@ -261,9 +236,7 @@ const App: React.FC = () => {
     if (path) {
       setIsLoadingFolder(true);
       try {
-        const contents = isDemoMode
-          ? getDemoFolderContents(path)
-          : await readDirectory(path);
+        const contents = await readDirectory(path);
         setFolderContents(contents);
       } catch (e) {
         console.error("Failed to read directory", e);
@@ -275,7 +248,7 @@ const App: React.FC = () => {
     } else {
       setFolderContents([]);
     }
-  }, [isDemoMode]);
+  }, []);
 
   useEffect(() => {
     fetchFolderContents(selectedFolderPath);
@@ -290,10 +263,6 @@ const App: React.FC = () => {
   }, [selectedFolderPath, fetchFolderContents, refreshFolderTree]);
 
   const handleMoveItem = useCallback(async (sourcePath: string, destinationDir: string) => {
-    if (isDemoMode) {
-        setToast({ message: 'Drag and drop is disabled in demo mode.', type: 'info' });
-        return;
-    }
     try {
         await moveFile(sourcePath, destinationDir);
         // Deselect item to avoid confusion after move
@@ -309,16 +278,16 @@ const App: React.FC = () => {
         console.error("Failed to move item:", e);
         setToast({ message: "Failed to move item.", type: 'error' });
     }
-  }, [isDemoMode, selectedFolderPath, fetchFolderContents, refreshFolderTree]);
+  }, [selectedFolderPath, fetchFolderContents, refreshFolderTree]);
 
   const handleImportExternalFiles = useCallback(async (paths: string[]) => {
-    if (!selectedFolderPath || isDemoMode) {
+    if (!selectedFolderPath) {
         return;
     }
 
     const allowedFiles = paths.filter(isDroppableFile);
     if (allowedFiles.length === 0) {
-        setToast({ message: 'Only .plib, .png, or .jpg files can be dropped here.', type: 'info' });
+        setToast({ message: 'Only .plib, .aoe, .png, or .jpg files can be dropped here.', type: 'info' });
         return;
     }
 
@@ -337,7 +306,7 @@ const App: React.FC = () => {
         console.error('Failed to import dropped files', error);
         setToast({ message: 'Failed to import dropped files.', type: 'error' });
     }
-  }, [selectedFolderPath, isDemoMode, fetchFolderContents, refreshFolderTree]);
+  }, [selectedFolderPath, fetchFolderContents, refreshFolderTree]);
 
   useEffect(() => {
       let unlisten: (() => void) | null = null;
@@ -378,12 +347,8 @@ const App: React.FC = () => {
 
   const handleItemContextMenu = useCallback((event: React.MouseEvent, item: FsFileEntry, _index?: number) => {
     event.preventDefault();
-    if (isDemoMode) {
-        setToast({ message: 'Context menu actions are disabled in demo mode.', type: 'info' });
-        return;
-    }
     setContextMenu({ x: event.clientX, y: event.clientY, item });
-  }, [isDemoMode]);
+  }, []);
 
   const handleRenameChange = useCallback((value: string) => {
     setRenameState(prev => (prev ? { ...prev, value } : prev));
@@ -395,11 +360,6 @@ const App: React.FC = () => {
 
   const handleRenameConfirm = useCallback(async () => {
     if (!renameState) return;
-    if (isDemoMode) {
-        setToast({ message: 'Renaming is disabled in demo mode.', type: 'info' });
-        setRenameState(null);
-        return;
-    }
 
     const newName = renameState.value.trim();
     if (!newName) {
@@ -435,7 +395,7 @@ const App: React.FC = () => {
         console.error('Failed to rename item', error);
         setToast({ message: 'Failed to rename item.', type: 'error' });
     }
-  }, [renameState, isDemoMode, fetchFolderContents, selectedFolderPath, refreshFolderTree]);
+  }, [renameState, fetchFolderContents, selectedFolderPath, refreshFolderTree]);
 
   const handleDeleteCancel = useCallback(() => {
     setDeleteState(null);
@@ -443,12 +403,6 @@ const App: React.FC = () => {
 
   const handleDeleteConfirm = useCallback(async () => {
     if (!deleteState) return;
-
-    if (isDemoMode) {
-      setToast({ message: 'Deleting is disabled in demo mode.', type: 'info' });
-      setDeleteState(null);
-      return;
-    }
 
     try {
       if (deleteState.mode === 'trash') {
@@ -476,7 +430,6 @@ const App: React.FC = () => {
     }
   }, [
     deleteState,
-    isDemoMode,
     fetchFolderContents,
     selectedFolderPath,
     refreshFolderTree,
@@ -488,14 +441,14 @@ const App: React.FC = () => {
     setContextMenu(null);
     setRenameState(null);
     setDeleteState(null);
-  }, [selectedFolderPath, isDemoMode]);
+  }, [selectedFolderPath]);
 
 
   // FIX: Moved getItemTypeRank and processedFolderContents before their usage in other hooks to prevent "used before declaration" errors.
   const getItemTypeRank = useCallback((item: FsFileEntry): number => {
     if (item.children) return 0; // Directory
     const name = item.name?.toLowerCase() || '';
-    if (name.endsWith('.plib')) return 1;
+    if (name.endsWith('.plib') || name.endsWith('.aoe')) return 1;
     if (/\.(png|jpe?g|webp|gif)$/i.test(name)) return 2; // Image
     return 3; // Other
   }, []);
@@ -514,7 +467,7 @@ const App: React.FC = () => {
 
         if (filterConfig.hideOther) {
             const isDir = !!item.children;
-            const isAllowedType = isDir || /\.(plib|png|jpe?g|webp|gif)$/i.test(name);
+            const isAllowedType = isDir || /\.(plib|aoe|png|jpe?g|webp|gif)$/i.test(name);
             if (!isAllowedType) return false;
         }
         return true;
@@ -564,42 +517,35 @@ const App: React.FC = () => {
     const fallbackMetadata = buildFallbackMetadata(item.path);
     let entry: PromptEntry | null = null;
 
-    if (isDemoMode) {
-        if (isPlibFile(name)) {
-            const data = getDemoPlibFile(item.path);
-            if (!data) return null;
-            entry = {
-                ...data,
-                sourcePath: item.path,
-                rawImages: data.images ? [...data.images] : undefined,
-                rawReferenceImages: data.referenceImages ? [...data.referenceImages] : undefined,
-            };
-        } else if (isImageFile(name)) {
-            const data = getDemoImageEntry(item.path);
-            entry = {
-                ...data,
-                sourcePath: item.path,
-                rawImages: data.images ? [...data.images] : undefined,
-                rawReferenceImages: data.referenceImages ? [...data.referenceImages] : undefined,
-            };
+    const convertIfNeeded = async (img: string) => {
+        if (!img) return img;
+        if (img.startsWith('data:') || /^https?:\/\//i.test(img)) return img;
+        if (/^[A-Za-z0-9+/=\s]+$/.test(img) && img.length > 100) {
+            return `data:image/png;base64,${img.replace(/\s+/g, '')}`;
         }
-    } else if (isPlibFile(name)) {
-        const data = await getPlibData(item.path);
+        if (fileUrlCache.has(img)) return fileUrlCache.get(img) as string;
+        const converted = await convertFileSrc(img);
+        fileUrlCache.set(img, converted);
+        return converted;
+    };
+
+    if (isPromptSnapshotFile(name)) {
+        const data = isPlibFile(name) ? await getPlibData(item.path) : await getAoeData(item.path);
         if (!data) return null;
 
-        const convertIfNeeded = async (img: string) =>
-            !img.startsWith('data:') && !/^https?:\/\//i.test(img) ? await convertFileSrc(img) : img;
+        const rawImages = data.rawImages ? [...data.rawImages] : data.images ? [...data.images] : undefined;
+        const baseImages = data.images ? [...data.images] : undefined;
+        const rawReferenceImages = data.rawReferenceImages ? [...data.rawReferenceImages] : data.referenceImages ? [...data.referenceImages] : undefined;
+        const baseReferenceImages = data.referenceImages ? [...data.referenceImages] : undefined;
 
-        const rawImages = data.images ? [...data.images] : undefined;
-        const rawReferenceImages = data.referenceImages ? [...data.referenceImages] : undefined;
-        const images = await Promise.all((rawImages ?? []).map(convertIfNeeded));
-        const referenceImages = await Promise.all((rawReferenceImages ?? []).map(convertIfNeeded));
+        const images = await Promise.all((baseImages ?? rawImages ?? []).map(convertIfNeeded));
+        const referenceImages = await Promise.all((baseReferenceImages ?? rawReferenceImages ?? []).map(convertIfNeeded));
         entry = {
             ...data,
             images,
             referenceImages,
-            rawImages,
-            rawReferenceImages,
+            rawImages: rawImages ?? baseImages,
+            rawReferenceImages: rawReferenceImages ?? baseReferenceImages,
             sourcePath: item.path,
         };
     } else if (isImageFile(name)) {
@@ -622,15 +568,13 @@ const App: React.FC = () => {
         return null;
     }
 
-    const metadata = isDemoMode
-        ? fallbackMetadata
-        : (await getFileMetadata(item.path)) ?? fallbackMetadata;
+    const metadata = (await getFileMetadata(item.path)) ?? fallbackMetadata;
 
     return {
         ...entry,
         fileMetadata: metadata,
     };
-  }, [isDemoMode]);
+  }, []);
 
   const handleSelectItem = useCallback(async (item: FsFileEntry | null) => {
     if (!item) {
@@ -648,7 +592,10 @@ const App: React.FC = () => {
     setSelectedExplorerItem(entry);
   }, [loadPromptEntryForItem]);
 
-  const updateSelection = useCallback(
+  const selectionQueueRef = React.useRef<number | null>(null);
+  const selectionTimeoutRef = React.useRef<number | undefined>(undefined);
+
+  const flushSelection = useCallback(
     (indices: number[], primaryIndex?: number | null, anchorIndex?: number | null) => {
       const normalized = Array.from(
         new Set(indices.filter((idx) => idx >= 0 && idx < processedFolderContents.length))
@@ -679,6 +626,18 @@ const App: React.FC = () => {
       }
     },
     [processedFolderContents, handleSelectItem]
+  );
+
+  const updateSelection = useCallback(
+    (indices: number[], primaryIndex?: number | null, anchorIndex?: number | null) => {
+      // throttle selection to avoid spamming preview loads while arrowing
+      window.clearTimeout(selectionTimeoutRef.current);
+      selectionTimeoutRef.current = window.setTimeout(() => {
+        flushSelection(indices, primaryIndex, anchorIndex);
+      }, 50);
+      selectionQueueRef.current = primaryIndex ?? null;
+    },
+    [flushSelection]
   );
 
   const handleSelectItemByIndex = useCallback(
@@ -851,10 +810,9 @@ const App: React.FC = () => {
         filterConfig={filterConfig}
         onFilterChange={setFilterConfig}
         isFolderOpen={!!explorerRootPath}
-        isDemoMode={isDemoMode}
         onChangeFolder={handleOpenFolder}
-        onExitDemo={handleExitDemo}
         onRefreshFolder={handleRefreshFolder}
+        isLoadingFolder={isLoadingFolder}
       />
       
       <main className="flex-grow flex flex-col overflow-hidden">
@@ -877,10 +835,8 @@ const App: React.FC = () => {
             onSelectItem={handleItemClick}
             onSelectItemByIndex={handleSelectItemByIndex}
             onOpenLightbox={openLightboxAtFolderIndex}
-            onStartDemo={handleStartDemoMode}
             onSelectFavorite={handleSelectFavorite}
             onMoveItem={handleMoveItem}
-            isDemoMode={isDemoMode}
             onItemContextMenu={handleItemContextMenu}
             dragSourcePath={dragSourcePath}
             onDragStartItem={handleDragStartItem}

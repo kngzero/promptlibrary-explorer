@@ -20,9 +20,9 @@ const InfoBar: React.FC<InfoBarProps> = ({
     return (
         <div className="flex-shrink-0 w-full bg-zinc-800/50 border-t border-zinc-700/50 px-4 py-2 flex items-center justify-between text-sm text-zinc-400 select-none">
             {/* Left: Item Count */}
-            <div>
+            <div className="flex items-center gap-3">
                 <span>{shownCount} shown</span>
-                {hiddenCount > 0 && <span className="ml-2 text-zinc-500">({hiddenCount} hidden)</span>}
+                {hiddenCount > 0 && <span className="text-zinc-500">({hiddenCount} hidden)</span>}
             </div>
 
             {/* Middle: Thumbnail Size Slider */}
@@ -41,7 +41,7 @@ const InfoBar: React.FC<InfoBarProps> = ({
             </div>
 
             {/* Right: Thumbnails Only Toggle */}
-            <div className="flex items-center">
+            <div className="flex items-center gap-3">
                 <label htmlFor="thumbnails-only-toggle" className="flex items-center gap-2 cursor-pointer hover:text-white transition-colors">
                     <input
                         id="thumbnails-only-toggle"

@@ -1,6 +1,8 @@
 import type { FsFileEntry, FileMetadata } from '../types';
-import { renameFile } from '@tauri-apps/api/fs';
-import { basename, join, dirname } from '@tauri-apps/api/path';
+import { renameFile, readDir as readDirFs, removeDir, removeFile } from '@tauri-apps/api/fs';
+import { basename, join, dirname, desktopDir, documentDir, pictureDir } from '@tauri-apps/api/path';
+import { convertFileSrc as tauriConvertFileSrc, invoke } from '@tauri-apps/api/tauri';
+import { open as dialogOpen } from '@tauri-apps/api/dialog';
 
 
 /**
@@ -9,9 +11,7 @@ import { basename, join, dirname } from '@tauri-apps/api/path';
  */
 export const openFolderDialog = async (): Promise<string | null> => {
   try {
-    // FIX: Import 'dialog' module from its specific sub-package.
-    const dialog = await import('@tauri-apps/api/dialog');
-    const selected = await dialog.open({
+    const selected = await dialogOpen({
       directory: true,
       multiple: false,
       title: 'Select a Folder',
@@ -34,10 +34,7 @@ export const openFolderDialog = async (): Promise<string | null> => {
  */
 export const readDirectory = async (dirPath: string): Promise<FsFileEntry[]> => {
   try {
-    // FIX: Import 'fs' module from its specific sub-package.
-    const fs = await import('@tauri-apps/api/fs');
-    // readDir in Tauri returns an array of entries with a `children` property for directories.
-    const entries = await fs.readDir(dirPath, { recursive: false });
+    const entries = await readDirFs(dirPath, { recursive: false });
     return entries;
   } catch (error) {
     console.error(`Failed to read directory: ${dirPath}`, error);
@@ -51,7 +48,6 @@ export const readDirectory = async (dirPath: string): Promise<FsFileEntry[]> => 
  * @returns A promise resolving to a URL string (e.g., 'tauri://localhost/path/to/file').
  */
 export const convertFileSrc = async (filePath: string): Promise<string> => {
-    const { convertFileSrc: tauriConvertFileSrc } = await import('@tauri-apps/api/tauri');
     return tauriConvertFileSrc(filePath);
 };
 
@@ -62,9 +58,7 @@ export const convertFileSrc = async (filePath: string): Promise<string> => {
  */
 export const getBasename = async (filePath: string): Promise<string> => {
   try {
-    // FIX: Import 'path' module from its specific sub-package.
-    const path = await import('@tauri-apps/api/path');
-    return await path.basename(filePath);
+    return await basename(filePath);
   } catch (error) {
     console.error(`Failed to get basename for path: ${filePath}`, error);
     // Fallback for safety, though path.basename should be reliable.
@@ -76,27 +70,21 @@ export const getBasename = async (filePath: string): Promise<string> => {
  * Gets the path to the user's desktop directory.
  */
 export const getDesktopDir = async (): Promise<string> => {
-  // FIX: Import 'path' module from its specific sub-package.
-  const path = await import('@tauri-apps/api/path');
-  return path.desktopDir();
+  return desktopDir();
 };
 
 /**
  * Gets the path to the user's documents directory.
  */
 export const getDocumentsDir = async (): Promise<string> => {
-  // FIX: Import 'path' module from its specific sub-package.
-  const path = await import('@tauri-apps/api/path');
-  return path.documentDir();
+  return documentDir();
 };
 
 /**
  * Gets the path to the user's pictures directory.
  */
 export const getPicturesDir = async (): Promise<string> => {
-  // FIX: Import 'path' module from its specific sub-package.
-  const path = await import('@tauri-apps/api/path');
-  return path.pictureDir();
+  return pictureDir();
 };
 
 /**
@@ -150,11 +138,10 @@ export const renameEntry = async (sourcePath: string, newName: string): Promise<
  */
 export const deleteEntry = async (targetPath: string, isDirectory: boolean): Promise<void> => {
   try {
-    const fs = await import('@tauri-apps/api/fs');
     if (isDirectory) {
-      await fs.removeDir(targetPath, { recursive: true });
+      await removeDir(targetPath, { recursive: true });
     } else {
-      await fs.removeFile(targetPath);
+      await removeFile(targetPath);
     }
   } catch (error) {
     console.error(`Failed to delete ${targetPath}`, error);
@@ -168,7 +155,6 @@ export const deleteEntry = async (targetPath: string, isDirectory: boolean): Pro
 export const moveEntryToTrash = async (targetPath: string): Promise<void> => {
   if (!targetPath) return;
   try {
-    const { invoke } = await import('@tauri-apps/api/tauri');
     await invoke('move_to_trash', { targetPath });
   } catch (error) {
     console.error(`Failed to move ${targetPath} to trash`, error);
@@ -186,7 +172,6 @@ export const revealInFileManager = async (targetPath: string): Promise<boolean> 
   }
 
   try {
-    const { invoke } = await import('@tauri-apps/api/tauri');
     await invoke('reveal_in_file_manager', { targetPath });
     return true;
   } catch (error) {
@@ -204,7 +189,6 @@ export const getFileMetadata = async (targetPath: string): Promise<FileMetadata 
   }
 
   try {
-    const { invoke } = await import('@tauri-apps/api/tauri');
     const metadata = await invoke<FileMetadata>('get_file_metadata', { targetPath });
     return metadata;
   } catch (error) {

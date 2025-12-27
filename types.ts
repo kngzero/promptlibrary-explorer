@@ -29,12 +29,14 @@ export interface FileMetadata {
 export interface PromptEntry {
   prompt: string;
   blindPrompt?: string;
+  hint?: string;
   generationInfo: GenerationInfo;
   images: string[]; // base64 encoded strings or Tauri file URLs for display
   referenceImages?: string[]; // base64 encoded strings or Tauri file URLs for display
   sourcePath?: string; // original filesystem path for the .plib or image file
   rawImages?: string[]; // unmodified data as read from the source .plib or file path
   rawReferenceImages?: string[]; // unmodified data for reference images
+  analysis?: PromptAnalysis;
   fileMetadata?: FileMetadata | null;
 }
 
@@ -62,4 +64,18 @@ export interface FilterConfig {
 export interface Breadcrumb {
   name: string;
   path: string;
+}
+
+export interface PromptAnalysis {
+  full_prompt?: string;
+  short_description?: string;
+  subject?: string;
+  subject_pose?: string;
+  composition?: string;
+  art_style?: string;
+  camera_settings?: string;
+  lighting?: string;
+  color_palette?: string;
+  mood?: string;
+  [key: string]: unknown;
 }
