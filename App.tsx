@@ -3,9 +3,11 @@ import Header from './components/Header';
 import Lightbox from './components/Lightbox';
 import Toast from './components/Toast';
 import Explorer from './components/Explorer';
+import AoeComparisonModal from './components/AoeComparisonModal';
 import { openFolderDialog, readDirectory, convertFileSrc, getDesktopDir, getDocumentsDir, getPicturesDir, moveFile, renameEntry, revealInFileManager, deleteEntry, moveEntryToTrash, getFileMetadata } from './services/tauriService';
 import { getPlibData, clearPlibCache } from './services/plibService';
 import { getAoeData, clearAoeCache } from './services/aoeService';
+import { CompareIcon } from './components/icons';
 import type { PromptEntry, FsFileEntry, SortConfig, FilterConfig, Breadcrumb, FileMetadata } from './types';
 
 const isImageFile = (name: string) => /\.(png|jpe?g|webp|gif)$/i.test(name);
@@ -80,6 +82,9 @@ const App: React.FC = () => {
   const [renameState, setRenameState] = useState<{ item: FsFileEntry; value: string; originalName: string } | null>(null);
   const [deleteState, setDeleteState] = useState<{ item: FsFileEntry; mode: 'trash' | 'permanent' } | null>(null);
   const [dragSourcePath, setDragSourcePath] = useState<string | null>(null);
+  const [comparisonSources, setComparisonSources] = useState<{ a: PromptEntry; b: PromptEntry } | null>(null);
+  const [isComparisonOpen, setIsComparisonOpen] = useState(false);
+  const [isComparisonLoading, setIsComparisonLoading] = useState(false);
 
   useEffect(() => {
     const handleDragStart = (event: DragEvent) => {
@@ -496,6 +501,17 @@ const App: React.FC = () => {
 
   const hiddenItemCount = useMemo(() => folderContents.length - processedFolderContents.length, [folderContents, processedFolderContents]);
 
+  const selectedAoeItems = useMemo(
+    () =>
+      selectedIndices
+        .map((idx) => processedFolderContents[idx])
+        .filter(
+          (item): item is FsFileEntry =>
+            !!item && !item.children && isAoeFile((item.name || item.path).toLowerCase())
+        ),
+    [processedFolderContents, selectedIndices]
+  );
+
   const previewableItems = useMemo(
     () => processedFolderContents
       .map((item, index) => ({ item, index }))
@@ -591,6 +607,35 @@ const App: React.FC = () => {
     const entry = await loadPromptEntryForItem(item);
     setSelectedExplorerItem(entry);
   }, [loadPromptEntryForItem]);
+
+  const handleOpenComparison = useCallback(async () => {
+    if (selectedAoeItems.length < 2) {
+      setToast({ message: 'Select two .aoe files to compare.', type: 'info' });
+      return;
+    }
+
+    setIsComparisonLoading(true);
+    try {
+      const [first, second] = selectedAoeItems.slice(0, 2);
+      const [entryA, entryB] = await Promise.all([loadPromptEntryForItem(first), loadPromptEntryForItem(second)]);
+      if (!entryA || !entryB) {
+        setToast({ message: 'Unable to load both .aoe files.', type: 'error' });
+        return;
+      }
+      setComparisonSources({ a: entryA, b: entryB });
+      setIsComparisonOpen(true);
+    } catch (error) {
+      console.error('Failed to open comparison', error);
+      setToast({ message: 'Failed to open comparison.', type: 'error' });
+    } finally {
+      setIsComparisonLoading(false);
+    }
+  }, [selectedAoeItems, loadPromptEntryForItem]);
+
+  const handleCloseComparison = useCallback(() => {
+    setIsComparisonOpen(false);
+    setComparisonSources(null);
+  }, []);
 
   const selectionQueueRef = React.useRef<number | null>(null);
   const selectionTimeoutRef = React.useRef<number | undefined>(undefined);
@@ -843,6 +888,35 @@ const App: React.FC = () => {
             onDragEndItem={handleDragEndItem}
         />
       </main>
+
+      {selectedAoeItems.length >= 2 && (
+        <div className="fixed bottom-6 right-6 z-30">
+          <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-fuchsia-500/40 bg-zinc-900/90 shadow-xl shadow-fuchsia-500/20 backdrop-blur">
+            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-fuchsia-500/15 border border-fuchsia-500/30">
+              <CompareIcon className="w-5 h-5 text-fuchsia-300" />
+            </div>
+            <div className="text-sm">
+              <div className="font-semibold text-white">Compare .aoe snapshots</div>
+              <div className="text-zinc-400 text-xs">Uses the first two selected files.</div>
+            </div>
+            <button
+              onClick={handleOpenComparison}
+              disabled={isComparisonLoading}
+              className="px-3 py-2 rounded-md bg-fuchsia-600 hover:bg-fuchsia-500 disabled:opacity-60 disabled:cursor-not-allowed text-sm font-semibold text-white transition-colors"
+            >
+              {isComparisonLoading ? 'Loading…' : 'Open'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {comparisonSources && isComparisonOpen && (
+        <AoeComparisonModal
+          sourceA={comparisonSources.a}
+          sourceB={comparisonSources.b}
+          onClose={handleCloseComparison}
+        />
+      )}
 
       {lightboxEntry && (
         <Lightbox

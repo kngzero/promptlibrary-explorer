@@ -109,7 +109,7 @@ const MetadataPanel: React.FC<MetadataPanelProps> = ({ item }) => {
                 </div>
 
                 {/* Prompt Section */}
-                {isPromptEntry && (
+                {isPromptEntry && !isAoeEntry && (
                     <div>
                         <h4 className="text-sm font-semibold text-zinc-400 mb-2 flex items-center gap-2">
                             <TerminalIcon className="w-4 h-4" />

@@ -210,3 +210,32 @@ export const FaceSmileIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) =>
     <path strokeLinecap="round" strokeLinejoin="round" d="M9 9.75h.008v.008H9V9.75zm6 0h.008v.008H15V9.75z" />
   </svg>
 );
+
+export const PencilIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" {...props}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.651 1.651m-2.651-.651L7.5 13.5m4.5 4.5H6.75a.75.75 0 01-.75-.75V13.5l8.862-8.862a2.121 2.121 0 013 3L13.5 12" />
+  </svg>
+);
+
+export const SparklesIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" {...props}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904a4.5 4.5 0 103.591-3.591m-3.591 3.591L5.196 19.5 6 15m3.813.904L15 6l-3.596 3.596M9 12l-1.5-6-1.854 4.646M15 12l6-1.5-4.646-1.854" />
+  </svg>
+);
+
+export const BracesIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" {...props}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 3H5.25A2.25 2.25 0 003 5.25v3A2.25 2.25 0 005.25 10.5 2.25 2.25 0 003 12.75v3A2.25 2.25 0 005.25 18H7.5m9-15h2.25A2.25 2.25 0 0121 5.25v3a2.25 2.25 0 01-2.25 2.25 2.25 2.25 0 012.25 2.25v3A2.25 2.25 0 0118.75 18H16.5" />
+  </svg>
+);
+
+export const CompareIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 15 15" fill="none" {...props}>
+    <path
+      d="M1.5 11V6.5C1.5 5.39543 2.39543 4.5 3.5 4.5C4.60457 4.5 5.5 5.39543 5.5 6.5V11M1.5 8.5H5.5M12 7.5H9.5M12 7.5C12.8284 7.5 13.5 6.82843 13.5 6C13.5 5.17157 12.8284 4.5 12 4.5H9.5V7.5M12 7.5C12.8284 7.5 13.5 8.17157 13.5 9C13.5 9.82843 12.8284 10.5 12 10.5H9.5V7.5M7.5 1V14"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);

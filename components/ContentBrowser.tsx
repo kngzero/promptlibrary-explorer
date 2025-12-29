@@ -109,13 +109,18 @@ const ContentBrowser: React.FC<ContentBrowserProps> = ({
                 shouldPreventDefault = false;
                 break;
         }
-    
+
         if (shouldPreventDefault) {
             e.preventDefault();
         }
-    
+
         if (newIndex !== selectedItemIndex) {
-            onSelectItemByIndex(newIndex);
+            if (e.shiftKey) {
+                const syntheticEvent = { shiftKey: true, metaKey: e.metaKey, ctrlKey: e.ctrlKey } as unknown as React.MouseEvent;
+                onSelectItem(items[newIndex], newIndex, syntheticEvent);
+            } else {
+                onSelectItemByIndex(newIndex);
+            }
         }
     };
 
