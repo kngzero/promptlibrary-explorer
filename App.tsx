@@ -4,163 +4,74 @@ import Lightbox from './components/Lightbox';
 import Toast from './components/Toast';
 import Explorer from './components/Explorer';
 import AoeComparisonModal from './components/AoeComparisonModal';
-import { openFolderDialog, readDirectory, convertFileSrc, getDesktopDir, getDocumentsDir, getPicturesDir, moveFile, renameEntry, revealInFileManager, deleteEntry, moveEntryToTrash, getFileMetadata } from './services/tauriService';
-import { getPlibData, clearPlibCache } from './services/plibService';
-import { getAoeData, clearAoeCache } from './services/aoeService';
+import { renameEntry, deleteEntry, moveEntryToTrash, revealInFileManager } from './services/tauriService';
+import { FsFileEntry, Breadcrumb } from './types';
+import { useExplorer } from './hooks/useExplorer';
+import { useSortFilter } from './hooks/useSortFilter';
+import { useSelection } from './hooks/useSelection';
+import { usePromptLoader } from './hooks/usePromptLoader';
+import { isAoeFile, isPreviewableItem } from './utils/fileHelpers';
 import { CompareIcon } from './components/icons';
-import type { PromptEntry, FsFileEntry, SortConfig, FilterConfig, Breadcrumb, FileMetadata } from './types';
-
-const isImageFile = (name: string) => /\.(png|jpe?g|webp|gif)$/i.test(name);
-const isPlibFile = (name: string) => /\.plib$/i.test(name);
-const isAoeFile = (name: string) => /\.aoe$/i.test(name);
-const isPromptSnapshotFile = (name: string) => isPlibFile(name) || isAoeFile(name);
-const isPreviewableItem = (item: FsFileEntry) => {
-  if (item.children) return false;
-  const name = item.name?.toLowerCase() || '';
-  return isPromptSnapshotFile(name) || isImageFile(name);
-};
-const isDroppableFile = (path: string) => /\.(plib|aoe|png|jpe?g)$/i.test(path.toLowerCase());
-
-const buildFallbackMetadata = (path: string): FileMetadata => {
-  const fileName = path.split(/[\\/]/).pop() || 'File';
-  const ext = fileName.includes('.') ? fileName.split('.').pop() || '' : '';
-  const lowerExt = ext.toLowerCase();
-  let fileType = 'File';
-
-  if (lowerExt === 'plib') {
-    fileType = 'Prompt Library File';
-  } else if (lowerExt === 'aoe') {
-    fileType = 'Art Official Elements File';
-  } else if (lowerExt) {
-    fileType = `${lowerExt.toUpperCase()} File`;
-  }
-
-  return {
-    fileName,
-    fileType,
-    width: null,
-    height: null,
-    modifiedMs: null,
-  };
-};
-
-const fileUrlCache = new Map<string, string>();
 
 const App: React.FC = () => {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
-  // Explorer State
-  const [explorerRootPath, setExplorerRootPath] = useState<string | null>(null);
-  const [folderTree, setFolderTree] = useState<FsFileEntry[]>([]);
-  const [selectedFolderPath, setSelectedFolderPath] = useState<string | null>(null);
-  const [folderContents, setFolderContents] = useState<FsFileEntry[]>([]);
-  const [selectedExplorerItem, setSelectedExplorerItem] = useState<PromptEntry | null>(null);
-  const [selectedItemIndex, setSelectedItemIndex] = useState<number>(-1);
-  const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
-  const [selectionAnchorIndex, setSelectionAnchorIndex] = useState<number | null>(null);
-  const [isLoadingFolder, setIsLoadingFolder] = useState(false);
+  // Custom Hooks
+  const {
+    explorerRootPath,
+    folderTree,
+    selectedFolderPath,
+    folderContents,
+    isLoadingFolder,
+    handleOpenFolder,
+    handleSelectFolder,
+    handleSelectFavorite,
+    handleRefreshFolder,
+    handleMoveItem,
+    handleImportExternalFiles
+  } = useExplorer();
 
-  // Sort & Filter State
-  const [sortConfig, setSortConfig] = useState<SortConfig>({ field: 'type', direction: 'asc' });
-  const [filterConfig, setFilterConfig] = useState<FilterConfig>({
-    hideOther: true,
-    hideJpg: false,
-    hidePng: false,
-  });
+  const {
+    sortConfig,
+    setSortConfig,
+    filterConfig,
+    setFilterConfig,
+    searchQuery,
+    setSearchQuery,
+    processedFolderContents
+  } = useSortFilter(folderContents);
 
-  // Display State
-  const [thumbnailSize, setThumbnailSize] = useState(5); // Range 1-10
+  const {
+    selectedExplorerItem,
+    setSelectedExplorerItem,
+    selectedItemIndex,
+    setSelectedItemIndex,
+    selectedIndices,
+    setSelectedIndices,
+    setSelectionAnchorIndex,
+    handleItemClick,
+    handleSelectItemByIndex
+  } = useSelection(processedFolderContents);
+
+  const { loadPromptEntryForItem } = usePromptLoader();
+
+  // Local UI State
+  const [thumbnailSize, setThumbnailSize] = useState(5);
   const [thumbnailsOnly, setThumbnailsOnly] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-
-  // Lightbox state
   const [lightboxOpen, setLightboxOpen] = useState(false);
-  const [lightboxEntry, setLightboxEntry] = useState<PromptEntry | null>(null);
+  const [lightboxEntry, setLightboxEntry] = useState<any | null>(null);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxPreviewIndex, setLightboxPreviewIndex] = useState<number>(-1);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: FsFileEntry } | null>(null);
   const [renameState, setRenameState] = useState<{ item: FsFileEntry; value: string; originalName: string } | null>(null);
   const [deleteState, setDeleteState] = useState<{ item: FsFileEntry; mode: 'trash' | 'permanent' } | null>(null);
   const [dragSourcePath, setDragSourcePath] = useState<string | null>(null);
-  const [comparisonSources, setComparisonSources] = useState<{ a: PromptEntry; b: PromptEntry } | null>(null);
+  const [comparisonSources, setComparisonSources] = useState<{ a: any; b: any } | null>(null);
   const [isComparisonOpen, setIsComparisonOpen] = useState(false);
   const [isComparisonLoading, setIsComparisonLoading] = useState(false);
 
-  useEffect(() => {
-    const handleDragStart = (event: DragEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (!target) return;
-      const isTextInput = target.closest('input, textarea, [contenteditable="true"], [role="textbox"]');
-      const isCustomDraggable = target.closest('[data-draggable-item="true"]');
-      if (!isCustomDraggable && !isTextInput) {
-        event.preventDefault();
-      }
-    };
 
-    window.addEventListener('dragstart', handleDragStart, true);
-    return () => window.removeEventListener('dragstart', handleDragStart, true);
-  }, []);
-
-  const handleOpenFolder = useCallback(async () => {
-    const folderPath = await openFolderDialog();
-    if (folderPath) {
-      clearPlibCache();
-      clearAoeCache();
-      setExplorerRootPath(folderPath);
-      setSelectedFolderPath(folderPath);
-      setSelectedExplorerItem(null);
-      setSelectedIndices([]);
-      setSelectionAnchorIndex(null);
-      setSelectedItemIndex(-1);
-    }
-  }, []);
-
-  const handleDragStartItem = useCallback((path: string) => {
-    setDragSourcePath(path);
-  }, []);
-
-  const handleDragEndItem = useCallback(() => {
-    setDragSourcePath(null);
-  }, []);
-
-  const handleSelectFolder = useCallback(async (path: string) => {
-      setSelectedFolderPath(path);
-      setSelectedExplorerItem(null);
-      setSelectedItemIndex(-1);
-      setSelectedIndices([]);
-      setSelectionAnchorIndex(null);
-  }, []);
-
-  const handleSelectFavorite = useCallback(async (favorite: 'desktop' | 'documents' | 'pictures') => {
-    try {
-        let path: string | null = null;
-        switch (favorite) {
-            case 'desktop':
-                path = await getDesktopDir();
-                break;
-            case 'documents':
-                path = await getDocumentsDir();
-                break;
-            case 'pictures':
-                path = await getPicturesDir();
-                break;
-        }
-        if (path) {
-            clearPlibCache();
-            clearAoeCache();
-            setExplorerRootPath(path);
-            setSelectedFolderPath(path);
-            setSelectedExplorerItem(null);
-            setSelectedIndices([]);
-            setSelectionAnchorIndex(null);
-            setSelectedItemIndex(-1);
-        }
-    } catch (e) {
-        console.error("Could not access favorite directory", e);
-        setToast({ message: "Could not access that directory.", type: 'error' });
-    }
-  }, []);
-
+  // --- Derived State ---
   const breadcrumbs = useMemo<Breadcrumb[]>(() => {
     if (!selectedFolderPath || !explorerRootPath) return [];
 
@@ -173,9 +84,9 @@ const App: React.FC = () => {
     const parts = relativePath.split(/[\\/]/);
     let currentCrumbPath = explorerRootPath;
     for (const part of parts) {
-        if (!part) continue;
-        currentCrumbPath = `${currentCrumbPath}/${part}`;
-        crumbs.push({ name: part, path: currentCrumbPath });
+      if (!part) continue;
+      currentCrumbPath = `${currentCrumbPath}/${part}`;
+      crumbs.push({ name: part, path: currentCrumbPath });
     }
     return crumbs;
   }, [selectedFolderPath, explorerRootPath]);
@@ -184,322 +95,6 @@ const App: React.FC = () => {
     () => (breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null),
     [breadcrumbs]
   );
-
-  // Global Keyboard Shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't interfere with text inputs or open modals
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || lightboxOpen) {
-          return;
-      }
-
-      // Ctrl/Cmd + O to Open Folder
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') {
-          e.preventDefault();
-          handleOpenFolder();
-      }
-
-      // Backspace to go up one directory level
-      const parentCrumb = parentBreadcrumb;
-      if (e.key === 'Backspace' && parentCrumb) {
-          e.preventDefault();
-          handleSelectFolder(parentCrumb.path);
-      }
-
-      if ((e.altKey && e.key === 'ArrowUp') && parentCrumb) {
-          e.preventDefault();
-          handleSelectFolder(parentCrumb.path);
-      }
-
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
-          e.preventDefault();
-          setSearchQuery('');
-          setFilterConfig({ hideJpg: false, hidePng: false, hideOther: true });
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-        window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [handleOpenFolder, handleSelectFolder, parentBreadcrumb, lightboxOpen]);
-
-  const refreshFolderTree = useCallback(async () => {
-      if (explorerRootPath) {
-          const contents = await readDirectory(explorerRootPath);
-          const dirs = contents.filter(item => item.children);
-          dirs.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-          setFolderTree(dirs);
-      }
-  }, [explorerRootPath]);
-
-  useEffect(() => {
-      refreshFolderTree();
-  }, [refreshFolderTree]);
-  
-  const fetchFolderContents = useCallback(async (path: string | null) => {
-    if (path) {
-      setIsLoadingFolder(true);
-      try {
-        const contents = await readDirectory(path);
-        setFolderContents(contents);
-      } catch (e) {
-        console.error("Failed to read directory", e);
-        setToast({ message: 'Could not read folder contents.', type: 'error' });
-        setFolderContents([]);
-      } finally {
-        setIsLoadingFolder(false);
-      }
-    } else {
-      setFolderContents([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchFolderContents(selectedFolderPath);
-  }, [selectedFolderPath, fetchFolderContents]);
-
-  const handleRefreshFolder = useCallback(async () => {
-    if (!selectedFolderPath) {
-        return;
-    }
-    await fetchFolderContents(selectedFolderPath);
-    await refreshFolderTree();
-  }, [selectedFolderPath, fetchFolderContents, refreshFolderTree]);
-
-  const handleMoveItem = useCallback(async (sourcePath: string, destinationDir: string) => {
-    try {
-        await moveFile(sourcePath, destinationDir);
-        // Deselect item to avoid confusion after move
-        setSelectedExplorerItem(null);
-        setSelectedItemIndex(-1);
-        setSelectedIndices([]);
-        setSelectionAnchorIndex(null);
-        // Refresh the current folder view
-        await fetchFolderContents(selectedFolderPath);
-        await refreshFolderTree();
-        setToast({ message: 'Item moved successfully.', type: 'success' });
-    } catch (e) {
-        console.error("Failed to move item:", e);
-        setToast({ message: "Failed to move item.", type: 'error' });
-    }
-  }, [selectedFolderPath, fetchFolderContents, refreshFolderTree]);
-
-  const handleImportExternalFiles = useCallback(async (paths: string[]) => {
-    if (!selectedFolderPath) {
-        return;
-    }
-
-    const allowedFiles = paths.filter(isDroppableFile);
-    if (allowedFiles.length === 0) {
-        setToast({ message: 'Only .plib, .aoe, .png, or .jpg files can be dropped here.', type: 'info' });
-        return;
-    }
-
-    try {
-        for (const filePath of allowedFiles) {
-            await moveFile(filePath, selectedFolderPath);
-        }
-
-        await fetchFolderContents(selectedFolderPath);
-        await refreshFolderTree();
-        setToast({
-            message: `Moved ${allowedFiles.length} file${allowedFiles.length === 1 ? '' : 's'} into the current folder.`,
-            type: 'success',
-        });
-    } catch (error) {
-        console.error('Failed to import dropped files', error);
-        setToast({ message: 'Failed to import dropped files.', type: 'error' });
-    }
-  }, [selectedFolderPath, fetchFolderContents, refreshFolderTree]);
-
-  useEffect(() => {
-      let unlisten: (() => void) | null = null;
-      let disposed = false;
-
-      const setupListener = async () => {
-          if (typeof window === 'undefined' || !(window as unknown as { __TAURI_IPC__?: unknown }).__TAURI_IPC__) {
-              return;
-          }
-
-          try {
-              const { appWindow } = await import('@tauri-apps/api/window');
-              const listener = await appWindow.onFileDropEvent((event) => {
-                  if (event.payload?.type === 'drop' && Array.isArray(event.payload.paths) && event.payload.paths.length > 0) {
-                      handleImportExternalFiles(event.payload.paths);
-                  }
-              });
-
-              if (disposed) {
-                  listener();
-              } else {
-                  unlisten = listener;
-              }
-          } catch (error) {
-              console.error('Failed to register file drop listener', error);
-          }
-      };
-
-      setupListener();
-
-      return () => {
-          disposed = true;
-          if (unlisten) {
-              unlisten();
-          }
-      };
-  }, [handleImportExternalFiles]);
-
-  const handleItemContextMenu = useCallback((event: React.MouseEvent, item: FsFileEntry, _index?: number) => {
-    event.preventDefault();
-    setContextMenu({ x: event.clientX, y: event.clientY, item });
-  }, []);
-
-  const handleRenameChange = useCallback((value: string) => {
-    setRenameState(prev => (prev ? { ...prev, value } : prev));
-  }, []);
-
-  const handleRenameCancel = useCallback(() => {
-    setRenameState(null);
-  }, []);
-
-  const handleRenameConfirm = useCallback(async () => {
-    if (!renameState) return;
-
-    const newName = renameState.value.trim();
-    if (!newName) {
-        setToast({ message: 'Name cannot be empty.', type: 'error' });
-        return;
-    }
-
-    if (/[\\/]/.test(newName)) {
-        setToast({ message: 'Name cannot contain path separators.', type: 'error' });
-        return;
-    }
-
-    if (newName === renameState.originalName) {
-        setRenameState(null);
-        return;
-    }
-
-    try {
-        await renameEntry(renameState.item.path, newName);
-        setToast({ message: 'Item renamed successfully.', type: 'success' });
-        setRenameState(null);
-        setSelectedExplorerItem(null);
-        setSelectedItemIndex(-1);
-        setSelectedIndices([]);
-        setSelectionAnchorIndex(null);
-        setLightboxOpen(false);
-        setLightboxEntry(null);
-        setLightboxPreviewIndex(-1);
-        setLightboxIndex(0);
-        await fetchFolderContents(selectedFolderPath);
-        await refreshFolderTree();
-    } catch (error) {
-        console.error('Failed to rename item', error);
-        setToast({ message: 'Failed to rename item.', type: 'error' });
-    }
-  }, [renameState, fetchFolderContents, selectedFolderPath, refreshFolderTree]);
-
-  const handleDeleteCancel = useCallback(() => {
-    setDeleteState(null);
-  }, []);
-
-  const handleDeleteConfirm = useCallback(async () => {
-    if (!deleteState) return;
-
-    try {
-      if (deleteState.mode === 'trash') {
-        await moveEntryToTrash(deleteState.item.path);
-        setToast({ message: 'Item moved to trash.', type: 'success' });
-      } else {
-        await deleteEntry(deleteState.item.path, !!deleteState.item.children);
-        setToast({ message: 'Item deleted permanently.', type: 'success' });
-      }
-      setSelectedExplorerItem(null);
-      setSelectedItemIndex(-1);
-      setSelectedIndices([]);
-      setSelectionAnchorIndex(null);
-      setLightboxOpen(false);
-      setLightboxEntry(null);
-      setLightboxPreviewIndex(-1);
-      setLightboxIndex(0);
-      await fetchFolderContents(selectedFolderPath);
-      await refreshFolderTree();
-    } catch (error) {
-      console.error('Failed to delete item', error);
-      setToast({ message: 'Failed to delete item.', type: 'error' });
-    } finally {
-      setDeleteState(null);
-    }
-  }, [
-    deleteState,
-    fetchFolderContents,
-    selectedFolderPath,
-    refreshFolderTree,
-    moveEntryToTrash,
-    deleteEntry,
-  ]);
-
-  useEffect(() => {
-    setContextMenu(null);
-    setRenameState(null);
-    setDeleteState(null);
-  }, [selectedFolderPath]);
-
-
-  // FIX: Moved getItemTypeRank and processedFolderContents before their usage in other hooks to prevent "used before declaration" errors.
-  const getItemTypeRank = useCallback((item: FsFileEntry): number => {
-    if (item.children) return 0; // Directory
-    const name = item.name?.toLowerCase() || '';
-    if (name.endsWith('.plib') || name.endsWith('.aoe')) return 1;
-    if (/\.(png|jpe?g|webp|gif)$/i.test(name)) return 2; // Image
-    return 3; // Other
-  }, []);
-
-  const processedFolderContents = useMemo(() => {
-      let items = [...folderContents];
-
-      items = items.filter(item => {
-        const name = item.name?.toLowerCase() || '';
-        if (searchQuery.trim()) {
-            const query = searchQuery.toLowerCase();
-            if (!name.includes(query)) return false;
-        }
-        if (filterConfig.hideJpg && (name.endsWith('.jpg') || name.endsWith('.jpeg'))) return false;
-        if (filterConfig.hidePng && name.endsWith('.png')) return false;
-
-        if (filterConfig.hideOther) {
-            const isDir = !!item.children;
-            const isAllowedType = isDir || /\.(plib|aoe|png|jpe?g|webp|gif)$/i.test(name);
-            if (!isAllowedType) return false;
-        }
-        return true;
-      });
-
-      items.sort((a, b) => {
-        const nameA = a.name?.toLowerCase() || '';
-        const nameB = b.name?.toLowerCase() || '';
-        let comparison = 0;
-
-        if (sortConfig.field === 'type') {
-            const typeA = getItemTypeRank(a);
-            const typeB = getItemTypeRank(b);
-            comparison = typeA - typeB;
-            if (comparison === 0) {
-                comparison = nameA.localeCompare(nameB);
-            }
-        } else { // sort by name
-            comparison = nameA.localeCompare(nameB);
-        }
-        return sortConfig.direction === 'asc' ? comparison : -comparison;
-      });
-      
-      return items;
-  }, [folderContents, sortConfig, filterConfig, getItemTypeRank, searchQuery]);
-
-  const hiddenItemCount = useMemo(() => folderContents.length - processedFolderContents.length, [folderContents, processedFolderContents]);
 
   const selectedAoeItems = useMemo(
     () =>
@@ -526,94 +121,168 @@ const App: React.FC = () => {
     });
     return map;
   }, [previewableItems]);
-  
-  const loadPromptEntryForItem = useCallback(async (item: FsFileEntry): Promise<PromptEntry | null> => {
-    if (item.children) return null;
-    const name = (item.name || item.path).toLowerCase();
-    const fallbackMetadata = buildFallbackMetadata(item.path);
-    let entry: PromptEntry | null = null;
 
-    const convertIfNeeded = async (img: string) => {
-        if (!img) return img;
-        if (img.startsWith('data:') || /^https?:\/\//i.test(img)) return img;
-        if (/^[A-Za-z0-9+/=\s]+$/.test(img) && img.length > 100) {
-            return `data:image/png;base64,${img.replace(/\s+/g, '')}`;
-        }
-        if (fileUrlCache.has(img)) return fileUrlCache.get(img) as string;
-        const converted = await convertFileSrc(img);
-        fileUrlCache.set(img, converted);
-        return converted;
+  const hiddenItemCount = useMemo(() => folderContents.length - processedFolderContents.length, [folderContents, processedFolderContents]);
+
+  // --- Global Event Listeners ---
+  useEffect(() => {
+    const handleDragStart = (event: DragEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      const isTextInput = target.closest('input, textarea, [contenteditable="true"], [role="textbox"]');
+      const isCustomDraggable = target.closest('[data-draggable-item="true"]');
+      if (!isCustomDraggable && !isTextInput) {
+        event.preventDefault();
+      }
     };
-
-    if (isPromptSnapshotFile(name)) {
-        const data = isPlibFile(name) ? await getPlibData(item.path) : await getAoeData(item.path);
-        if (!data) return null;
-
-        const rawImages = data.rawImages ? [...data.rawImages] : data.images ? [...data.images] : undefined;
-        const baseImages = data.images ? [...data.images] : undefined;
-        const rawReferenceImages = data.rawReferenceImages ? [...data.rawReferenceImages] : data.referenceImages ? [...data.referenceImages] : undefined;
-        const baseReferenceImages = data.referenceImages ? [...data.referenceImages] : undefined;
-
-        const images = await Promise.all((baseImages ?? rawImages ?? []).map(convertIfNeeded));
-        const referenceImages = await Promise.all((baseReferenceImages ?? rawReferenceImages ?? []).map(convertIfNeeded));
-        entry = {
-            ...data,
-            images,
-            referenceImages,
-            rawImages: rawImages ?? baseImages,
-            rawReferenceImages: rawReferenceImages ?? baseReferenceImages,
-            sourcePath: item.path,
-        };
-    } else if (isImageFile(name)) {
-        const imageUrl = await convertFileSrc(item.path);
-        entry = {
-            prompt: item.name || item.path.split(/[\\/]/).pop() || 'Image',
-            images: [imageUrl],
-            rawImages: [item.path],
-            generationInfo: {
-                model: 'Image File',
-                aspectRatio: 'N/A',
-                timestamp: 'N/A',
-                numberOfImages: 1,
-            },
-            sourcePath: item.path,
-        };
-    }
-
-    if (!entry) {
-        return null;
-    }
-
-    const metadata = (await getFileMetadata(item.path)) ?? fallbackMetadata;
-
-    return {
-        ...entry,
-        fileMetadata: metadata,
-    };
+    window.addEventListener('dragstart', handleDragStart, true);
+    return () => window.removeEventListener('dragstart', handleDragStart, true);
   }, []);
 
-  const handleSelectItem = useCallback(async (item: FsFileEntry | null) => {
-    if (!item) {
-      setSelectedExplorerItem(null);
-      return;
-    }
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || lightboxOpen) {
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        handleOpenFolder();
+      }
+      const parentCrumb = breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null;
+      if (e.key === 'Backspace' && parentCrumb) {
+        e.preventDefault();
+        handleSelectFolder(parentCrumb.path);
+      }
+      if ((e.altKey && e.key === 'ArrowUp') && parentBreadcrumb) {
+        e.preventDefault();
+        handleSelectFolder(parentBreadcrumb.path); // Fix: use parentBreadcrumb derived state correctly
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        setSearchQuery('');
+        setFilterConfig({ hideJpg: false, hidePng: false, hideOther: true });
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleOpenFolder, handleSelectFolder, breadcrumbs, parentBreadcrumb, lightboxOpen, setSearchQuery, setFilterConfig]);
 
-    if (item.children) {
-      // It's a directory, clear selection
-      setSelectedExplorerItem(null);
-      return;
-    }
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    const setupListener = async () => {
+      if (typeof window === 'undefined' || !(window as unknown as { __TAURI_IPC__?: unknown }).__TAURI_IPC__) return;
+      try {
+        const { appWindow } = await import('@tauri-apps/api/window');
+        unlisten = await appWindow.onFileDropEvent(async (event) => {
+          if (event.payload?.type === 'drop' && Array.isArray(event.payload.paths) && event.payload.paths.length > 0) {
+            try {
+              const result = await handleImportExternalFiles(event.payload.paths);
+              setToast({ message: `Imported ${result.count} files.`, type: 'success' });
+            } catch (e) {
+              setToast({ message: "Failed to import files.", type: 'error' });
+            }
+          }
+        });
+      } catch (error) {
+        console.error('Failed to register file drop listener', error);
+      }
+    };
+    setupListener();
+    return () => { if (unlisten) unlisten(); };
+  }, [handleImportExternalFiles]);
 
-    const entry = await loadPromptEntryForItem(item);
-    setSelectedExplorerItem(entry);
-  }, [loadPromptEntryForItem]);
+  const handleDragStartItem = useCallback((path: string) => setDragSourcePath(path), []);
+  const handleDragEndItem = useCallback(() => setDragSourcePath(null), []);
+
+  // Wrap handleMoveItem with toast feedback and selection clearing
+  const handleMoveItemWithFeedback = useCallback(async (sourcePath: string, destinationDir: string) => {
+    console.log('[App] handleMoveItemWithFeedback called:', { sourcePath, destinationDir });
+    try {
+      await handleMoveItem(sourcePath, destinationDir);
+      // Clear selection after successful move
+      setSelectedExplorerItem(null);
+      setSelectedItemIndex(-1);
+      setSelectedIndices([]);
+      setSelectionAnchorIndex(null);
+      setToast({ message: 'Item moved successfully.', type: 'success' });
+    } catch (error) {
+      console.error('[App] Move failed:', error);
+      setToast({ message: 'Failed to move item.', type: 'error' });
+    }
+  }, [handleMoveItem, setSelectedExplorerItem, setSelectedItemIndex, setSelectedIndices, setSelectionAnchorIndex]);
+
+  const handleItemContextMenu = useCallback((event: React.MouseEvent, item: FsFileEntry, _index?: number) => {
+    event.preventDefault();
+    setContextMenu({ x: event.clientX, y: event.clientY, item });
+  }, []);
+
+  useEffect(() => {
+    setContextMenu(null);
+    setRenameState(null);
+    setDeleteState(null);
+  }, [selectedFolderPath]);
+
+  const handleRenameCancel = useCallback(() => {
+    setRenameState(null);
+  }, []);
+
+  const handleRenameChange = useCallback((value: string) => {
+    setRenameState(prev => (prev ? { ...prev, value } : prev));
+  }, []);
+
+  const handleRenameConfirm = useCallback(async () => {
+    if (!renameState) return;
+    const newName = renameState.value.trim();
+    if (!newName) { setToast({ message: 'Name cannot be empty.', type: 'error' }); return; }
+    if (/[\\/]/.test(newName)) { setToast({ message: 'Name cannot contain path separators.', type: 'error' }); return; }
+    if (newName === renameState.originalName) { setRenameState(null); return; }
+
+    try {
+      await renameEntry(renameState.item.path, newName);
+      setToast({ message: 'Item renamed successfully.', type: 'success' });
+      setRenameState(null);
+      setSelectedExplorerItem(null);
+      setSelectedItemIndex(-1);
+      setSelectedIndices([]);
+      setSelectionAnchorIndex(null);
+      await handleRefreshFolder();
+    } catch (error) {
+      console.error('Failed to rename item', error);
+      setToast({ message: 'Failed to rename item.', type: 'error' });
+    }
+  }, [renameState, handleRefreshFolder, setSelectedExplorerItem, setSelectedItemIndex, setSelectedIndices, setSelectionAnchorIndex]);
+
+  const handleDeleteCancel = useCallback(() => {
+    setDeleteState(null);
+  }, []);
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteState) return;
+    try {
+      if (deleteState.mode === 'trash') {
+        await moveEntryToTrash(deleteState.item.path);
+        setToast({ message: 'Item moved to trash.', type: 'success' });
+      } else {
+        await deleteEntry(deleteState.item.path, !!deleteState.item.children);
+        setToast({ message: 'Item deleted permanently.', type: 'success' });
+      }
+      setSelectedExplorerItem(null);
+      setSelectedItemIndex(-1);
+      setSelectedIndices([]);
+      setSelectionAnchorIndex(null);
+      await handleRefreshFolder();
+    } catch (error) {
+      setToast({ message: 'Failed to delete item.', type: 'error' });
+    } finally {
+      setDeleteState(null);
+    }
+  }, [deleteState, handleRefreshFolder, setSelectedExplorerItem, setSelectedItemIndex, setSelectedIndices, setSelectionAnchorIndex]);
 
   const handleOpenComparison = useCallback(async () => {
     if (selectedAoeItems.length < 2) {
       setToast({ message: 'Select two .aoe files to compare.', type: 'info' });
       return;
     }
-
     setIsComparisonLoading(true);
     try {
       const [first, second] = selectedAoeItems.slice(0, 2);
@@ -625,7 +294,6 @@ const App: React.FC = () => {
       setComparisonSources({ a: entryA, b: entryB });
       setIsComparisonOpen(true);
     } catch (error) {
-      console.error('Failed to open comparison', error);
       setToast({ message: 'Failed to open comparison.', type: 'error' });
     } finally {
       setIsComparisonLoading(false);
@@ -637,170 +305,29 @@ const App: React.FC = () => {
     setComparisonSources(null);
   }, []);
 
-  const selectionQueueRef = React.useRef<number | null>(null);
-  const selectionTimeoutRef = React.useRef<number | undefined>(undefined);
-
-  const flushSelection = useCallback(
-    (indices: number[], primaryIndex?: number | null, anchorIndex?: number | null) => {
-      const normalized = Array.from(
-        new Set(indices.filter((idx) => idx >= 0 && idx < processedFolderContents.length))
-      ).sort((a, b) => a - b);
-
-      if (anchorIndex !== undefined) {
-        setSelectionAnchorIndex(anchorIndex);
-      }
-
-      const nextPrimary =
-        primaryIndex !== undefined && primaryIndex !== null
-          ? primaryIndex
-          : normalized.length
-          ? normalized[normalized.length - 1]
-          : -1;
-
-      setSelectedIndices(normalized);
-
-      if (nextPrimary >= 0 && nextPrimary < processedFolderContents.length) {
-        setSelectedItemIndex(nextPrimary);
-        const item = processedFolderContents[nextPrimary];
-        if (item) {
-          handleSelectItem(item);
-        }
-      } else {
-        setSelectedItemIndex(-1);
-        setSelectedExplorerItem(null);
-      }
-    },
-    [processedFolderContents, handleSelectItem]
-  );
-
-  const updateSelection = useCallback(
-    (indices: number[], primaryIndex?: number | null, anchorIndex?: number | null) => {
-      // throttle selection to avoid spamming preview loads while arrowing
-      window.clearTimeout(selectionTimeoutRef.current);
-      selectionTimeoutRef.current = window.setTimeout(() => {
-        flushSelection(indices, primaryIndex, anchorIndex);
-      }, 50);
-      selectionQueueRef.current = primaryIndex ?? null;
-    },
-    [flushSelection]
-  );
-
-  const handleSelectItemByIndex = useCallback(
-    (index: number) => {
-      if (index >= 0 && index < processedFolderContents.length) {
-        updateSelection([index], index, index);
-      }
-    },
-    [processedFolderContents, updateSelection]
-  );
-
-  const handleItemClick = useCallback(
-    (_item: FsFileEntry, index: number, event?: React.MouseEvent) => {
-      const isShift = !!event?.shiftKey;
-      const isMeta = !!event?.metaKey || !!event?.ctrlKey;
-
-      if (isShift && selectionAnchorIndex !== null) {
-        const start = selectionAnchorIndex;
-        const end = index;
-        const step = start <= end ? 1 : -1;
-        const range: number[] = [];
-        for (let i = start; step === 1 ? i <= end : i >= end; i += step) {
-          range.push(i);
-        }
-        const combined = isMeta ? Array.from(new Set([...selectedIndices, ...range])) : range;
-        updateSelection(combined, index, selectionAnchorIndex);
-        return;
-      }
-
-      if (isMeta) {
-        const alreadySelected = selectedIndices.includes(index);
-        const nextSelection = alreadySelected
-          ? selectedIndices.filter((idx) => idx !== index)
-          : [...selectedIndices, index];
-        const nextPrimary = alreadySelected
-          ? nextSelection[nextSelection.length - 1] ?? -1
-          : index;
-        const fallbackAnchor = selectionAnchorIndex ?? index;
-        const anchorInSelection = nextSelection.includes(fallbackAnchor);
-        const nextAnchor =
-          nextSelection.length === 0
-            ? null
-            : anchorInSelection
-            ? fallbackAnchor
-            : nextPrimary !== -1
-            ? nextPrimary
-            : nextSelection[0];
-        updateSelection(nextSelection, nextPrimary === -1 ? null : nextPrimary, nextAnchor);
-        if (nextSelection.length === 0) {
-          setSelectionAnchorIndex(null);
-        }
-        return;
-      }
-
-      updateSelection([index], index, index);
-    },
-    [selectionAnchorIndex, selectedIndices, updateSelection]
-  );
-
-  useEffect(() => {
-    setSelectedIndices((prev) =>
-      prev.filter((idx) => idx >= 0 && idx < processedFolderContents.length)
-    );
-
-    if (
-      selectionAnchorIndex !== null &&
-      (selectionAnchorIndex < 0 || selectionAnchorIndex >= processedFolderContents.length)
-    ) {
-      setSelectionAnchorIndex(null);
-    }
-  }, [processedFolderContents.length, selectionAnchorIndex]);
-
-  useEffect(() => {
-    if (selectedIndices.length === 0) {
-      if (selectedItemIndex !== -1) {
-        setSelectedItemIndex(-1);
-        setSelectedExplorerItem(null);
-      }
-      return;
-    }
-
-    if (!selectedIndices.includes(selectedItemIndex)) {
-      const fallbackIndex = selectedIndices[selectedIndices.length - 1];
-      if (fallbackIndex !== undefined && fallbackIndex < processedFolderContents.length) {
-        setSelectedItemIndex(fallbackIndex);
-        const item = processedFolderContents[fallbackIndex];
-        if (item) {
-          handleSelectItem(item);
-        }
-      }
-    }
-  }, [selectedIndices, selectedItemIndex, processedFolderContents, handleSelectItem]);
-  
   const openLightboxAtPreviewIndex = useCallback(async (previewIndex: number) => {
     const target = previewableItems[previewIndex];
     if (!target) return;
-
     try {
-        const entry = await loadPromptEntryForItem(target.item);
-        if (!entry || !entry.images || entry.images.length === 0) {
-            setToast({ message: 'Unable to preview this item.', type: 'error' });
-            return;
-        }
-
-        setLightboxEntry(entry);
-        setLightboxIndex(0);
-        setLightboxPreviewIndex(previewIndex);
-        setLightboxOpen(true);
-        setSelectedExplorerItem(entry);
-        setSelectedIndices([target.index]);
-        setSelectionAnchorIndex(target.index);
-        setSelectedItemIndex(target.index);
-        setContextMenu(null);
+      const entry = await loadPromptEntryForItem(target.item);
+      if (!entry || !entry.images || entry.images.length === 0) {
+        setToast({ message: 'Unable to preview this item.', type: 'error' });
+        return;
+      }
+      setLightboxEntry(entry);
+      setLightboxIndex(0);
+      setLightboxPreviewIndex(previewIndex);
+      setLightboxOpen(true);
+      setSelectedExplorerItem(entry);
+      setSelectedIndices([target.index]);
+      setSelectionAnchorIndex(target.index);
+      setSelectedItemIndex(target.index);
+      setContextMenu(null);
     } catch (error) {
-        console.error('Failed to open item in lightbox', error);
-        setToast({ message: 'Failed to open item.', type: 'error' });
+      console.error('Failed to open item in lightbox', error);
+      setToast({ message: 'Failed to open item.', type: 'error' });
     }
-  }, [loadPromptEntryForItem, previewableItems]);
+  }, [previewableItems, loadPromptEntryForItem, setSelectedExplorerItem, setSelectedIndices, setSelectionAnchorIndex, setSelectedItemIndex]);
 
   const openLightboxAtFolderIndex = useCallback((folderIndex: number) => {
     const previewIndex = previewIndexByFolderIndex.get(folderIndex);
@@ -834,7 +361,7 @@ const App: React.FC = () => {
 
   const canNavigatePrev = lightboxPreviewIndex > 0;
   const canNavigateNext = lightboxPreviewIndex >= 0 && lightboxPreviewIndex < previewableItems.length - 1;
-  
+
   return (
     <div className="bg-zinc-900 text-white h-screen flex flex-col font-sans">
       {toast && (
@@ -859,33 +386,33 @@ const App: React.FC = () => {
         onRefreshFolder={handleRefreshFolder}
         isLoadingFolder={isLoadingFolder}
       />
-      
+
       <main className="flex-grow flex flex-col overflow-hidden">
         <Explorer
-            rootPath={explorerRootPath}
-            folderTree={folderTree}
-            selectedFolderPath={selectedFolderPath}
-            folderContents={processedFolderContents}
-            hiddenItemCount={hiddenItemCount}
-            selectedItem={selectedExplorerItem}
-            selectedItemIndex={selectedItemIndex}
-            selectedIndices={selectedIndices}
-            isLoading={isLoadingFolder}
-            thumbnailSize={thumbnailSize}
-            onThumbnailSizeChange={setThumbnailSize}
-            thumbnailsOnly={thumbnailsOnly}
-            onThumbnailsOnlyChange={setThumbnailsOnly}
-            onOpenFolder={handleOpenFolder}
-            onSelectFolder={handleSelectFolder}
-            onSelectItem={handleItemClick}
-            onSelectItemByIndex={handleSelectItemByIndex}
-            onOpenLightbox={openLightboxAtFolderIndex}
-            onSelectFavorite={handleSelectFavorite}
-            onMoveItem={handleMoveItem}
-            onItemContextMenu={handleItemContextMenu}
-            dragSourcePath={dragSourcePath}
-            onDragStartItem={handleDragStartItem}
-            onDragEndItem={handleDragEndItem}
+          rootPath={explorerRootPath}
+          folderTree={folderTree}
+          selectedFolderPath={selectedFolderPath}
+          folderContents={processedFolderContents}
+          hiddenItemCount={hiddenItemCount}
+          selectedItem={selectedExplorerItem}
+          selectedItemIndex={selectedItemIndex}
+          selectedIndices={selectedIndices}
+          isLoading={isLoadingFolder}
+          thumbnailSize={thumbnailSize}
+          onThumbnailSizeChange={setThumbnailSize}
+          thumbnailsOnly={thumbnailsOnly}
+          onThumbnailsOnlyChange={setThumbnailsOnly}
+          onOpenFolder={handleOpenFolder}
+          onSelectFolder={handleSelectFolder}
+          onSelectItem={handleItemClick}
+          onSelectItemByIndex={handleSelectItemByIndex}
+          onOpenLightbox={openLightboxAtFolderIndex}
+          onSelectFavorite={handleSelectFavorite}
+          onMoveItem={handleMoveItemWithFeedback}
+          onItemContextMenu={handleItemContextMenu}
+          dragSourcePath={dragSourcePath}
+          onDragStartItem={handleDragStartItem}
+          onDragEndItem={handleDragEndItem}
         />
       </main>
 
@@ -1052,11 +579,10 @@ const App: React.FC = () => {
                 onClick={() =>
                   setDeleteState((prev) => (prev ? { ...prev, mode: 'trash' } : prev))
                 }
-                className={`flex-1 px-4 py-3 rounded-md border text-sm font-semibold transition ${
-                  deleteState.mode === 'trash'
-                    ? 'bg-neutral-100 text-neutral-900 border-neutral-100'
-                    : 'border-neutral-600 text-neutral-300 hover:bg-neutral-800'
-                }`}
+                className={`flex-1 px-4 py-3 rounded-md border text-sm font-semibold transition ${deleteState.mode === 'trash'
+                  ? 'bg-neutral-100 text-neutral-900 border-neutral-100'
+                  : 'border-neutral-600 text-neutral-300 hover:bg-neutral-800'
+                  }`}
               >
                 Move to Trash
               </button>
@@ -1064,11 +590,10 @@ const App: React.FC = () => {
                 onClick={() =>
                   setDeleteState((prev) => (prev ? { ...prev, mode: 'permanent' } : prev))
                 }
-                className={`flex-1 px-4 py-3 rounded-md border text-sm font-semibold transition ${
-                  deleteState.mode === 'permanent'
-                    ? 'bg-red-600 text-white border-red-600'
-                    : 'border-red-500 text-red-400 hover:bg-red-500/10'
-                }`}
+                className={`flex-1 px-4 py-3 rounded-md border text-sm font-semibold transition ${deleteState.mode === 'permanent'
+                  ? 'bg-red-600 text-white border-red-600'
+                  : 'border-red-500 text-red-400 hover:bg-red-500/10'
+                  }`}
               >
                 Delete Permanently
               </button>
@@ -1087,11 +612,10 @@ const App: React.FC = () => {
               </button>
               <button
                 onClick={handleDeleteConfirm}
-                className={`px-4 py-2 rounded-md ${
-                  deleteState.mode === 'trash'
-                    ? 'bg-neutral-100 text-neutral-900 hover:bg-white'
-                    : 'bg-red-600 text-white hover:bg-red-700'
-                }`}
+                className={`px-4 py-2 rounded-md ${deleteState.mode === 'trash'
+                  ? 'bg-neutral-100 text-neutral-900 hover:bg-white'
+                  : 'bg-red-600 text-white hover:bg-red-700'
+                  }`}
               >
                 {deleteState.mode === 'trash' ? 'Move to Trash' : 'Delete'}
               </button>

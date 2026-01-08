@@ -44,7 +44,7 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
 
     useEffect(() => {
         let isCancelled = false;
-        
+
         const loadItem = async () => {
             const itemName = item.name || (await getBasename(item.path));
             if (isCancelled) return;
@@ -96,10 +96,10 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
         };
 
         loadItem();
-        
+
         return () => { isCancelled = true; };
     }, [item, isFolder]);
-    
+
     const handleDoubleClick = () => {
         if (item.children) {
             onDoubleClick(item);
@@ -111,7 +111,7 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
             onOpenLightbox();
         }
     };
-    
+
     // --- Drag and Drop Handlers ---
     const toFileUri = (path: string) => {
         const normalized = path.replace(/\\/g, '/');
@@ -164,7 +164,7 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
         setActiveDragSource(null);
         onDragEndFile();
     };
-    
+
     const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
         if (!isFolder) return;
         e.preventDefault();
@@ -184,12 +184,21 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
     };
 
     const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-        if (!isFolder) return;
+        console.log('[ExplorerItem] handleDrop called', { isFolder, itemPath: item.path, itemName: item.name });
+        if (!isFolder) {
+            console.log('[ExplorerItem] Not a folder, ignoring drop');
+            return;
+        }
         e.preventDefault();
+        e.stopPropagation();
         setIsDraggingOver(false);
         const sourcePath = extractDragSourcePath(e.dataTransfer);
+        console.log('[ExplorerItem] Extracted source path:', sourcePath);
         if (sourcePath && item.path !== sourcePath) {
+            console.log('[ExplorerItem] Calling onMoveItem:', { from: sourcePath, to: item.path });
             onMoveItem(sourcePath, item.path);
+        } else {
+            console.log('[ExplorerItem] Skipping move:', { sourcePath, targetPath: item.path, same: sourcePath === item.path });
         }
         setActiveDragSource(null);
         setIsDragging(false);
@@ -205,7 +214,7 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
             );
         }
         if (thumbnailSrc === 'file') {
-             return (
+            return (
                 <div className="w-full h-full flex items-center justify-center bg-zinc-800 text-zinc-500">
                     <FileIcon className="w-1/2 h-1/2" />
                 </div>
@@ -251,8 +260,8 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
                 ? 'bg-emerald-500/80 border-emerald-200/40 text-white'
                 : 'bg-fuchsia-500/80 border-fuchsia-200/40 text-white'
             : itemType === 'image'
-            ? 'bg-sky-500/80 border-sky-200/40 text-white'
-            : 'bg-zinc-700/80 border-zinc-200/30 text-white';
+                ? 'bg-sky-500/80 border-sky-200/40 text-white'
+                : 'bg-zinc-700/80 border-zinc-200/30 text-white';
 
     const selectionClasses = isSelected ? 'ring-2 ring-fuchsia-500 ring-offset-2 ring-offset-zinc-900 bg-zinc-800/70' : '';
     const focusClasses = !isSelected && isFocused ? 'ring-2 ring-fuchsia-400 ring-offset-2 ring-offset-zinc-900' : '';
@@ -261,8 +270,8 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
     const dropHighlightClasses = isDraggingOver
         ? 'border-fuchsia-400 bg-fuchsia-500/10 shadow-inner shadow-fuchsia-500/40'
         : dropReady
-        ? 'border-dashed border-zinc-600 bg-zinc-800/60'
-        : '';
+            ? 'border-dashed border-zinc-600 bg-zinc-800/60'
+            : '';
     const labelColor = isSelected ? 'text-white' : 'text-zinc-300';
 
     return (
@@ -294,7 +303,7 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
                 )}
             </div>
             {!thumbnailsOnly && (
-                 <p className={`text-sm mt-2 truncate group-hover:text-white ${labelColor}`} title={title}>
+                <p className={`text-sm mt-2 truncate group-hover:text-white ${labelColor}`} title={title}>
                     {title}
                 </p>
             )}
