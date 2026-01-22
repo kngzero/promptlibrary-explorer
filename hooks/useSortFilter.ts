@@ -1,7 +1,22 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { FsFileEntry, SortConfig, FilterConfig } from '../types';
 
-export function useSortFilter(folderContents: FsFileEntry[]) {
+const CUSTOM_ORDER_STORAGE_KEY = 'promptlibrary.customSortOrder';
+
+const loadCustomOrderMap = (): Record<string, string[]> => {
+    if (typeof window === 'undefined') return {};
+    try {
+        const raw = window.localStorage.getItem(CUSTOM_ORDER_STORAGE_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return {};
+        return parsed as Record<string, string[]>;
+    } catch {
+        return {};
+    }
+};
+
+export function useSortFilter(folderContents: FsFileEntry[], folderPath: string | null) {
     const [sortConfig, setSortConfig] = useState<SortConfig>({ field: 'type', direction: 'asc' });
     const [filterConfig, setFilterConfig] = useState<FilterConfig>({
         hideOther: true,
@@ -9,6 +24,7 @@ export function useSortFilter(folderContents: FsFileEntry[]) {
         hidePng: false,
     });
     const [searchQuery, setSearchQuery] = useState('');
+    const [customOrderByFolder, setCustomOrderByFolder] = useState<Record<string, string[]>>(loadCustomOrderMap);
 
     const getItemTypeRank = useCallback((item: FsFileEntry): number => {
         if (item.children) return 0; // Directory
@@ -17,6 +33,16 @@ export function useSortFilter(folderContents: FsFileEntry[]) {
         if (/\.(png|jpe?g|webp|gif)$/i.test(name)) return 2; // Image
         return 3; // Other
     }, []);
+
+    const currentCustomOrder = useMemo(
+        () => (folderPath ? customOrderByFolder[folderPath] || [] : []),
+        [customOrderByFolder, folderPath]
+    );
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        window.localStorage.setItem(CUSTOM_ORDER_STORAGE_KEY, JSON.stringify(customOrderByFolder));
+    }, [customOrderByFolder]);
 
     const processedFolderContents = useMemo(() => {
         let items = [...folderContents];
@@ -38,26 +64,47 @@ export function useSortFilter(folderContents: FsFileEntry[]) {
             return true;
         });
 
-        items.sort((a, b) => {
-            const nameA = a.name?.toLowerCase() || '';
-            const nameB = b.name?.toLowerCase() || '';
-            let comparison = 0;
+        if (sortConfig.field === 'custom') {
+            const orderIndex = new Map(currentCustomOrder.map((path, index) => [path, index]));
+            items.sort((a, b) => {
+                const idxA = orderIndex.get(a.path);
+                const idxB = orderIndex.get(b.path);
+                if (idxA !== undefined && idxB !== undefined) return idxA - idxB;
+                if (idxA !== undefined) return -1;
+                if (idxB !== undefined) return 1;
+                const nameA = a.name?.toLowerCase() || '';
+                const nameB = b.name?.toLowerCase() || '';
+                return nameA.localeCompare(nameB);
+            });
+        } else {
+            items.sort((a, b) => {
+                const nameA = a.name?.toLowerCase() || '';
+                const nameB = b.name?.toLowerCase() || '';
+                let comparison = 0;
 
-            if (sortConfig.field === 'type') {
-                const typeA = getItemTypeRank(a);
-                const typeB = getItemTypeRank(b);
-                comparison = typeA - typeB;
-                if (comparison === 0) {
+                if (sortConfig.field === 'type') {
+                    const typeA = getItemTypeRank(a);
+                    const typeB = getItemTypeRank(b);
+                    comparison = typeA - typeB;
+                    if (comparison === 0) {
+                        comparison = nameA.localeCompare(nameB);
+                    }
+                } else { // sort by name
                     comparison = nameA.localeCompare(nameB);
                 }
-            } else { // sort by name
-                comparison = nameA.localeCompare(nameB);
-            }
-            return sortConfig.direction === 'asc' ? comparison : -comparison;
-        });
+                return sortConfig.direction === 'asc' ? comparison : -comparison;
+            });
+        }
 
         return items;
-    }, [folderContents, sortConfig, filterConfig, getItemTypeRank, searchQuery]);
+    }, [folderContents, sortConfig, filterConfig, getItemTypeRank, searchQuery, currentCustomOrder]);
+
+    const setCustomOrderForFolder = useCallback((path: string, order: string[]) => {
+        setCustomOrderByFolder((prev) => ({
+            ...prev,
+            [path]: order,
+        }));
+    }, []);
 
     return {
         sortConfig,
@@ -67,5 +114,7 @@ export function useSortFilter(folderContents: FsFileEntry[]) {
         searchQuery,
         setSearchQuery,
         processedFolderContents,
+        currentCustomOrder,
+        setCustomOrderForFolder,
     };
 }

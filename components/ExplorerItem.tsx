@@ -4,7 +4,7 @@ import { BrandLogo, FolderIcon, FileIcon, PicturesIcon } from './icons';
 import { getAoeData } from '../services/aoeService';
 import { getPlibData } from '../services/plibService';
 import { convertFileSrc, getBasename } from '../services/tauriService';
-import { extractDragSourcePath, setActiveDragSource } from '../utils/drag';
+import { extractDragSourcePath, extractDragSourcePaths, setActiveDragSource } from '../utils/drag';
 import { getCachedThumbnail } from '../services/thumbnailCache';
 import type { FsFileEntry } from '../types';
 
@@ -22,6 +22,7 @@ interface ExplorerItemProps {
     onDragStartFile: (path: string) => void;
     onDragEndFile: () => void;
     selectedPaths: string[];
+    onReorderItems?: (sourcePaths: string[], targetPath: string) => void;
 }
 
 const isImageAsset = (filename: string) => /\.(png|jpe?g|webp|gif)$/i.test(filename);
@@ -29,7 +30,7 @@ const isPromptAsset = (filename: string) => /\.(plib|aoe)$/i.test(filename);
 const isAoeAsset = (filename: string) => /\.aoe$/i.test(filename);
 const fileSrcCache = new Map<string, string>();
 
-const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleClick, onOpenLightbox, onMoveItem, isFocused, isSelected, thumbnailsOnly, onContextMenu, isDragActive, onDragStartFile, onDragEndFile, selectedPaths }) => {
+const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleClick, onOpenLightbox, onMoveItem, isFocused, isSelected, thumbnailsOnly, onContextMenu, isDragActive, onDragStartFile, onDragEndFile, selectedPaths, onReorderItems }) => {
     const [thumbnailSrc, setThumbnailSrc] = useState<string | null>(null);
     const [title, setTitle] = useState(item.name || 'Loading...');
     const [isDragging, setIsDragging] = useState(false);
@@ -37,6 +38,7 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
 
     const isFolder = !!item.children;
     const canDrag = !isFolder;
+    const canReorder = !!onReorderItems;
     const itemLabel = item.name || item.path.split(/[\\/]/).pop() || '';
     const lowerName = itemLabel.toLowerCase();
     const itemType = isFolder ? 'folder' : isPromptAsset(lowerName) ? 'prompt' : isImageAsset(lowerName) ? 'image' : 'file';
@@ -133,6 +135,7 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
     };
 
     const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
+        console.log('[ExplorerItem] dragStart:', { canDrag, itemName: item.name, itemPath: item.path });
         if (!canDrag) {
             e.preventDefault();
             return;
@@ -166,39 +169,58 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
     };
 
     const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-        if (!isFolder) return;
+        if (!isFolder && !canReorder) return;
         e.preventDefault();
+        e.stopPropagation();
         e.dataTransfer.dropEffect = 'move';
+        if (isFolder && Math.random() < 0.05) {
+            console.log('[ExplorerItem] dragOver on folder:', item.name);
+        }
     };
 
     const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
-        if (!isFolder) return;
+        if (!isFolder && !canReorder) return;
         e.preventDefault();
+        e.stopPropagation();
+        if (isFolder) {
+            console.log('[ExplorerItem] dragEnter on folder:', item.name);
+        }
         setIsDraggingOver(true);
     };
 
     const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-        if (!isFolder) return;
+        if (!isFolder && !canReorder) return;
         e.preventDefault();
+        e.stopPropagation();
+        if (isFolder) {
+            console.log('[ExplorerItem] dragLeave on folder:', item.name);
+        }
         setIsDraggingOver(false);
     };
 
     const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
         console.log('[ExplorerItem] handleDrop called', { isFolder, itemPath: item.path, itemName: item.name });
-        if (!isFolder) {
-            console.log('[ExplorerItem] Not a folder, ignoring drop');
-            return;
-        }
         e.preventDefault();
         e.stopPropagation();
         setIsDraggingOver(false);
-        const sourcePath = extractDragSourcePath(e.dataTransfer);
-        console.log('[ExplorerItem] Extracted source path:', sourcePath);
-        if (sourcePath && item.path !== sourcePath) {
-            console.log('[ExplorerItem] Calling onMoveItem:', { from: sourcePath, to: item.path });
-            onMoveItem(sourcePath, item.path);
+        if (isFolder) {
+            const sourcePath = extractDragSourcePath(e.dataTransfer);
+            console.log('[ExplorerItem] Extracted source path:', sourcePath);
+            if (sourcePath && item.path !== sourcePath) {
+                console.log('[ExplorerItem] Calling onMoveItem:', { from: sourcePath, to: item.path });
+                onMoveItem(sourcePath, item.path);
+            } else {
+                console.log('[ExplorerItem] Skipping move:', { sourcePath, targetPath: item.path, same: sourcePath === item.path });
+            }
         } else {
-            console.log('[ExplorerItem] Skipping move:', { sourcePath, targetPath: item.path, same: sourcePath === item.path });
+            if (canReorder) {
+                const sourcePaths = extractDragSourcePaths(e.dataTransfer);
+                if (sourcePaths.length > 0) {
+                    onReorderItems(sourcePaths, item.path);
+                }
+            } else {
+                console.log('[ExplorerItem] Not a folder, ignoring drop');
+            }
         }
         setActiveDragSource(null);
         setIsDragging(false);
@@ -227,6 +249,7 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
                     alt={title}
                     containerClassName="w-full h-full"
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                    draggable={canDrag}
                 />
             );
         }
@@ -266,7 +289,7 @@ const ExplorerItem: React.FC<ExplorerItemProps> = ({ item, onSelect, onDoubleCli
     const selectionClasses = isSelected ? 'ring-2 ring-fuchsia-500 ring-offset-2 ring-offset-zinc-900 bg-zinc-800/70' : '';
     const focusClasses = !isSelected && isFocused ? 'ring-2 ring-fuchsia-400 ring-offset-2 ring-offset-zinc-900' : '';
     const draggingClasses = isDragging ? 'ring-2 ring-fuchsia-400 ring-offset-2 ring-offset-zinc-900 opacity-80 scale-[0.98]' : '';
-    const dropReady = isDragActive && isFolder;
+    const dropReady = isDragActive && (isFolder || (canReorder && !isFolder));
     const dropHighlightClasses = isDraggingOver
         ? 'border-fuchsia-400 bg-fuchsia-500/10 shadow-inner shadow-fuchsia-500/40'
         : dropReady

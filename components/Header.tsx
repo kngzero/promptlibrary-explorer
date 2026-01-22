@@ -102,6 +102,7 @@ const Header: React.FC<HeaderProps> = ({
     { label: 'Sort by Type (Desc)', config: { field: 'type', direction: 'desc' } },
     { label: 'Sort by Name (Asc)', config: { field: 'name', direction: 'asc' } },
     { label: 'Sort by Name (Desc)', config: { field: 'name', direction: 'desc' } },
+    { label: 'Custom Order', config: { field: 'custom', direction: 'asc' } },
   ];
 
   const handleSortSelect = (config: SortConfig) => {

@@ -4,7 +4,7 @@ import ContentBrowser from './ContentBrowser';
 import MetadataPanel from './MetadataPanel';
 import InfoBar from './InfoBar';
 // FIX: Import FolderIcon to be used when no folder is open.
-import { OpenIcon, FolderIcon } from './icons';
+import { OpenIcon, FolderIcon, ChevronLeftIcon, ChevronRightIcon } from './icons';
 import type { PromptEntry, FsFileEntry } from '../types';
 
 interface ExplorerProps {
@@ -32,6 +32,7 @@ interface ExplorerProps {
     dragSourcePath: string | null;
     onDragStartItem: (path: string) => void;
     onDragEndItem: () => void;
+    onReorderItems?: (sourcePaths: string[], targetPath: string) => void;
 }
 
 const Explorer: React.FC<ExplorerProps> = ({
@@ -59,7 +60,10 @@ const Explorer: React.FC<ExplorerProps> = ({
     dragSourcePath,
     onDragStartItem,
     onDragEndItem,
+    onReorderItems,
 }) => {
+    const [isFoldersCollapsed, setIsFoldersCollapsed] = React.useState(false);
+    const [isDetailsCollapsed, setIsDetailsCollapsed] = React.useState(false);
     
     if (!rootPath) {
         return (
@@ -84,16 +88,39 @@ const Explorer: React.FC<ExplorerProps> = ({
 
     return (
         <div className="flex-grow flex h-full overflow-hidden">
-            <div className="w-64 h-full border-r border-zinc-700/50 flex-shrink-0">
-                <FileTree
-                    rootPath={rootPath}
-                    folderTree={folderTree}
-                    selectedPath={selectedFolderPath}
-                    onSelect={onSelectFolder}
-                    onSelectFavorite={onSelectFavorite}
-                    onMoveItem={onMoveItem}
-                    isDragActive={!!dragSourcePath}
-                />
+            <div
+                className={`relative h-full border-r border-zinc-700/50 flex-shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out ${
+                    isFoldersCollapsed ? 'w-12' : 'w-64'
+                }`}
+            >
+                <button
+                    type="button"
+                    onClick={() => setIsFoldersCollapsed((prev) => !prev)}
+                    className="absolute top-4 -right-3 z-20 h-6 w-6 rounded-full border border-zinc-700 bg-zinc-900 text-zinc-300 shadow-sm transition hover:bg-zinc-800 hover:text-white"
+                    aria-label={isFoldersCollapsed ? 'Expand folders panel' : 'Collapse folders panel'}
+                    title={isFoldersCollapsed ? 'Expand folders panel' : 'Collapse folders panel'}
+                >
+                    {isFoldersCollapsed ? (
+                        <ChevronRightIcon className="h-4 w-4 mx-auto" />
+                    ) : (
+                        <ChevronLeftIcon className="h-4 w-4 mx-auto" />
+                    )}
+                </button>
+                <div
+                    className={`h-full transition-opacity duration-200 ${
+                        isFoldersCollapsed ? 'pointer-events-none opacity-0' : 'opacity-100'
+                    }`}
+                >
+                    <FileTree
+                        rootPath={rootPath}
+                        folderTree={folderTree}
+                        selectedPath={selectedFolderPath}
+                        onSelect={onSelectFolder}
+                        onSelectFavorite={onSelectFavorite}
+                        onMoveItem={onMoveItem}
+                        isDragActive={!!dragSourcePath}
+                    />
+                </div>
             </div>
             <div className="flex-grow h-full flex flex-col bg-zinc-900">
                 <ContentBrowser
@@ -113,6 +140,7 @@ const Explorer: React.FC<ExplorerProps> = ({
                     dragSourcePath={dragSourcePath}
                     onDragStartItem={onDragStartItem}
                     onDragEndItem={onDragEndItem}
+                    onReorderItems={onReorderItems}
                 />
                 <InfoBar
                     shownCount={folderContents.length}
@@ -123,8 +151,31 @@ const Explorer: React.FC<ExplorerProps> = ({
                     onThumbnailsOnlyChange={onThumbnailsOnlyChange}
                 />
             </div>
-            <div className="w-96 h-full border-l border-zinc-700/50 flex-shrink-0">
-                <MetadataPanel item={selectedItem} />
+            <div
+                className={`relative h-full border-l border-zinc-700/50 flex-shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out ${
+                    isDetailsCollapsed ? 'w-12' : 'w-96'
+                }`}
+            >
+                <button
+                    type="button"
+                    onClick={() => setIsDetailsCollapsed((prev) => !prev)}
+                    className="absolute top-4 -left-3 z-20 h-6 w-6 rounded-full border border-zinc-700 bg-zinc-900 text-zinc-300 shadow-sm transition hover:bg-zinc-800 hover:text-white"
+                    aria-label={isDetailsCollapsed ? 'Expand details panel' : 'Collapse details panel'}
+                    title={isDetailsCollapsed ? 'Expand details panel' : 'Collapse details panel'}
+                >
+                    {isDetailsCollapsed ? (
+                        <ChevronLeftIcon className="h-4 w-4 mx-auto" />
+                    ) : (
+                        <ChevronRightIcon className="h-4 w-4 mx-auto" />
+                    )}
+                </button>
+                <div
+                    className={`h-full transition-opacity duration-200 ${
+                        isDetailsCollapsed ? 'pointer-events-none opacity-0' : 'opacity-100'
+                    }`}
+                >
+                    <MetadataPanel item={selectedItem} />
+                </div>
             </div>
         </div>
     );

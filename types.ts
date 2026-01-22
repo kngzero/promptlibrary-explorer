@@ -47,7 +47,7 @@ export interface FsFileEntry {
   children?: FsFileEntry[]; // isDir is true if this is present
 }
 
-export type SortField = "type" | "name";
+export type SortField = "type" | "name" | "custom";
 export type SortDirection = "asc" | "desc";
 
 export interface SortConfig {

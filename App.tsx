@@ -38,8 +38,10 @@ const App: React.FC = () => {
     setFilterConfig,
     searchQuery,
     setSearchQuery,
-    processedFolderContents
-  } = useSortFilter(folderContents);
+    processedFolderContents,
+    currentCustomOrder,
+    setCustomOrderForFolder,
+  } = useSortFilter(folderContents, selectedFolderPath);
 
   const {
     selectedExplorerItem,
@@ -107,6 +109,11 @@ const App: React.FC = () => {
     [processedFolderContents, selectedIndices]
   );
 
+  const selectedPaths = useMemo(
+    () => selectedIndices.map((idx) => processedFolderContents[idx]?.path).filter((path): path is string => !!path),
+    [processedFolderContents, selectedIndices]
+  );
+
   const previewableItems = useMemo(
     () => processedFolderContents
       .map((item, index) => ({ item, index }))
@@ -129,11 +136,17 @@ const App: React.FC = () => {
     const handleDragStart = (event: DragEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target) return;
+
+      // Allow text inputs to handle their own drag behavior
       const isTextInput = target.closest('input, textarea, [contenteditable="true"], [role="textbox"]');
+      if (isTextInput) return;
+
+      // Allow our custom draggable items
       const isCustomDraggable = target.closest('[data-draggable-item="true"]');
-      if (!isCustomDraggable && !isTextInput) {
-        event.preventDefault();
-      }
+      if (isCustomDraggable) return;
+
+      // Prevent other elements (images, etc.) from being dragged
+      event.preventDefault();
     };
     window.addEventListener('dragstart', handleDragStart, true);
     return () => window.removeEventListener('dragstart', handleDragStart, true);
@@ -194,6 +207,65 @@ const App: React.FC = () => {
   const handleDragStartItem = useCallback((path: string) => setDragSourcePath(path), []);
   const handleDragEndItem = useCallback(() => setDragSourcePath(null), []);
 
+  const handleCustomReorder = useCallback(
+    (sourcePaths: string[], targetPath: string) => {
+      if (!selectedFolderPath) return;
+
+      const availablePaths = processedFolderContents.map((item) => item.path);
+      const availablePathSet = new Set(availablePaths);
+      const orderedSources = sourcePaths.filter((path) => availablePathSet.has(path));
+      if (orderedSources.length === 0) return;
+      if (orderedSources.includes(targetPath)) return;
+
+      const baseOrder = currentCustomOrder.length > 0 ? currentCustomOrder : availablePaths;
+      const normalizedBase = baseOrder.filter((path) => availablePathSet.has(path));
+      const missing = availablePaths.filter((path) => !normalizedBase.includes(path));
+      const currentOrder = [...normalizedBase, ...missing];
+
+      const withoutSources = currentOrder.filter((path) => !orderedSources.includes(path));
+      let insertIndex = withoutSources.indexOf(targetPath);
+      if (insertIndex === -1) insertIndex = withoutSources.length;
+
+      const nextOrder = [
+        ...withoutSources.slice(0, insertIndex),
+        ...orderedSources,
+        ...withoutSources.slice(insertIndex),
+      ];
+
+      setCustomOrderForFolder(selectedFolderPath, nextOrder);
+      setSortConfig({ field: 'custom', direction: 'asc' });
+
+      if (selectedPaths.length > 0) {
+        const nextSelectedIndices = selectedPaths
+          .map((path) => nextOrder.indexOf(path))
+          .filter((index) => index >= 0);
+        setSelectedIndices(nextSelectedIndices);
+        if (nextSelectedIndices.length > 0) {
+          const primaryPath =
+            selectedItemIndex >= 0 ? processedFolderContents[selectedItemIndex]?.path : null;
+          const nextPrimaryIndex = primaryPath ? nextOrder.indexOf(primaryPath) : nextSelectedIndices[0];
+          setSelectedItemIndex(nextPrimaryIndex);
+          setSelectionAnchorIndex(nextSelectedIndices[0]);
+        } else {
+          setSelectedItemIndex(-1);
+          setSelectionAnchorIndex(null);
+        }
+      }
+    },
+    [
+      selectedFolderPath,
+      processedFolderContents,
+      currentCustomOrder,
+      setCustomOrderForFolder,
+      setSortConfig,
+      selectedPaths,
+      selectedItemIndex,
+      setSelectedIndices,
+      setSelectedItemIndex,
+      setSelectionAnchorIndex,
+    ]
+  );
+
   // Wrap handleMoveItem with toast feedback and selection clearing
   const handleMoveItemWithFeedback = useCallback(async (sourcePath: string, destinationDir: string) => {
     console.log('[App] handleMoveItemWithFeedback called:', { sourcePath, destinationDir });
@@ -221,6 +293,13 @@ const App: React.FC = () => {
     setRenameState(null);
     setDeleteState(null);
   }, [selectedFolderPath]);
+
+  useEffect(() => {
+    setSelectedExplorerItem(null);
+    setSelectedItemIndex(-1);
+    setSelectedIndices([]);
+    setSelectionAnchorIndex(null);
+  }, [selectedFolderPath, setSelectedExplorerItem, setSelectedItemIndex, setSelectedIndices, setSelectionAnchorIndex]);
 
   const handleRenameCancel = useCallback(() => {
     setRenameState(null);
@@ -413,6 +492,7 @@ const App: React.FC = () => {
           dragSourcePath={dragSourcePath}
           onDragStartItem={handleDragStartItem}
           onDragEndItem={handleDragEndItem}
+          onReorderItems={handleCustomReorder}
         />
       </main>
 

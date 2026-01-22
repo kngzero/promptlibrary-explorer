@@ -57,3 +57,37 @@ export const extractDragSourcePath = (dataTransfer: DataTransfer): string => {
 
     return activeDragSource || '';
 };
+
+export const extractDragSourcePaths = (dataTransfer: DataTransfer): string[] => {
+    const jsonData = dataTransfer.getData('application/json');
+    if (jsonData) {
+        try {
+            const parsed = JSON.parse(jsonData);
+            if (parsed && Array.isArray(parsed.paths) && parsed.paths.length > 0) {
+                return parsed.paths.map((path: string) => normalizeDraggedPath(path)).filter(Boolean);
+            }
+            if (parsed && typeof parsed.path === 'string' && parsed.path) {
+                return [normalizeDraggedPath(parsed.path)];
+            }
+        } catch {
+            // Ignore malformed JSON payloads
+        }
+    }
+
+    const uriList = dataTransfer.getData('text/uri-list');
+    if (uriList) {
+        const paths = uriList
+            .split('\n')
+            .map((line) => normalizeDraggedPath(line.trim()))
+            .filter(Boolean);
+        if (paths.length > 0) return paths;
+    }
+
+    const plain = dataTransfer.getData('text/plain');
+    if (plain) {
+        const normalized = normalizeDraggedPath(plain);
+        if (normalized) return [normalized];
+    }
+
+    return activeDragSource ? [activeDragSource] : [];
+};

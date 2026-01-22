@@ -18,6 +18,7 @@ interface ContentBrowserProps {
     dragSourcePath: string | null;
     onDragStartItem: (path: string) => void;
     onDragEndItem: () => void;
+    onReorderItems?: (sourcePaths: string[], targetPath: string) => void;
 }
 
 const ContentBrowser: React.FC<ContentBrowserProps> = ({ 
@@ -36,6 +37,7 @@ const ContentBrowser: React.FC<ContentBrowserProps> = ({
     dragSourcePath,
     onDragStartItem,
     onDragEndItem,
+    onReorderItems,
 }) => {
     
     const gridRef = useRef<HTMLDivElement>(null);
@@ -167,6 +169,7 @@ const ContentBrowser: React.FC<ContentBrowserProps> = ({
                                 onDragStartFile={onDragStartItem}
                                 onDragEndFile={onDragEndItem}
                                 selectedPaths={selectedPaths}
+                                onReorderItems={onReorderItems}
                             />
                         </div>
                     ))}
