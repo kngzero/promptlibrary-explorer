@@ -1,0 +1,10 @@
+/Users/kareemking/Dropbox/Apps/promptlibrary-explorer/src-tauri/target/debug/deps/cargo_toml-7ea6158ecb2bc698.d: /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/cargo_toml.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/afs.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/error.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/inheritable.rs
+
+/Users/kareemking/Dropbox/Apps/promptlibrary-explorer/src-tauri/target/debug/deps/libcargo_toml-7ea6158ecb2bc698.rlib: /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/cargo_toml.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/afs.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/error.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/inheritable.rs
+
+/Users/kareemking/Dropbox/Apps/promptlibrary-explorer/src-tauri/target/debug/deps/libcargo_toml-7ea6158ecb2bc698.rmeta: /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/cargo_toml.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/afs.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/error.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/inheritable.rs
+
+/Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/cargo_toml.rs:
+/Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/afs.rs:
+/Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/error.rs:
+/Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cargo_toml-0.15.3/src/inheritable.rs:

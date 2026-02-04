@@ -1,0 +1,10 @@
+/Users/kareemking/Dropbox/Apps/promptlibrary-explorer/src-tauri/target/debug/deps/objc2_encode-f4bb7f3eeb1a2e40.d: /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/lib.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/encoding.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/encoding_box.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/helper.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/parse.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/static_str.rs
+
+/Users/kareemking/Dropbox/Apps/promptlibrary-explorer/src-tauri/target/debug/deps/libobjc2_encode-f4bb7f3eeb1a2e40.rmeta: /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/lib.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/encoding.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/encoding_box.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/helper.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/parse.rs /Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/static_str.rs
+
+/Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/lib.rs:
+/Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/encoding.rs:
+/Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/encoding_box.rs:
+/Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/helper.rs:
+/Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/parse.rs:
+/Users/kareemking/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-encode-4.1.0/src/static_str.rs:
