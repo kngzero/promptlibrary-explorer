@@ -13,8 +13,39 @@ struct HeaderBarView: View {
             Spacer()
 
             // Search — uses NSSearchField for reliable text input
-            SearchFieldView(text: $vm.searchQuery)
-                .frame(width: 200, height: 24)
+            HStack(spacing: 4) {
+                SearchFieldView(text: $vm.searchQuery)
+                    .frame(width: 180, height: 24)
+                    .onChange(of: vm.searchQuery) { _, _ in
+                        vm.updateContentSearch()
+                    }
+
+                // Search mode picker
+                Menu {
+                    ForEach(SearchMode.allCases, id: \.self) { mode in
+                        Button {
+                            vm.searchMode = mode
+                            vm.persistSearchMode()
+                            vm.updateContentSearch()
+                        } label: {
+                            HStack {
+                                Image(systemName: mode.icon)
+                                Text(mode.displayName)
+                                if vm.searchMode == mode {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: vm.searchMode.icon)
+                        .font(.system(size: 11))
+                        .foregroundStyle(vm.searchMode == .filename ? Color.appMuted : Color.appAccent)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Search mode: \(vm.searchMode.displayName)")
+            }
 
             // Sort Menu
             Menu {

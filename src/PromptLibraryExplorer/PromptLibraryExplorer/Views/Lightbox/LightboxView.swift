@@ -1,4 +1,6 @@
+import AVKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Full-screen lightbox overlay matching the Tauri version's layout:
 /// - Left: image filling edge-to-edge on a black background
@@ -15,6 +17,8 @@ struct LightboxView: View {
     @State private var isHoveringViewport = false
     @State private var viewportSize: CGSize = .zero
     @State private var isHandToolEnabled = true
+    @State private var videoPlayer = AVPlayer()
+    @State private var isVideoPictureInPictureActive = false
 
     private let detailsSidebarWidth: CGFloat = 320
     private let viewportPadding: CGFloat = 18
@@ -34,6 +38,14 @@ struct LightboxView: View {
     private var currentImage: NSImage? {
         guard let entry = currentEntry, currentImageIndex >= 0, currentImageIndex < entry.images.count else { return nil }
         return entry.images[currentImageIndex]
+    }
+
+    private var currentVideoURL: URL? {
+        currentEntry?.videoURL
+    }
+
+    private var currentAudioURL: URL? {
+        currentEntry?.audioURL
     }
 
     private var canPanImage: Bool {
@@ -57,8 +69,17 @@ struct LightboxView: View {
             guard vm.lightboxOpen else { return false }
             if handleZoomShortcut(event) { return true }
             switch event.keyCode {
-            case KeyCode.escape.rawValue, KeyCode.space.rawValue:
+            case KeyCode.escape.rawValue:
                 closeLightbox()
+                return true
+            case KeyCode.space.rawValue:
+                if currentVideoURL != nil {
+                    toggleVideoPlayback()
+                } else if currentAudioURL != nil {
+                    toggleAudioPlayback()
+                } else {
+                    closeLightbox()
+                }
                 return true
             case KeyCode.leftArrow.rawValue:
                 navigateToPrevious()
@@ -79,6 +100,14 @@ struct LightboxView: View {
         }
         .onChange(of: currentImageIndex) { _, _ in
             resetViewport(animated: false)
+        }
+        .task(id: currentMediaTaskKey) {
+            syncVideoPlayer()
+        }
+        .onDisappear {
+            if !isVideoPictureInPictureActive {
+                clearVideoPlayer()
+            }
         }
     }
 
@@ -118,6 +147,18 @@ struct LightboxView: View {
                         .onTapGesture(count: 2) {
                             toggleZoom(for: image, viewportSize: geometry.size)
                         }
+                } else if currentVideoURL != nil {
+                    VideoPlayerSurface(
+                        player: videoPlayer,
+                        isPictureInPictureActive: $isVideoPictureInPictureActive
+                    )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(viewportPadding)
+                } else if currentAudioURL != nil {
+                    AudioPlayerView(player: videoPlayer, fileName: currentItem?.name ?? "Audio")
+                        .frame(maxWidth: 480)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(viewportPadding)
                 }
 
                 HStack {
@@ -302,11 +343,17 @@ struct LightboxView: View {
             // Bottom action buttons
             if let entry = vm.selectedPromptEntry {
                 VStack(spacing: 8) {
-                    actionButton(
-                        icon: "arrow.down.circle",
-                        label: "Save Image (\(currentImageIndex + 1) of \(entry.images.count))"
-                    ) {
-                        saveCurrentImage(entry: entry)
+                    if entry.videoURL != nil {
+                        actionButton(icon: "arrow.down.circle", label: "Save Video") {
+                            saveCurrentVideo(entry: entry)
+                        }
+                    } else if !entry.images.isEmpty {
+                        actionButton(
+                            icon: "arrow.down.circle",
+                            label: "Save Image (\(currentImageIndex + 1) of \(entry.images.count))"
+                        ) {
+                            saveCurrentImage(entry: entry)
+                        }
                     }
 
                     if FileHelpers.isPlibFile(currentItem?.name ?? "") {
@@ -385,6 +432,9 @@ struct LightboxView: View {
             fileInfoRow(label: "Type", value: meta.fileType)
             if let w = meta.width, let h = meta.height {
                 fileInfoRow(label: "Dimensions", value: "\(w) x \(h)")
+            }
+            if let duration = meta.duration {
+                fileInfoRow(label: "Duration", value: formatDuration(duration))
             }
             if let date = meta.modifiedDate {
                 fileInfoRow(label: "Modified", value: date.formatted(date: .abbreviated, time: .shortened))
@@ -587,6 +637,14 @@ struct LightboxView: View {
         return ts
     }
 
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = duration >= 3600 ? [.hour, .minute, .second] : [.minute, .second]
+        formatter.unitsStyle = .positional
+        formatter.zeroFormattingBehavior = [.pad]
+        return formatter.string(from: duration) ?? "\(Int(duration.rounded()))s"
+    }
+
     private func handleZoomShortcut(_ event: NSEvent) -> Bool {
         guard event.modifierFlags.contains(.control),
               let image = currentImage,
@@ -673,11 +731,19 @@ struct LightboxView: View {
     private func closeLightbox() {
         resetViewport(animated: false)
         vm.lightboxOpen = false
+
+        if !isVideoPictureInPictureActive {
+            clearVideoPlayer()
+        }
     }
 
     // MARK: - Navigation
 
     private func navigateToPrevious() {
+        guard !isVideoPictureInPictureActive else {
+            vm.showToast("Stop Picture in Picture before switching items", type: .info)
+            return
+        }
         let items = vm.processedFolderContents
         guard !items.isEmpty else { return }
         var idx = vm.lightboxIndex - 1
@@ -692,6 +758,10 @@ struct LightboxView: View {
     }
 
     private func navigateToNext() {
+        guard !isVideoPictureInPictureActive else {
+            vm.showToast("Stop Picture in Picture before switching items", type: .info)
+            return
+        }
         let items = vm.processedFolderContents
         guard !items.isEmpty else { return }
         var idx = vm.lightboxIndex + 1
@@ -794,6 +864,76 @@ struct LightboxView: View {
         }
     }
 
+    private var currentMediaTaskKey: String {
+        let itemPath = currentItem?.path ?? "nil"
+        let videoPath = currentVideoURL?.standardizedFileURL.path ?? "nil"
+        let audioPath = currentAudioURL?.standardizedFileURL.path ?? "nil"
+        return "\(itemPath)|\(videoPath)|\(audioPath)"
+    }
+
+    private func syncVideoPlayer() {
+        // Handle audio files
+        if let audioURL = currentAudioURL {
+            let targetURL = audioURL.standardizedFileURL
+            let currentAssetURL = (videoPlayer.currentItem?.asset as? AVURLAsset)?.url.standardizedFileURL
+
+            if currentAssetURL != targetURL {
+                videoPlayer.replaceCurrentItem(with: AVPlayerItem(url: targetURL))
+            }
+
+            videoPlayer.actionAtItemEnd = .pause
+            videoPlayer.play()
+            return
+        }
+
+        guard let videoURL = currentVideoURL else {
+            if !isVideoPictureInPictureActive {
+                clearVideoPlayer()
+            }
+            return
+        }
+
+        let targetURL = videoURL.standardizedFileURL
+        let currentAssetURL = (videoPlayer.currentItem?.asset as? AVURLAsset)?.url.standardizedFileURL
+
+        if isVideoPictureInPictureActive, currentAssetURL != targetURL {
+            return
+        }
+
+        if currentAssetURL != targetURL {
+            videoPlayer.replaceCurrentItem(with: AVPlayerItem(url: targetURL))
+        }
+
+        videoPlayer.actionAtItemEnd = .pause
+        videoPlayer.play()
+    }
+
+    private func clearVideoPlayer() {
+        videoPlayer.pause()
+        videoPlayer.replaceCurrentItem(with: nil)
+        isVideoPictureInPictureActive = false
+    }
+
+    private func toggleVideoPlayback() {
+        guard currentVideoURL != nil else { return }
+
+        if videoPlayer.timeControlStatus == .playing {
+            videoPlayer.pause()
+        } else {
+            syncVideoPlayer()
+        }
+    }
+
+    private func toggleAudioPlayback() {
+        guard currentAudioURL != nil else { return }
+
+        if videoPlayer.timeControlStatus == .playing {
+            videoPlayer.pause()
+        } else {
+            syncVideoPlayer()
+        }
+    }
+
     // MARK: - Save Actions
 
     private func saveCurrentImage(entry: PromptEntry) {
@@ -813,6 +953,27 @@ struct LightboxView: View {
                 try? pngData.write(to: url)
                 vm.showToast("Image saved", type: .success)
             }
+        }
+    }
+
+    private func saveCurrentVideo(entry: PromptEntry) {
+        guard let videoURL = entry.videoURL else { return }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: videoURL.pathExtension)].compactMap { $0 }
+        panel.nameFieldStringValue = currentItem?.name ?? videoURL.lastPathComponent
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let destURL = panel.url else { return }
+
+        do {
+            if FileManager.default.fileExists(atPath: destURL.path) {
+                try FileManager.default.removeItem(at: destURL)
+            }
+            try FileManager.default.copyItem(at: videoURL, to: destURL)
+            vm.showToast("Video saved", type: .success)
+        } catch {
+            vm.showToast("Failed to save video: \(error.localizedDescription)", type: .error)
         }
     }
 

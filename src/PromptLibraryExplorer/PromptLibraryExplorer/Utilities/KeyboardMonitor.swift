@@ -94,4 +94,7 @@ enum KeyCode: UInt16 {
     case delete = 51
     case f = 3
     case z = 6
+    case k = 40
+    case d = 2
+    case t = 17
 }

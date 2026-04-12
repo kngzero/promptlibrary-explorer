@@ -146,6 +146,33 @@ extension Color {
     )
 }
 
+// MARK: - File Type Badge Colors
+
+extension Color {
+    /// .plib badge: vivid magenta
+    static let badgePlib = Color(red: 0xD9 / 255.0, green: 0x00 / 255.0, blue: 0xD9 / 255.0)
+    /// .aoe badge: electric purple
+    static let badgeAoe = Color(red: 0x8B / 255.0, green: 0x5C / 255.0, blue: 0xF6 / 255.0)
+    /// PNG badge: teal
+    static let badgePng = Color(red: 0x06 / 255.0, green: 0xB6 / 255.0, blue: 0xD4 / 255.0)
+    /// JPEG badge: amber
+    static let badgeJpg = Color(red: 0xF9 / 255.0, green: 0x73 / 255.0, blue: 0x16 / 255.0)
+    /// WebP badge: green
+    static let badgeWebp = Color(red: 0x22 / 255.0, green: 0xC5 / 255.0, blue: 0x5E / 255.0)
+    /// GIF badge: pink
+    static let badgeGif = Color(red: 0xEC / 255.0, green: 0x48 / 255.0, blue: 0x99 / 255.0)
+    /// Video badge: red
+    static let badgeVideo = Color(red: 0xEF / 255.0, green: 0x44 / 255.0, blue: 0x44 / 255.0)
+    /// Audio badge: violet
+    static let badgeAudio = Color(red: 0xA7 / 255.0, green: 0x55 / 255.0, blue: 0xF5 / 255.0)
+    /// Other image badge: blue
+    static let badgeImage = Color(red: 0x3B / 255.0, green: 0x82 / 255.0, blue: 0xF6 / 255.0)
+    /// Generic file badge: gray
+    static let badgeFile = Color(red: 0x6B / 255.0, green: 0x72 / 255.0, blue: 0x80 / 255.0)
+    /// Favorite pin: gold
+    static let favoriteGold = Color(red: 0xFA / 255.0, green: 0xCC / 255.0, blue: 0x15 / 255.0)
+}
+
 // MARK: - Analysis Segment Colors
 
 extension Color {

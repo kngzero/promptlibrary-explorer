@@ -1,9 +1,11 @@
+import AVKit
 import SwiftUI
 
 struct MetadataPanelView: View {
     @Environment(ExplorerViewModel.self) private var vm
     @State private var previewPaneRatio: CGFloat = 0.42
     @State private var dragStartPreviewRatio: CGFloat?
+    @State private var previewVideoPlayer = AVPlayer()
 
     private let dividerHeight: CGFloat = 12
     private let minimumPreviewHeight: CGFloat = 150
@@ -18,6 +20,17 @@ struct MetadataPanelView: View {
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(Color.appPrimaryText)
                         Spacer()
+
+                        // Toggle preview pane
+                        Button {
+                            vm.togglePreviewPane()
+                        } label: {
+                            Image(systemName: vm.previewPaneCollapsed ? "eye.slash" : "eye")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color.appMuted)
+                        }
+                        .buttonStyle(.plain)
+                        .help(vm.previewPaneCollapsed ? "Show Preview" : "Hide Preview")
                     }
                     .padding(.horizontal, 16)
                     .frame(height: LayoutMetrics.panelHeaderHeight)
@@ -44,21 +57,39 @@ struct MetadataPanelView: View {
             }
         }
         .background(Color.appSidebarBackground)
+        .sheet(isPresented: Binding(
+            get: { vm.metadataEditorPath != nil },
+            set: { if !$0 { vm.metadataEditorPath = nil } }
+        )) {
+            if let path = vm.metadataEditorPath {
+                MetadataEditorView(
+                    imagePath: path,
+                    existingEntry: vm.selectedPromptEntry
+                )
+                .environment(vm)
+            }
+        }
     }
 
     @ViewBuilder
     private func detailSplitView(entry: PromptEntry, availableHeight: CGFloat) -> some View {
-        let previewHeight = resolvedPreviewHeight(for: availableHeight)
-        let metadataHeight = max(0, availableHeight - previewHeight - dividerHeight)
-
-        VStack(spacing: 0) {
-            previewPane(entry: entry)
-                .frame(height: previewHeight)
-
-            resizeDivider(totalHeight: availableHeight)
-
+        if vm.previewPaneCollapsed {
+            // Preview hidden — full height metadata
             metadataPane(entry: entry)
-                .frame(height: metadataHeight)
+                .frame(maxHeight: .infinity)
+        } else {
+            let previewHeight = resolvedPreviewHeight(for: availableHeight)
+            let metadataHeight = max(0, availableHeight - previewHeight - dividerHeight)
+
+            VStack(spacing: 0) {
+                previewPane(entry: entry)
+                    .frame(height: previewHeight)
+
+                resizeDivider(totalHeight: availableHeight)
+
+                metadataPane(entry: entry)
+                    .frame(height: metadataHeight)
+            }
         }
     }
 
@@ -73,7 +104,34 @@ struct MetadataPanelView: View {
                             .strokeBorder(Color.appBorder, lineWidth: 1)
                     )
 
-                if let firstImage = entry.images.first {
+                if let videoURL = entry.videoURL {
+                    VideoPlayerSurface(
+                        player: previewVideoPlayer,
+                        allowsPictureInPicturePlayback: false
+                    )
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .padding(12)
+                        .task(id: videoURL.standardizedFileURL.path) {
+                            preparePreviewVideoPlayer(for: videoURL)
+                        }
+                        .onDisappear {
+                            clearPreviewVideoPlayer()
+                        }
+                } else if let audioURL = entry.audioURL {
+                    AudioPlayerView(
+                        player: previewVideoPlayer,
+                        fileName: URL(fileURLWithPath: entry.sourcePath ?? audioURL.path).lastPathComponent
+                    )
+                        .frame(maxWidth: 420)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(12)
+                        .task(id: audioURL.standardizedFileURL.path) {
+                            preparePreviewVideoPlayer(for: audioURL)
+                        }
+                        .onDisappear {
+                            clearPreviewVideoPlayer()
+                        }
+                } else if let firstImage = entry.images.first {
                     Image(nsImage: firstImage)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
@@ -95,6 +153,13 @@ struct MetadataPanelView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
+    }
+
+    /// Whether this entry is an image file that supports metadata embedding (PNG/JPEG).
+    private func isEmbeddableImage(_ entry: PromptEntry) -> Bool {
+        guard let path = entry.sourcePath else { return false }
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+        return ext == "png" || ext == "jpg" || ext == "jpeg"
     }
 
     @ViewBuilder
@@ -132,6 +197,32 @@ struct MetadataPanelView: View {
                     }
                 }
 
+                // Add / Edit Metadata button for embeddable images
+                if isEmbeddableImage(entry), let path = entry.sourcePath {
+                    let hasPrompt = !entry.prompt.isEmpty
+                    Button {
+                        vm.openMetadataEditor(for: path)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: hasPrompt ? "pencil.line" : "plus.square")
+                                .font(.system(size: 12))
+                            Text(hasPrompt ? "Edit Metadata" : "Add Metadata")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundStyle(Color.appAccent)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.appAccent.opacity(0.12))
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(Color.appAccent.opacity(0.25), lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 if entry.generationInfo.model != "N/A" {
                     detailCard(title: "Generation Info") {
                         genInfoGrid(entry.generationInfo)
@@ -146,19 +237,57 @@ struct MetadataPanelView: View {
                             .textSelection(.enabled)
                     }
 
-                    // Star Rating
+                    // Star Rating & Favorite
                     if let path = entry.sourcePath {
                         HStack {
                             Text("Rating")
                                 .font(.system(size: 12, weight: .semibold))
                                 .foregroundStyle(Color.appMuted)
                             Spacer()
+
+                            // Favorite toggle
+                            Button {
+                                vm.toggleFavorite(path: path)
+                            } label: {
+                                Image(systemName: vm.isFavorite(path: path) ? "pin.fill" : "pin")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(vm.isFavorite(path: path) ? Color.favoriteGold : Color.appMuted)
+                            }
+                            .buttonStyle(.plain)
+                            .help(vm.isFavorite(path: path) ? "Unpin" : "Pin")
+
                             StarRatingView(rating: vm.rating(for: path), size: 16) { newRating in
                                 vm.setRating(newRating, for: path)
                             }
                         }
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
+
+                        // Tags
+                        let fileTags = vm.tagsForFile(at: path)
+                        if !fileTags.isEmpty || !vm.allTags.isEmpty {
+                            HStack(spacing: 6) {
+                                Text("Tags")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Color.appMuted)
+
+                                TagPillsView(tags: fileTags)
+
+                                Spacer()
+
+                                Menu {
+                                    TagAssignmentMenu(paths: [path])
+                                } label: {
+                                    Image(systemName: "plus.circle")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(Color.appMuted)
+                                }
+                                .menuStyle(.borderlessButton)
+                                .fixedSize()
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 4)
+                        }
                     }
 
                     fileInfoCard(meta)
@@ -305,12 +434,15 @@ struct MetadataPanelView: View {
         detailCard(title: "File Info") {
             VStack(alignment: .leading, spacing: 4) {
                 fileInfoRow(label: "Type", value: meta.fileType)
-                if let w = meta.width, let h = meta.height {
-                    fileInfoRow(label: "Dimensions", value: "\(w) x \(h)")
-                }
-                if let date = meta.modifiedDate {
-                    fileInfoRow(label: "Modified", value: date.formatted(date: .abbreviated, time: .shortened))
-                }
+            if let w = meta.width, let h = meta.height {
+                fileInfoRow(label: "Dimensions", value: "\(w) x \(h)")
+            }
+            if let duration = meta.duration {
+                fileInfoRow(label: "Duration", value: formatDuration(duration))
+            }
+            if let date = meta.modifiedDate {
+                fileInfoRow(label: "Modified", value: date.formatted(date: .abbreviated, time: .shortened))
+            }
                 if let size = meta.fileSize {
                     fileInfoRow(label: "Size", value: ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
                 }
@@ -403,6 +535,31 @@ struct MetadataPanelView: View {
             return df.string(from: date)
         }
         return ts
+    }
+
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = duration >= 3600 ? [.hour, .minute, .second] : [.minute, .second]
+        formatter.unitsStyle = .positional
+        formatter.zeroFormattingBehavior = [.pad]
+        return formatter.string(from: duration) ?? "\(Int(duration.rounded()))s"
+    }
+
+    private func preparePreviewVideoPlayer(for url: URL) {
+        let assetURL = (previewVideoPlayer.currentItem?.asset as? AVURLAsset)?.url.standardizedFileURL
+        let targetURL = url.standardizedFileURL
+
+        if assetURL != targetURL {
+            previewVideoPlayer.replaceCurrentItem(with: AVPlayerItem(url: targetURL))
+        }
+
+        previewVideoPlayer.actionAtItemEnd = .pause
+        previewVideoPlayer.pause()
+    }
+
+    private func clearPreviewVideoPlayer() {
+        previewVideoPlayer.pause()
+        previewVideoPlayer.replaceCurrentItem(with: nil)
     }
 
     private func saveReferenceImage(_ image: NSImage, index: Int, fileName: String) {

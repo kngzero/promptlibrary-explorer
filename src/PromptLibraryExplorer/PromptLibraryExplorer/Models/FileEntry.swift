@@ -25,6 +25,7 @@ struct FileMetadata {
     let fileType: String
     let width: Int?
     let height: Int?
+    let duration: TimeInterval?
     let modifiedDate: Date?
     let fileSize: Int64?
 }

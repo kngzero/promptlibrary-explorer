@@ -7,6 +7,7 @@ import QuickLookThumbnailing
 @MainActor
 final class ThumbnailService {
     static let shared = ThumbnailService()
+    private let cacheVersion = "v2"
 
     // MARK: - Tier 1: In-memory cache
 
@@ -57,9 +58,13 @@ final class ThumbnailService {
 
         // Check disk cache
         let diskPath = diskCacheURL.appendingPathComponent(key).appendingPathExtension("jpg")
-        if let diskImage = NSImage(contentsOf: diskPath) {
+        if let diskImage = await loadImageOffMain(at: diskPath, qos: .utility) {
             memoryCache.setObject(diskImage, forKey: key as NSString)
             return diskImage
+        }
+
+        if FileHelpers.isImageFile(url.lastPathComponent) {
+            return await rasterImageThumbnail(for: url, size: size, key: key, persist: true)
         }
 
         // Tier 3: Generate via QLThumbnailGenerator
@@ -78,14 +83,7 @@ final class ThumbnailService {
             memoryCache.setObject(image, forKey: key as NSString)
 
             // Populate Tier 2 (async, non-blocking)
-            Task.detached(priority: .utility) {
-                if let tiffData = image.tiffRepresentation,
-                   let bitmap = NSBitmapImageRep(data: tiffData),
-                   let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8])
-                {
-                    try? jpegData.write(to: diskPath)
-                }
-            }
+            persistToDisk(image, at: diskPath)
 
             return image
         } catch {
@@ -96,8 +94,20 @@ final class ThumbnailService {
 
     /// Loads the best-available preview image for lightbox/detail display.
     func previewImage(for url: URL, maxPixelSize: CGFloat = 4096) async -> NSImage? {
-        if let image = NSImage(contentsOf: url) {
-            return image
+        let key = cacheKey(for: url, size: maxPixelSize)
+
+        if let cached = memoryCache.object(forKey: key as NSString) {
+            return cached
+        }
+
+        let diskPath = diskCacheURL.appendingPathComponent(key).appendingPathExtension("jpg")
+        if let diskImage = await loadImageOffMain(at: diskPath, qos: .utility) {
+            memoryCache.setObject(diskImage, forKey: key as NSString)
+            return diskImage
+        }
+
+        if FileHelpers.isImageFile(url.lastPathComponent) {
+            return await rasterImagePreview(for: url, maxPixelSize: maxPixelSize, key: key)
         }
 
         let request = QLThumbnailGenerator.Request(
@@ -109,9 +119,11 @@ final class ThumbnailService {
 
         do {
             let representation = try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
-            return representation.nsImage
+            let image = representation.nsImage
+            memoryCache.setObject(image, forKey: key as NSString)
+            persistToDisk(image, at: diskPath)
+            return image
         } catch {
-            let key = cacheKey(for: url, size: maxPixelSize)
             return await fallbackThumbnail(for: url, size: maxPixelSize, key: key)
         }
     }
@@ -128,6 +140,7 @@ final class ThumbnailService {
     private func cacheKey(for url: URL, size: CGFloat) -> String {
         let resourceValues = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
         let fileSignature = [
+            cacheVersion,
             url.standardizedFileURL.path,
             resourceValues?.contentModificationDate?.timeIntervalSinceReferenceDate.description ?? "nil",
             resourceValues?.fileSize.map(String.init) ?? "nil",
@@ -140,20 +153,88 @@ final class ThumbnailService {
     }
 
     private func fallbackThumbnail(for url: URL, size: CGFloat, key: String) async -> NSImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+        let nsImage = await downsampledImage(at: url, maxPixelSize: size * scale)
 
-        let options: [CFString: Any] = [
-            kCGImageSourceThumbnailMaxPixelSize: size * (NSScreen.main?.backingScaleFactor ?? 2.0),
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-        ]
-
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-            return nil
+        if let nsImage {
+            memoryCache.setObject(nsImage, forKey: key as NSString)
         }
 
-        let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-        memoryCache.setObject(nsImage, forKey: key as NSString)
         return nsImage
+    }
+
+    private func rasterImageThumbnail(for url: URL, size: CGFloat, key: String, persist: Bool) async -> NSImage? {
+        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+        let nsImage = await downsampledImage(at: url, maxPixelSize: size * scale)
+
+        if let nsImage {
+            memoryCache.setObject(nsImage, forKey: key as NSString)
+            if persist {
+                let diskPath = diskCacheURL.appendingPathComponent(key).appendingPathExtension("jpg")
+                persistToDisk(nsImage, at: diskPath)
+            }
+        }
+
+        return nsImage
+    }
+
+    private func rasterImagePreview(for url: URL, maxPixelSize: CGFloat, key: String) async -> NSImage? {
+        let nsImage = await downsampledImage(at: url, maxPixelSize: maxPixelSize)
+
+        if let nsImage {
+            memoryCache.setObject(nsImage, forKey: key as NSString)
+            let diskPath = diskCacheURL.appendingPathComponent(key).appendingPathExtension("jpg")
+            persistToDisk(nsImage, at: diskPath)
+        }
+
+        return nsImage
+    }
+
+    private func loadImageOffMain(at url: URL, qos: DispatchQoS.QoSClass) async -> NSImage? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<NSImage?, Never>) in
+            DispatchQueue.global(qos: qos).async {
+                continuation.resume(returning: NSImage(contentsOf: url))
+            }
+        }
+    }
+
+    private func downsampledImage(at url: URL, maxPixelSize: CGFloat) async -> NSImage? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<NSImage?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                let options: [CFString: Any] = [
+                    kCGImageSourceThumbnailMaxPixelSize: max(maxPixelSize, 1),
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                ]
+
+                guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                continuation.resume(
+                    returning: NSImage(
+                        cgImage: cgImage,
+                        size: NSSize(width: cgImage.width, height: cgImage.height)
+                    )
+                )
+            }
+        }
+    }
+
+    private func persistToDisk(_ image: NSImage, at diskPath: URL) {
+        Task.detached(priority: .utility) {
+            if let tiffData = image.tiffRepresentation,
+               let bitmap = NSBitmapImageRep(data: tiffData),
+               let jpegData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8])
+            {
+                try? jpegData.write(to: diskPath)
+            }
+        }
     }
 }

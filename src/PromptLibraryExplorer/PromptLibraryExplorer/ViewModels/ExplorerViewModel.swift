@@ -54,18 +54,60 @@ final class ExplorerViewModel {
     var explorerRootPath: URL?
     var folderTree: [FileEntry] = []
     var selectedFolderPath: URL?
-    var folderContents: [FileEntry] = []
+    var folderContents: [FileEntry] = [] {
+        didSet { invalidateProcessedFolderContents() }
+    }
     var isLoadingFolder = false
 
     // Sort & Filter
-    var sortConfig = SortConfig()
-    var filterConfig = FilterConfig()
-    var searchQuery = ""
-    private var customOrderByFolder: [String: [String]] = [:]
-    private var ratingsByPath: [String: Int] = [:]
+    var sortConfig = SortConfig() {
+        didSet { invalidateProcessedFolderContents() }
+    }
+    var filterConfig = FilterConfig() {
+        didSet { invalidateProcessedFolderContents() }
+    }
+    var searchQuery = "" {
+        didSet { invalidateProcessedFolderContents() }
+    }
+    var searchMode: SearchMode = .filename {
+        didSet { invalidateProcessedFolderContents() }
+    }
+    var contentSearchMatches: Set<String> = [] {
+        didSet { invalidateProcessedFolderContents() }
+    }
+    private var customOrderByFolder: [String: [String]] = [:] {
+        didSet { invalidateProcessedFolderContents() }
+    }
+    private var ratingsByPath: [String: Int] = [:] {
+        didSet { invalidateProcessedFolderContents() }
+    }
     private var lastStandardSortConfigByFolder: [String: SortConfig] = [:]
     private var collapsedSidebarFolderPaths: Set<String> = []
     private var previousSidebarCollapsedFolderPaths: Set<String>?
+
+    // Tags
+    var allTags: [FileTag] = []
+    private var tagAssignments: [String: [UUID]] = [:] {
+        didSet { invalidateProcessedFolderContents() }
+    }
+    var filterByTagID: UUID? {
+        didSet { invalidateProcessedFolderContents() }
+    }
+
+    // Favorites / Pinned
+    var favoritePaths: Set<String> = []
+
+    // Command Palette
+    var commandPaletteOpen = false
+
+    // Preview Panel Toggle
+    var previewPaneCollapsed = false
+
+    // Prompt Diff
+    var promptDiffSession: PromptDiffSession?
+
+    // Batch Metadata
+    var batchMetadataEditorOpen = false
 
     // Selection
     var selectedItemIndex: Int = -1
@@ -90,13 +132,16 @@ final class ExplorerViewModel {
     var isLoadingComparison = false
     var comparisonSession: AoeComparisonSession?
     var deleteConfirmationRequest: DeleteConfirmationRequest?
+    var metadataEditorPath: String?
 
     // Recent History
     var recentFolders: [RecentItem] = []
 
     // Smart Folders
     var smartFolders: [SmartFolder] = []
-    var activeSmartFolder: SmartFolder?
+    var activeSmartFolder: SmartFolder? {
+        didSet { invalidateProcessedFolderContents() }
+    }
     var showSmartFolderEditor = false
     var editingSmartFolder: SmartFolder?
     var canUndoFolderAction: Bool { !undoHistory.isEmpty }
@@ -113,6 +158,12 @@ final class ExplorerViewModel {
     private let settings = SettingsStore.shared
     private var undoHistory: [FolderHistoryEntry] = []
     private var redoHistory: [FolderHistoryEntry] = []
+    @ObservationIgnored private var promptEntryLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var contentSearchTask: Task<Void, Never>?
+    @ObservationIgnored private var isIndexingPrompts = false
+    private var processedFolderContentsRevision = 0
+    @ObservationIgnored private var processedFolderContentsCacheRevision = -1
+    @ObservationIgnored private var processedFolderContentsCache: [FileEntry] = []
 
     init() {
         customOrderByFolder = settings.loadCustomOrders()
@@ -131,9 +182,17 @@ final class ExplorerViewModel {
         showStatusBar = settings.showStatusBar
         appearanceMode = AppAppearanceMode(rawValue: settings.appearanceMode) ?? .dark
 
+        searchMode = SearchMode(rawValue: settings.searchMode) ?? .filename
+        previewPaneCollapsed = settings.previewPaneCollapsed
+
         // Load recent history & smart folders
         recentFolders = RecentHistoryService.shared.loadRecentFolders()
         smartFolders = SmartFolderService.shared.loadSmartFolders()
+
+        // Load tags & favorites
+        allTags = TagService.shared.loadTags()
+        tagAssignments = TagService.shared.loadAssignments()
+        favoritePaths = FavoritesService.shared.loadFavorites()
 
         // Restore last folder
         if !settings.lastOpenedFolder.isEmpty {
@@ -147,6 +206,11 @@ final class ExplorerViewModel {
     // MARK: - Processed Contents (sorted/filtered)
 
     var processedFolderContents: [FileEntry] {
+        let revision = processedFolderContentsRevision
+        if processedFolderContentsCacheRevision == revision {
+            return processedFolderContentsCache
+        }
+
         var items = folderContents
 
         // Filter
@@ -156,7 +220,14 @@ final class ExplorerViewModel {
             // Search
             if !searchQuery.isEmpty {
                 let query = searchQuery.lowercased()
-                if !name.contains(query) { return false }
+                switch searchMode {
+                case .filename:
+                    if !name.contains(query) { return false }
+                case .prompt:
+                    if !contentSearchMatches.contains(item.path) { return false }
+                case .all:
+                    if !name.contains(query) && !contentSearchMatches.contains(item.path) { return false }
+                }
             }
 
             // Extension filters
@@ -166,7 +237,11 @@ final class ExplorerViewModel {
             // Hide unsupported types
             if filterConfig.hideOther {
                 let isDir = item.isDirectory
-                let isAllowed = isDir || FileHelpers.isPromptSnapshotFile(name) || FileHelpers.isImageFile(name)
+                let isAllowed = isDir
+                    || FileHelpers.isPromptSnapshotFile(name)
+                    || FileHelpers.isImageFile(name)
+                    || FileHelpers.isVideoFile(name)
+                    || FileHelpers.isAudioFile(name)
                 if !isAllowed { return false }
             }
 
@@ -175,6 +250,12 @@ final class ExplorerViewModel {
 
         if filterConfig.filterMinRating > 0 {
             items = items.filter { rating(for: $0.path) >= filterConfig.filterMinRating }
+        }
+
+        // Tag filter
+        if let tagID = filterByTagID {
+            let taggedPaths = taggedPaths(for: tagID)
+            items = items.filter { taggedPaths.contains($0.path) }
         }
 
         // Smart folder filter
@@ -186,7 +267,10 @@ final class ExplorerViewModel {
             )
         }
 
-        return sortItems(items, using: sortConfig)
+        let sortedItems = sortItems(items, using: sortConfig)
+        processedFolderContentsCache = sortedItems
+        processedFolderContentsCacheRevision = revision
+        return sortedItems
     }
 
     var currentCustomOrder: [String] {
@@ -195,11 +279,12 @@ final class ExplorerViewModel {
     }
 
     var selectedItems: [FileEntry] {
-        selectedIndices
+        let items = processedFolderContents
+        return selectedIndices
             .sorted()
-            .compactMap { index in
-                guard index >= 0 && index < processedFolderContents.count else { return nil }
-                return processedFolderContents[index]
+            .compactMap { index -> FileEntry? in
+                guard index >= 0 && index < items.count else { return nil }
+                return items[index]
             }
     }
 
@@ -263,7 +348,7 @@ final class ExplorerViewModel {
         clearSelection()
         await refreshFolderContents()
         await refreshFolderTree()
-
+        refreshPromptSearchIfNeeded()
     }
 
     func selectFavorite(_ favorite: FavoriteFolder) async {
@@ -281,6 +366,7 @@ final class ExplorerViewModel {
         await clearParserCaches()
         await refreshFolderContents()
         await refreshFolderTree()
+        refreshPromptSearchIfNeeded()
     }
 
     // MARK: - File Operations
@@ -484,6 +570,8 @@ final class ExplorerViewModel {
     }
 
     func clearSelection() {
+        promptEntryLoadTask?.cancel()
+        promptEntryLoadTask = nil
         selectedIndices = []
         selectedItemIndex = -1
         selectionAnchorIndex = nil
@@ -787,6 +875,238 @@ final class ExplorerViewModel {
         editingSmartFolder = nil
     }
 
+    // MARK: - Tags
+
+    func addTag(name: String, colorHex: String) {
+        let tag = FileTag(name: name, colorHex: colorHex)
+        TagService.shared.addTag(tag)
+        allTags = TagService.shared.loadTags()
+    }
+
+    func removeTag(id: UUID) {
+        TagService.shared.removeTag(id: id)
+        allTags = TagService.shared.loadTags()
+        tagAssignments = TagService.shared.loadAssignments()
+        if filterByTagID == id { filterByTagID = nil }
+    }
+
+    func updateTag(_ tag: FileTag) {
+        TagService.shared.updateTag(tag)
+        allTags = TagService.shared.loadTags()
+    }
+
+    func toggleTagForFile(_ tagID: UUID, path: String) {
+        TagService.shared.toggleTag(tagID, forPath: path)
+        tagAssignments = TagService.shared.loadAssignments()
+    }
+
+    func toggleTagForSelectedFiles(_ tagID: UUID) {
+        for path in selectedPaths {
+            TagService.shared.toggleTag(tagID, forPath: path)
+        }
+        tagAssignments = TagService.shared.loadAssignments()
+    }
+
+    func tagsForFile(at path: String) -> [FileTag] {
+        let tagIDs = tagAssignments[path] ?? []
+        let idSet = Set(tagIDs)
+        return allTags.filter { idSet.contains($0.id) }
+    }
+
+    func fileHasTag(_ tagID: UUID, path: String) -> Bool {
+        tagAssignments[path]?.contains(tagID) ?? false
+    }
+
+    // MARK: - Favorites / Pinned Items
+
+    func isFavorite(path: String) -> Bool {
+        favoritePaths.contains(path)
+    }
+
+    func toggleFavorite(path: String) {
+        if favoritePaths.contains(path) {
+            favoritePaths.remove(path)
+        } else {
+            favoritePaths.insert(path)
+        }
+        FavoritesService.shared.saveFavorites(favoritePaths)
+    }
+
+    func toggleFavoriteForSelectedFiles() {
+        for path in selectedPaths {
+            toggleFavorite(path: path)
+        }
+    }
+
+    // MARK: - Prompt Content Search
+
+    func updateContentSearch() {
+        contentSearchTask?.cancel()
+
+        guard !searchQuery.isEmpty, searchMode != .filename else {
+            if !contentSearchMatches.isEmpty {
+                contentSearchMatches = []
+            }
+            return
+        }
+
+        let query = searchQuery
+        let mode = searchMode
+        let selectedFolderPath = selectedFolderPath?.path
+
+        // Debounce prompt search so rapid typing or mode changes do not pile up parse work.
+        contentSearchTask = Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+
+            let indexCount = await PromptIndexService.shared.count
+            if indexCount == 0, !self.isIndexingPrompts {
+                await self.buildPromptIndex()
+            }
+
+            guard !Task.isCancelled else { return }
+            let matches = await PromptIndexService.shared.search(query: query)
+            guard !Task.isCancelled else { return }
+
+            guard self.searchQuery == query,
+                  self.searchMode == mode,
+                  self.selectedFolderPath?.path == selectedFolderPath
+            else {
+                return
+            }
+
+            if matches != self.contentSearchMatches {
+                self.contentSearchMatches = matches
+            }
+        }
+    }
+
+    /// Build the prompt index for all parseable files in the current folder.
+    /// Runs parsing off the main actor to avoid blocking UI.
+    private func buildPromptIndex() async {
+        isIndexingPrompts = true
+        defer { isIndexingPrompts = false }
+
+        await PromptIndexService.shared.clearIndex()
+
+        // Capture the file list on main actor, then parse off main
+        let items = folderContents.filter { !$0.isDirectory }
+
+        for item in items {
+            guard !Task.isCancelled else { return }
+
+            // Parse off main actor via the existing actor-isolated parsers
+            let prompt: String? = await { () async -> String? in
+                if FileHelpers.isPlibFile(item.name) {
+                    return await PlibParser.shared.parse(at: item.url)?.prompt
+                } else if FileHelpers.isAoeFile(item.name) {
+                    if let entry = await AoeParser.shared.parse(at: item.url) {
+                        return entry.prompt
+                    }
+                    return nil
+                } else if FileHelpers.isImageFile(item.name) {
+                    let meta = await ImageMetadataParser.shared.parse(at: item.url)
+                    return meta.prompt.isEmpty ? nil : meta.prompt
+                }
+                return nil
+            }()
+
+            guard !Task.isCancelled else { return }
+            if let prompt, !prompt.isEmpty {
+                await PromptIndexService.shared.index(path: item.path, prompt: prompt)
+            }
+        }
+    }
+
+    func persistSearchMode() {
+        settings.searchMode = searchMode.rawValue
+    }
+
+    // MARK: - Preview Panel Toggle
+
+    func togglePreviewPane() {
+        previewPaneCollapsed.toggle()
+        settings.previewPaneCollapsed = previewPaneCollapsed
+    }
+
+    // MARK: - Prompt Diff
+
+    func openPromptDiff() {
+        let items = Array(selectedItems.prefix(2))
+        guard items.count == 2 else {
+            showToast("Select two files to compare prompts", type: .info)
+            return
+        }
+
+        Task {
+            async let entryA = promptEntry(for: items[0])
+            async let entryB = promptEntry(for: items[1])
+
+            guard let a = await entryA, let b = await entryB else {
+                showToast("Unable to load both files for comparison", type: .error)
+                return
+            }
+
+            guard !a.prompt.isEmpty || !b.prompt.isEmpty else {
+                showToast("Neither file contains prompt text", type: .info)
+                return
+            }
+
+            promptDiffSession = PromptDiffSession(
+                sourceA: a, nameA: items[0].name,
+                sourceB: b, nameB: items[1].name
+            )
+        }
+    }
+
+    // MARK: - Batch Metadata Editing
+
+    func openBatchMetadataEditor() {
+        let imageItems = selectedItems.filter { item in
+            !item.isDirectory && isEmbeddableImageFile(item.name)
+        }
+        guard !imageItems.isEmpty else {
+            showToast("Select PNG or JPEG files to batch edit metadata", type: .info)
+            return
+        }
+        batchMetadataEditorOpen = true
+    }
+
+    func isEmbeddableImageFile(_ name: String) -> Bool {
+        let ext = URL(fileURLWithPath: name).pathExtension.lowercased()
+        return ext == "png" || ext == "jpg" || ext == "jpeg"
+    }
+
+    var selectedEmbeddableImages: [FileEntry] {
+        selectedItems.filter { !$0.isDirectory && isEmbeddableImageFile($0.name) }
+    }
+
+    // MARK: - Metadata Editing
+
+    func openMetadataEditor(for path: String) {
+        metadataEditorPath = path
+    }
+
+    /// Called after metadata is successfully embedded into an image.
+    /// Clears caches and reloads the entry so the UI reflects the new metadata.
+    func didEmbedMetadata(at path: String) {
+        Task { await ImageMetadataParser.shared.clearCache() }
+        ThumbnailService.shared.clearCache()
+
+        showToast("Metadata embedded", type: .success)
+        metadataEditorPath = nil
+
+        // Reload the selected entry to pick up new metadata
+        if let index = selectedItemIndex as Int?,
+           index >= 0 && index < processedFolderContents.count,
+           processedFolderContents[index].path == path
+        {
+            loadPromptEntry(for: processedFolderContents[index])
+        }
+    }
+
     // MARK: - Toast
 
     func showToast(_ message: String, type: ToastType) {
@@ -842,22 +1162,33 @@ final class ExplorerViewModel {
     }
 
     private func loadPromptEntry(for item: FileEntry) {
+        promptEntryLoadTask?.cancel()
+
         guard !item.isDirectory else {
             selectedPromptEntry = nil
             return
         }
 
         let expectedPath = item.path
-        Task {
-            let entry = await promptEntry(for: item)
+        selectedPromptEntry = nil
 
-            await MainActor.run {
-                let selectedPath =
-                    self.selectedItemIndex >= 0 && self.selectedItemIndex < self.processedFolderContents.count
-                    ? self.processedFolderContents[self.selectedItemIndex].path
-                    : nil
-                guard selectedPath == expectedPath else { return }
-                self.selectedPromptEntry = entry
+        promptEntryLoadTask = Task(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+
+            let entry = await self.promptEntry(for: item)
+            guard !Task.isCancelled else { return }
+
+            let selectedPath =
+                self.selectedItemIndex >= 0 && self.selectedItemIndex < self.processedFolderContents.count
+                ? self.processedFolderContents[self.selectedItemIndex].path
+                : nil
+            guard selectedPath == expectedPath else { return }
+
+            self.selectedPromptEntry = entry
+
+            // Index prompt content in background for content search.
+            if let entry, !entry.prompt.isEmpty, !Task.isCancelled {
+                await PromptIndexService.shared.index(path: expectedPath, prompt: entry.prompt)
             }
         }
     }
@@ -865,32 +1196,40 @@ final class ExplorerViewModel {
     private func promptEntry(for item: FileEntry) async -> PromptEntry? {
         guard !item.isDirectory else { return nil }
 
-        let metadata = FileSystemService.getMetadata(for: item.url)
-
         if FileHelpers.isPlibFile(item.name) {
+            async let metadata = FileSystemService.getMetadataAsync(for: item.url)
             guard var entry = await PlibParser.shared.parse(at: item.url) else { return nil }
-            entry.fileMetadata = metadata
+            guard !Task.isCancelled else { return nil }
+            entry.fileMetadata = await metadata
             return entry
         }
 
         if FileHelpers.isAoeFile(item.name) {
+            async let metadata = FileSystemService.getMetadataAsync(for: item.url)
             guard var entry = await AoeParser.shared.parse(at: item.url) else { return nil }
-            entry.fileMetadata = metadata
+            guard !Task.isCancelled else { return nil }
+            entry.fileMetadata = await metadata
             return entry
         }
 
-        if FileHelpers.isImageFile(item.name),
-           let image = await ThumbnailService.shared.previewImage(for: item.url)
-        {
-            let imageMetadata = await ImageMetadataParser.shared.parse(at: item.url)
+        if FileHelpers.isImageFile(item.name) {
+            async let metadata = FileSystemService.getMetadataAsync(for: item.url)
+            async let image = ThumbnailService.shared.previewImage(for: item.url)
+            async let imageMetadata = ImageMetadataParser.shared.parse(at: item.url)
+
+            guard let image = await image else { return nil }
+            guard !Task.isCancelled else { return nil }
+
+            let fileMetadata = await metadata
+            let parsedMetadata = await imageMetadata
 
             return PromptEntry(
-                prompt: imageMetadata.prompt,
-                blindPrompt: imageMetadata.negativePrompt,
+                prompt: parsedMetadata.prompt,
+                blindPrompt: parsedMetadata.negativePrompt,
                 generationInfo: GenerationInfo(
-                    aspectRatio: aspectRatio(for: metadata),
-                    model: imageMetadata.model ?? "N/A",
-                    timestamp: imageMetadata.timestamp ?? "",
+                    aspectRatio: aspectRatio(for: fileMetadata),
+                    model: parsedMetadata.model ?? "N/A",
+                    timestamp: parsedMetadata.timestamp ?? "",
                     numberOfImages: 1
                 ),
                 images: [image],
@@ -898,8 +1237,58 @@ final class ExplorerViewModel {
                 rawImages: [item.path],
                 rawReferenceImages: [],
                 sourcePath: item.path,
-                embeddedMetadata: imageMetadata.fields,
-                fileMetadata: metadata
+                embeddedMetadata: parsedMetadata.fields,
+                fileMetadata: fileMetadata
+            )
+        }
+
+        if FileHelpers.isVideoFile(item.name) {
+            let fileMetadata = await FileSystemService.getMetadataAsync(for: item.url)
+
+            return PromptEntry(
+                prompt: "",
+                blindPrompt: nil,
+                hint: nil,
+                generationInfo: GenerationInfo(
+                    aspectRatio: aspectRatio(for: fileMetadata),
+                    model: "N/A",
+                    timestamp: "",
+                    numberOfImages: 0
+                ),
+                images: [],
+                referenceImages: [],
+                rawImages: [],
+                rawReferenceImages: [],
+                sourcePath: item.path,
+                videoURL: item.url,
+                analysis: nil,
+                embeddedMetadata: [],
+                fileMetadata: fileMetadata
+            )
+        }
+
+        if FileHelpers.isAudioFile(item.name) {
+            let fileMetadata = await FileSystemService.getMetadataAsync(for: item.url)
+
+            return PromptEntry(
+                prompt: "",
+                blindPrompt: nil,
+                hint: nil,
+                generationInfo: GenerationInfo(
+                    aspectRatio: .notAvailable,
+                    model: "N/A",
+                    timestamp: "",
+                    numberOfImages: 0
+                ),
+                images: [],
+                referenceImages: [],
+                rawImages: [],
+                rawReferenceImages: [],
+                sourcePath: item.path,
+                audioURL: item.url,
+                analysis: nil,
+                embeddedMetadata: [],
+                fileMetadata: fileMetadata
             )
         }
 
@@ -935,6 +1324,30 @@ final class ExplorerViewModel {
         await PlibParser.shared.clearCache()
         await AoeParser.shared.clearCache()
         await ImageMetadataParser.shared.clearCache()
+        await PromptIndexService.shared.clearIndex()
+    }
+
+    private func refreshPromptSearchIfNeeded() {
+        contentSearchTask?.cancel()
+
+        guard !searchQuery.isEmpty, searchMode != .filename else {
+            if !contentSearchMatches.isEmpty {
+                contentSearchMatches = []
+            }
+            return
+        }
+
+        updateContentSearch()
+    }
+
+    private func invalidateProcessedFolderContents() {
+        processedFolderContentsRevision &+= 1
+    }
+
+    private func taggedPaths(for tagID: UUID) -> Set<String> {
+        Set(tagAssignments.compactMap { path, assignedTagIDs in
+            assignedTagIDs.contains(tagID) ? path : nil
+        })
     }
 
     private func moveItems(_ urls: [URL], to destinationDir: URL) async {
@@ -1400,4 +1813,34 @@ struct EventModifiers: OptionSet {
     let rawValue: Int
     static let shift = EventModifiers(rawValue: 1 << 0)
     static let command = EventModifiers(rawValue: 1 << 1)
+}
+
+enum SearchMode: String, CaseIterable {
+    case filename
+    case prompt
+    case all
+
+    var displayName: String {
+        switch self {
+        case .filename: return "Filename"
+        case .prompt: return "Prompt"
+        case .all: return "All"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .filename: return "doc.text"
+        case .prompt: return "text.quote"
+        case .all: return "magnifyingglass"
+        }
+    }
+}
+
+struct PromptDiffSession: Identifiable {
+    let id = UUID()
+    let sourceA: PromptEntry
+    let nameA: String
+    let sourceB: PromptEntry
+    let nameB: String
 }

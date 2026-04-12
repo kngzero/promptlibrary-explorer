@@ -44,6 +44,13 @@ struct MainContentView: View {
                 vm.editingSmartFolder = nil
             }
         }
+        .sheet(item: $vm.promptDiffSession) { session in
+            PromptDiffView(session: session)
+        }
+        .sheet(isPresented: $vm.batchMetadataEditorOpen) {
+            BatchMetadataEditorView()
+                .environment(vm)
+        }
         .alert(
             vm.deleteConfirmationRequest?.title ?? "Delete Permanently?",
             isPresented: Binding(
@@ -110,6 +117,24 @@ struct MainContentView: View {
                             withAnimation { vm.toastMessage = nil }
                         }
                     }
+            }
+        }
+        .overlay {
+            if vm.commandPaletteOpen {
+                // Dimmed backdrop
+                Color.black.opacity(0.35)
+                    .ignoresSafeArea()
+                    .onTapGesture { vm.commandPaletteOpen = false }
+                    .zIndex(250)
+
+                VStack {
+                    Spacer().frame(height: 80)
+                    CommandPaletteView()
+                        .environment(vm)
+                    Spacer()
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+                .zIndex(260)
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -244,6 +269,19 @@ struct MainContentView: View {
                 Task { await vm.redoLastFolderAction() }
             } else {
                 Task { await vm.undoLastFolderAction() }
+            }
+            return true
+
+        case KeyCode.k.rawValue where event.modifierFlags.contains(.command):
+            withAnimation(.easeOut(duration: 0.15)) {
+                vm.commandPaletteOpen.toggle()
+            }
+            return true
+
+        case KeyCode.d.rawValue where event.modifierFlags.contains(.command):
+            // Cmd+D -> Compare prompts of two selected items
+            if vm.selectedIndices.count == 2 {
+                vm.openPromptDiff()
             }
             return true
 

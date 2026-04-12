@@ -73,7 +73,10 @@ struct ContentBrowserView: View {
                                         .contextMenu {
                                             contextMenuItems(for: item)
                                         }
-                                        .draggable(item.url) {
+                                        .onDrag {
+                                            // Support dragging files out to Finder and other apps
+                                            NSItemProvider(object: item.url as NSURL)
+                                        } preview: {
                                             Label(item.name, systemImage: item.isDirectory ? "folder" : "doc")
                                         }
                                 }
@@ -172,7 +175,7 @@ struct ContentBrowserView: View {
             .disabled(vm.rating(for: item.path) == 0)
         }
 
-        if !item.isDirectory, FileHelpers.isImageFile(item.name) {
+        if !item.isDirectory, (FileHelpers.isImageFile(item.name) || FileHelpers.isVideoFile(item.name)) {
             let apps = FileSystemService.applicationsForFile(url: item.url)
             if !apps.isEmpty {
                 Menu("Open In...") {
@@ -182,6 +185,32 @@ struct ContentBrowserView: View {
                         }
                     }
                 }
+            }
+        }
+
+        Divider()
+
+        // Favorite / Pin
+        Button(vm.isFavorite(path: item.path) ? "Unpin" : "Pin") {
+            vm.toggleFavorite(path: item.path)
+        }
+
+        // Tags submenu
+        Menu("Tags") {
+            TagAssignmentMenu(paths: contextMenuTargetItems(for: item).map(\.path))
+        }
+
+        // Compare prompts (when 2 selected)
+        if vm.selectedIndices.count == 2 {
+            Button("Compare Prompts") {
+                vm.openPromptDiff()
+            }
+        }
+
+        // Batch metadata
+        if contextMenuTargetItems(for: item).contains(where: { vm.isEmbeddableImageFile($0.name) }) && vm.selectedIndices.count > 1 {
+            Button("Batch Edit Metadata") {
+                vm.openBatchMetadataEditor()
             }
         }
 
@@ -300,20 +329,76 @@ struct EmptyContentStateView: View {
 struct ContentStatusBarView: View {
     @Environment(ExplorerViewModel.self) private var vm
 
+    /// Cached stats — recomputed only when folderContents changes, not on every render.
+    @State private var stats = FolderStats()
+
     var body: some View {
         HStack(spacing: 10) {
             Text(itemCountLabel)
                 .font(.appCaption)
                 .foregroundStyle(Color.appPrimaryText)
 
-            Divider()
-                .frame(height: 10)
+            Divider().frame(height: 10)
+
+            if stats.promptCount > 0 {
+                statusBadge(icon: "text.quote", value: "\(stats.promptCount)", color: .badgePlib)
+                Divider().frame(height: 10)
+            }
+
+            if stats.imageCount > 0 {
+                statusBadge(icon: "photo", value: "\(stats.imageCount)", color: .badgeImage)
+                Divider().frame(height: 10)
+            }
+
+            if stats.videoCount > 0 {
+                statusBadge(icon: "film", value: "\(stats.videoCount)", color: .badgeVideo)
+                Divider().frame(height: 10)
+            }
+
+            if stats.audioCount > 0 {
+                statusBadge(icon: "waveform", value: "\(stats.audioCount)", color: .badgeAudio)
+                Divider().frame(height: 10)
+            }
+
+            if stats.folderCount > 0 {
+                statusBadge(icon: "folder", value: "\(stats.folderCount)", color: .appAccent)
+                Divider().frame(height: 10)
+            }
 
             Text(hiddenCountLabel)
                 .font(.appCaption)
                 .foregroundStyle(Color.appMuted)
 
             Spacer(minLength: 0)
+
+            // Active tag filter indicator
+            if let tagID = vm.filterByTagID,
+               let tag = vm.allTags.first(where: { $0.id == tagID }) {
+                HStack(spacing: 4) {
+                    Circle().fill(tag.color).frame(width: 6, height: 6)
+                    Text(tag.name)
+                        .font(.system(size: 9))
+                        .foregroundStyle(Color.appMuted)
+                    Button {
+                        vm.filterByTagID = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(Color.appMuted)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if vm.searchMode != .filename {
+                Text("Search: \(vm.searchMode.displayName)")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Color.appAccent)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.appAccent.opacity(0.12))
+                    .cornerRadius(4)
+            }
         }
         .padding(.horizontal, 12)
         .frame(height: LayoutMetrics.panelHeaderHeight)
@@ -323,6 +408,29 @@ struct ContentStatusBarView: View {
                 .fill(Color.appBorder)
                 .frame(height: 1)
         }
+        .onChange(of: vm.folderContents.count) { _, _ in
+            recomputeStats()
+        }
+        .onAppear { recomputeStats() }
+    }
+
+    private func recomputeStats() {
+        let contents = vm.folderContents
+        var s = FolderStats()
+        for item in contents {
+            if item.isDirectory {
+                s.folderCount += 1
+            } else if FileHelpers.isPromptSnapshotFile(item.name) {
+                s.promptCount += 1
+            } else if FileHelpers.isImageFile(item.name) {
+                s.imageCount += 1
+            } else if FileHelpers.isVideoFile(item.name) {
+                s.videoCount += 1
+            } else if FileHelpers.isAudioFile(item.name) {
+                s.audioCount += 1
+            }
+        }
+        stats = s
     }
 
     private var itemCountLabel: String {
@@ -334,6 +442,26 @@ struct ContentStatusBarView: View {
         let count = vm.hiddenItemCount
         return count == 1 ? "1 hidden" : "\(count) hidden"
     }
+
+    @ViewBuilder
+    private func statusBadge(icon: String, value: String, color: Color) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 9))
+                .foregroundStyle(color)
+            Text(value)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Color.appMuted)
+        }
+    }
+}
+
+private struct FolderStats {
+    var promptCount = 0
+    var imageCount = 0
+    var videoCount = 0
+    var audioCount = 0
+    var folderCount = 0
 }
 
 private struct ExplorerItemView: View {
@@ -372,6 +500,18 @@ private struct ExplorerItemView: View {
             return .plib
         } else if name.hasSuffix(".aoe") {
             return .aoe
+        } else if name.hasSuffix(".png") {
+            return .png
+        } else if name.hasSuffix(".jpg") || name.hasSuffix(".jpeg") {
+            return .jpg
+        } else if name.hasSuffix(".webp") {
+            return .webp
+        } else if name.hasSuffix(".gif") {
+            return .gif
+        } else if FileHelpers.isVideoFile(name) {
+            return .video
+        } else if FileHelpers.isAudioFile(name) {
+            return .audio
         } else if FileHelpers.isImageFile(name) {
             return .image
         } else {
@@ -476,6 +616,12 @@ private struct ExplorerItemView: View {
                         .offset(x: 4, y: 4)
                         .allowsHitTesting(false)
                 }
+                .overlay(alignment: .topLeading) {
+                    // Pin badge — only shown when pinned (uses lightweight check)
+                    FavoritePinBadge(path: item.path)
+                        .offset(x: 4, y: -6)
+                        .allowsHitTesting(false)
+                }
 
                 if let badgeKind {
                     PreviewBadgeView(kind: badgeKind, side: badgeSide)
@@ -538,6 +684,8 @@ private struct ExplorerItemView: View {
         let loaded: NSImage?
         if FileHelpers.isImageFile(item.name) {
             loaded = await ThumbnailService.shared.thumbnail(for: item.url, size: size * 2)
+        } else if FileHelpers.isVideoFile(item.name) {
+            loaded = await ThumbnailService.shared.thumbnail(for: item.url, size: size * 2)
         } else if FileHelpers.isPlibFile(item.name) {
             if let entry = await PlibParser.shared.parse(at: item.url) {
                 loaded = entry.images.first
@@ -557,6 +705,8 @@ private struct ExplorerItemView: View {
     private func iconForFile(_ name: String) -> String {
         if FileHelpers.isPlibFile(name) { return "doc.text" }
         if FileHelpers.isAoeFile(name) { return "doc.richtext" }
+        if FileHelpers.isVideoFile(name) { return "film" }
+        if FileHelpers.isAudioFile(name) { return "waveform" }
         if FileHelpers.isImageFile(name) { return "photo" }
         return "doc"
     }
@@ -599,9 +749,35 @@ private struct ExplorerItemView: View {
     }
 }
 
+/// Lightweight favorite pin badge that reads directly from the service,
+/// avoiding per-item @Observable tracking on the view model.
+private struct FavoritePinBadge: View {
+    let path: String
+    @State private var isPinned = false
+
+    var body: some View {
+        Group {
+            if isPinned {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.favoriteGold)
+            }
+        }
+        .onAppear {
+            isPinned = FavoritesService.shared.isFavorite(path: path)
+        }
+    }
+}
+
 private enum PreviewBadgeKind {
     case plib
     case aoe
+    case png
+    case jpg
+    case webp
+    case gif
+    case video
+    case audio
     case image
     case file
 }
@@ -612,12 +788,16 @@ private struct PreviewBadgeView: View {
 
     private var backgroundColor: Color {
         switch kind {
-        case .plib, .aoe:
-            return Color(red: 0xd9 / 255.0, green: 0x00 / 255.0, blue: 0xd9 / 255.0)
-        case .image:
-            return .segmentBrief
-        case .file:
-            return .appElevatedSurface
+        case .plib: return .badgePlib
+        case .aoe: return .badgeAoe
+        case .png: return .badgePng
+        case .jpg: return .badgeJpg
+        case .webp: return .badgeWebp
+        case .gif: return .badgeGif
+        case .video: return .badgeVideo
+        case .audio: return .badgeAudio
+        case .image: return .badgeImage
+        case .file: return .badgeFile
         }
     }
 
@@ -641,8 +821,14 @@ private struct PreviewBadgeView: View {
             PlibPreviewGlyph()
         case .aoe:
             AoePreviewGlyph()
-        case .image:
+        case .png, .jpg, .webp, .gif, .image:
             Image(systemName: "photo.fill")
+                .font(.system(size: side * 0.54, weight: .semibold))
+        case .video:
+            Image(systemName: "film.fill")
+                .font(.system(size: side * 0.54, weight: .semibold))
+        case .audio:
+            Image(systemName: "waveform")
                 .font(.system(size: side * 0.54, weight: .semibold))
         case .file:
             Image(systemName: "doc.fill")

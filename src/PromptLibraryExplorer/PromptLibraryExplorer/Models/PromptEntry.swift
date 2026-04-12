@@ -92,6 +92,8 @@ struct PromptEntry: Identifiable {
     var rawImages: [String]
     var rawReferenceImages: [String]
     var sourcePath: String?
+    var videoURL: URL?
+    var audioURL: URL?
     var analysis: PromptAnalysis?
     var embeddedMetadata: [PromptMetadataField] = []
     var fileMetadata: FileMetadata?

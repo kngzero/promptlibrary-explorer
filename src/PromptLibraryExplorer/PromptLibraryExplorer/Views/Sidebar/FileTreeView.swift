@@ -19,6 +19,9 @@ struct FileTreeView: View {
                 // Smart Folders
                 SmartFolderSidebarView(smartFolders: vm.smartFolders)
 
+                // Tags
+                TagFilterSidebarView()
+
                 // Folder Tree
                 if vm.explorerRootPath != nil {
                     Section {

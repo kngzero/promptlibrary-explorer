@@ -16,6 +16,8 @@ final class SettingsStore: ObservableObject {
     @AppStorage("appearanceMode") var appearanceMode: String = AppAppearanceMode.dark.rawValue
 
     @AppStorage("filterMinRating") var filterMinRating: Int = 0
+    @AppStorage("previewPaneCollapsed") var previewPaneCollapsed: Bool = false
+    @AppStorage("searchMode") var searchMode: String = "filename"
 
     private static let customOrderKey = "promptlibrary.customSortOrder"
     private static let ratingsKey = "promptlibrary.ratings"

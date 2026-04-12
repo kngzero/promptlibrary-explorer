@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 
 enum FileSystemService {
@@ -122,7 +123,7 @@ enum FileSystemService {
 
     // MARK: - File Metadata
 
-    /// Gets metadata for a file (name, type, dimensions for images, modified date).
+    /// Gets metadata for a file (name, type, dimensions for supported visual media, modified date).
     static func getMetadata(for url: URL) -> FileMetadata {
         let name = url.lastPathComponent
         let ext = url.pathExtension.lowercased()
@@ -134,9 +135,12 @@ enum FileSystemService {
 
         var width: Int?
         var height: Int?
+        var duration: TimeInterval?
 
         if FileHelpers.isImageFile(name) {
             (width, height) = imageDimensions(at: url)
+        } else if FileHelpers.isVideoFile(name) {
+            (width, height, duration) = videoMetadata(at: url)
         }
 
         return FileMetadata(
@@ -144,9 +148,19 @@ enum FileSystemService {
             fileType: fileType,
             width: width,
             height: height,
+            duration: duration,
             modifiedDate: modifiedDate,
             fileSize: fileSize
         )
+    }
+
+    /// Resolves file metadata off the main thread so selection stays responsive.
+    static func getMetadataAsync(for url: URL) async -> FileMetadata {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: getMetadata(for: url))
+            }
+        }
     }
 
     /// Reads image dimensions without loading the full image into memory.
@@ -160,6 +174,24 @@ enum FileSystemService {
         let w = properties[kCGImagePropertyPixelWidth] as? Int
         let h = properties[kCGImagePropertyPixelHeight] as? Int
         return (w, h)
+    }
+
+    static func videoMetadata(at url: URL) -> (width: Int?, height: Int?, duration: TimeInterval?) {
+        let asset = AVURLAsset(url: url)
+
+        var width: Int?
+        var height: Int?
+
+        if let track = asset.tracks(withMediaType: .video).first {
+            let transformedSize = track.naturalSize.applying(track.preferredTransform)
+            width = Int(abs(transformedSize.width).rounded())
+            height = Int(abs(transformedSize.height).rounded())
+        }
+
+        let durationSeconds = CMTimeGetSeconds(asset.duration)
+        let duration = durationSeconds.isFinite && !durationSeconds.isNaN ? durationSeconds : nil
+
+        return (width, height, duration)
     }
 
     // MARK: - Favorite Directories
