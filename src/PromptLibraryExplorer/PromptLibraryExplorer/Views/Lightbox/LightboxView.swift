@@ -2,7 +2,7 @@ import AVKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Full-screen lightbox overlay matching the Tauri version's layout:
+/// Full-screen lightbox overlay:
 /// - Left: image filling edge-to-edge on a black background
 /// - Right: scrollable details sidebar with card-style sections
 /// - Overlaid on the main window (not a sheet)
@@ -1025,7 +1025,7 @@ struct LightboxView: View {
     }
 }
 
-// MARK: - Analysis Card (matches Tauri style: icon + colored label + copy button)
+// MARK: - Analysis Card (icon + colored label + copy button)
 
 struct LightboxAnalysisCard: View {
     let label: String
