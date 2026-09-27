@@ -17,7 +17,7 @@ struct StarRatingView: View {
         HStack(spacing: size * 0.15) {
             ForEach(1...maxRating, id: \.self) { star in
                 Image(systemName: star <= rating ? "star.fill" : "star")
-                    .font(.system(size: size, weight: .medium))
+                    .font(.appIcon(size, weight: .medium))
                     .foregroundStyle(star <= rating ? Color.appAccent : Color.appMuted.opacity(0.4))
                     .onTapGesture {
                         if let onRate {
@@ -25,6 +25,29 @@ struct StarRatingView: View {
                         }
                     }
             }
+        }
+        // One adjustable element for VoiceOver instead of five unlabeled glyphs.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Rating")
+        .accessibilityValue(accessibilityValueText)
+        .accessibilityAdjustableAction { direction in
+            guard let onRate else { return }
+            switch direction {
+            case .increment:
+                if rating < maxRating { onRate(rating + 1) }
+            case .decrement:
+                if rating > 0 { onRate(rating - 1) }
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    private var accessibilityValueText: String {
+        switch rating {
+        case 0: return "No stars"
+        case 1: return "1 star"
+        default: return "\(rating) stars"
         }
     }
 }
@@ -35,19 +58,21 @@ struct CompactStarBadge: View {
 
     var body: some View {
         if rating > 0 {
-            HStack(spacing: 2) {
+            HStack(spacing: AppSpacing.xxs) {
                 Image(systemName: "star.fill")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.appIcon(9, weight: .bold))
                 Text("\(rating)")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.appIcon(9, weight: .bold))
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 5)
-            .padding(.vertical, 2)
+            .padding(.vertical, AppSpacing.xxs)
             .background(
                 Capsule()
                     .fill(Color.appAccent.opacity(0.85))
             )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(rating == 1 ? "Rated 1 star" : "Rated \(rating) stars")
         }
     }
 }

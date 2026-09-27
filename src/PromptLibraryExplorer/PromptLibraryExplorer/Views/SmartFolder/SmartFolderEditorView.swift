@@ -5,6 +5,7 @@ struct SmartFolderEditorView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State var folder: SmartFolder
+    @State private var isLoadingPromptData = false
     let isNew: Bool
     var onSave: (SmartFolder) -> Void
 
@@ -20,12 +21,12 @@ struct SmartFolderEditorView: View {
             // Header
             HStack {
                 Text(isNew ? "New Smart Folder" : "Edit Smart Folder")
-                    .font(.system(size: 18, weight: .bold))
+                    .font(.appIcon(18, weight: .bold))
                     .foregroundStyle(Color.appPrimaryText)
                 Spacer()
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 16)
+            .padding(.vertical, AppSpacing.xl)
             .background(Color.appBackground)
             .overlay(alignment: .bottom) {
                 Rectangle().fill(Color.appBorder).frame(height: 1)
@@ -34,57 +35,103 @@ struct SmartFolderEditorView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     // Name
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: AppSpacing.sm) {
                         Text("Name")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.appHeadline)
                             .foregroundStyle(Color.appMuted)
                         TextField("Smart Folder Name", text: $folder.name)
                             .textFieldStyle(.roundedBorder)
                     }
 
                     // Search Query
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("File Name Contains")
-                            .font(.system(size: 13, weight: .semibold))
+                    VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                        Text("Name or Prompt Contains")
+                            .font(.appHeadline)
                             .foregroundStyle(Color.appMuted)
                         TextField("Search query...", text: $folder.criteria.searchQuery)
                             .textFieldStyle(.roundedBorder)
                     }
 
+                    // Match mode
+                    VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                        Text("Match")
+                            .font(.appHeadline)
+                            .foregroundStyle(Color.appMuted)
+                        Picker("Match", selection: $folder.criteria.matchMode) {
+                            ForEach(SmartFolderMatchMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .accessibilityLabel("Match mode")
+                        Text(folder.criteria.matchMode == .all
+                             ? "Files must satisfy every rule below."
+                             : "Files matching at least one rule below are shown.")
+                            .font(.appCaption)
+                            .foregroundStyle(Color.appMuted)
+                    }
+
                     // File Types
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: AppSpacing.md) {
                         Text("File Types")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.appHeadline)
                             .foregroundStyle(Color.appMuted)
 
                         LazyVGrid(columns: [
                             GridItem(.flexible()),
                             GridItem(.flexible()),
                             GridItem(.flexible()),
-                        ], spacing: 8) {
+                        ], alignment: .leading, spacing: AppSpacing.md) {
                             ForEach(SmartFolderFileType.allCases, id: \.self) { fileType in
-                                Toggle(isOn: Binding(
-                                    get: { folder.criteria.fileTypes.contains(fileType) },
-                                    set: { isOn in
-                                        if isOn {
-                                            folder.criteria.fileTypes.insert(fileType)
-                                        } else {
-                                            folder.criteria.fileTypes.remove(fileType)
+                                EditorCheckbox(
+                                    title: fileType.displayName,
+                                    isOn: Binding(
+                                        get: { folder.criteria.fileTypes.contains(fileType) },
+                                        set: { isOn in
+                                            if isOn {
+                                                folder.criteria.fileTypes.insert(fileType)
+                                            } else {
+                                                folder.criteria.fileTypes.remove(fileType)
+                                            }
                                         }
-                                    }
-                                )) {
-                                    Text(fileType.displayName)
-                                        .font(.system(size: 12))
-                                }
-                                .toggleStyle(.checkbox)
+                                    )
+                                )
                             }
                         }
                     }
 
+                    // Tags
+                    if !vm.allTags.isEmpty {
+                        VStack(alignment: .leading, spacing: AppSpacing.md) {
+                            Text("Tagged With Any Of")
+                                .font(.appHeadline)
+                                .foregroundStyle(Color.appMuted)
+                            TagChipFlow(spacing: AppSpacing.sm) {
+                                ForEach(vm.allTags) { tag in
+                                    tagChip(tag)
+                                }
+                            }
+                        }
+                    }
+
+                    // Prompt data
+                    VStack(alignment: .leading, spacing: AppSpacing.md) {
+                        Text("Prompt & Model")
+                            .font(.appHeadline)
+                            .foregroundStyle(Color.appMuted)
+                        TextField("Model name contains…", text: $folder.criteria.modelContains)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Model name contains")
+                        EditorCheckbox(title: "Has a prompt", isOn: $folder.criteria.requiresPrompt)
+                        EditorCheckbox(title: "Has a negative prompt", isOn: $folder.criteria.requiresNegativePrompt)
+                        EditorCheckbox(title: "Favorites only", isOn: $folder.criteria.favoritesOnly)
+                    }
+
                     // Minimum Rating
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: AppSpacing.sm) {
                         Text("Minimum Rating")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.appHeadline)
                             .foregroundStyle(Color.appMuted)
 
                         Picker("", selection: $folder.criteria.minRating) {
@@ -97,9 +144,9 @@ struct SmartFolderEditorView: View {
                     }
 
                     // Date Range
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: AppSpacing.sm) {
                         Text("Modified Date")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.appHeadline)
                             .foregroundStyle(Color.appMuted)
 
                         Picker("", selection: $folder.criteria.dateRange) {
@@ -114,7 +161,8 @@ struct SmartFolderEditorView: View {
             }
 
             // Footer
-            HStack {
+            HStack(spacing: AppSpacing.md) {
+                matchCountLabel
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -122,6 +170,7 @@ struct SmartFolderEditorView: View {
                     onSave(folder)
                     dismiss()
                 }
+                .buttonStyle(AppPrimaryButtonStyle(verticalPadding: AppSpacing.xs))
                 .keyboardShortcut(.defaultAction)
                 .disabled(folder.name.trimmingCharacters(in: .whitespaces).isEmpty || !folder.criteria.isActive)
             }
@@ -132,7 +181,148 @@ struct SmartFolderEditorView: View {
                 Rectangle().fill(Color.appBorder).frame(height: 1)
             }
         }
-        .frame(width: 480, height: 520)
+        .frame(width: 500, height: 640)
         .background(Color.appBackground)
+        .task(id: needsPromptData) {
+            guard needsPromptData else { return }
+            isLoadingPromptData = true
+            await vm.ensurePromptIndexForCurrentListing()
+            isLoadingPromptData = false
+        }
+    }
+
+    // MARK: - Live count
+
+    private var needsPromptData: Bool {
+        let c = folder.criteria
+        return !c.modelContains.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || c.requiresPrompt || c.requiresNegativePrompt
+            || !c.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var matchCount: Int? {
+        guard folder.criteria.isActive else { return nil }
+        let entries = vm.listingSourceContents
+        guard !entries.isEmpty else { return nil }
+        return SmartFolderService.filter(entries, criteria: folder.criteria, context: vm.smartFolderContext()).count
+    }
+
+    @ViewBuilder
+    private var matchCountLabel: some View {
+        if let matchCount {
+            HStack(spacing: AppSpacing.xs) {
+                if isLoadingPromptData {
+                    ProgressView().controlSize(.mini)
+                }
+                Text(matchCount == 1 ? "1 match in current folder" : "\(matchCount) matches in current folder")
+                    .font(.appCaption)
+                    .foregroundStyle(Color.appMuted)
+                    .monospacedDigit()
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    // MARK: - Tag chips
+
+    private func tagChip(_ tag: FileTag) -> some View {
+        let isOn = folder.criteria.tagIDs.contains(tag.id)
+        return Button {
+            if isOn {
+                folder.criteria.tagIDs.remove(tag.id)
+            } else {
+                folder.criteria.tagIDs.insert(tag.id)
+            }
+        } label: {
+            HStack(spacing: AppSpacing.xs) {
+                Circle()
+                    .fill(tag.color)
+                    .frame(width: 8, height: 8)
+                Text(tag.name)
+                    .font(.appCallout)
+                    .foregroundStyle(isOn ? Color.appPrimaryText : Color.appMuted)
+                    .lineLimit(1)
+                if isOn {
+                    Image(systemName: "checkmark")
+                        .font(.appIcon(9, weight: .bold))
+                        .foregroundStyle(Color.appAccent)
+                }
+            }
+            .padding(.horizontal, AppSpacing.md)
+            .padding(.vertical, AppSpacing.xs)
+            .background(
+                Capsule().fill(isOn ? Color.appSelected : Color.appSurface)
+            )
+            .overlay(
+                Capsule().strokeBorder(isOn ? Color.appAccent.opacity(0.6) : Color.appBorder, lineWidth: 1)
+            )
+        }
+        .buttonStyle(AppAdaptiveButtonStyle())
+        .accessibilityLabel("Tag \(tag.name)")
+        .accessibilityValue(isOn ? "Selected" : "Not selected")
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+}
+
+/// Checkbox drawn with the app accent (native checkboxes tint system blue).
+private struct EditorCheckbox: View {
+    let title: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            HStack(spacing: AppSpacing.sm) {
+                Image(systemName: isOn ? "checkmark.square.fill" : "square")
+                    .font(.appBody)
+                    .foregroundStyle(isOn ? Color.appAccent : Color.appMuted)
+                Text(title)
+                    .font(.appCallout)
+                    .foregroundStyle(Color.appPrimaryText)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn ? "On" : "Off")
+    }
+}
+
+/// Wrapping row layout for tag chips.
+private struct TagChipFlow: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, widest: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                y += rowHeight + spacing
+                x = 0
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            widest = max(widest, x - spacing)
+        }
+        return CGSize(width: proposal.width ?? widest, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, rowHeight: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                y += rowHeight + spacing
+                x = bounds.minX
+                rowHeight = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }

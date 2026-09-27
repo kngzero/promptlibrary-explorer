@@ -1,8 +1,60 @@
 import AppKit
 import SwiftUI
 
+extension Notification.Name {
+    /// Posted by File > Rename; the content browser starts an inline rename of
+    /// the primary selection.
+    static let beginRenameSelection = Notification.Name("beginRenameSelection")
+}
+
+/// Receives files and folders opened from Finder ("Open With", double-click
+/// on a registered type) or dropped on the Dock icon.
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+    /// Set once the window's view model exists; URLs that arrive earlier
+    /// (e.g. the app was launched by opening a file) are queued.
+    @MainActor weak var viewModel: ExplorerViewModel? {
+        didSet { flushPendingURLs() }
+    }
+    @MainActor private var pendingURLs: [URL] = []
+
+    @MainActor
+    func application(_ application: NSApplication, open urls: [URL]) {
+        pendingURLs.append(contentsOf: urls.filter(\.isFileURL))
+        flushPendingURLs()
+    }
+
+    /// Edit ▸ Select All (⌘A). The system menu item sends `selectAll:` down the
+    /// responder chain, so a focused text field still selects its own text; only
+    /// when nothing earlier in the chain handles it does it reach the app delegate
+    /// and select every item in the listing. (One owner: no key-monitor case.)
+    @MainActor @objc
+    func selectAll(_ sender: Any?) {
+        guard let viewModel, !viewModel.isModalBlockingCommands, !viewModel.lightboxOpen else { return }
+        viewModel.selectAllItems()
+    }
+
+    @MainActor
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(selectAll(_:)) else { return true }
+        guard let viewModel else { return false }
+        return !viewModel.isModalBlockingCommands
+            && !viewModel.lightboxOpen
+            && !viewModel.processedFolderContents.isEmpty
+    }
+
+    @MainActor
+    private func flushPendingURLs() {
+        guard let viewModel, !pendingURLs.isEmpty else { return }
+        let urls = pendingURLs
+        pendingURLs = []
+        NSApp.activate(ignoringOtherApps: true)
+        Task { await viewModel.openExternalURLs(urls) }
+    }
+}
+
 @main
 struct PromptLibraryExplorerApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var explorerVM = ExplorerViewModel()
 
     private let undoSelector = NSSelectorFromString("undo:")
@@ -17,43 +69,111 @@ struct PromptLibraryExplorerApp: App {
             MainContentView()
                 .environment(explorerVM)
                 .frame(minWidth: 900, minHeight: 600)
-                .preferredColorScheme(explorerVM.appearanceMode.colorScheme)
+                .preferredColorScheme(explorerVM.appearanceMode.preferredColorScheme)
+                .onAppear { appDelegate.viewModel = explorerVM }
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1280, height: 800)
         .commands {
+            // MARK: File
             CommandGroup(replacing: .newItem) {
-                Button("Open Folder...") {
+                Button("Open Folder…") {
                     Task { await explorerVM.openFolder() }
                 }
                 .keyboardShortcut("o", modifiers: .command)
+                .disabled(isBlocked)
 
                 Menu("Open Recent") {
-                    if explorerVM.recentFolders.isEmpty {
-                        Text("No Recent Folders")
-                            .foregroundStyle(.secondary)
-                    } else {
+                    recentFolderItems
+
+                    Divider()
+
+                    Menu("Remove from Recents") {
                         ForEach(explorerVM.recentFolders) { item in
                             Button(item.name) {
-                                Task { await explorerVM.openRecentFolder(item) }
+                                explorerVM.removeRecentFolder(item)
                             }
                         }
                     }
-
-                    Divider()
+                    .disabled(explorerVM.recentFolders.isEmpty)
 
                     Button("Clear Recents") {
                         explorerVM.clearRecentFolders()
                     }
                     .disabled(explorerVM.recentFolders.isEmpty)
                 }
+
+                Divider()
+
+                Button("New Folder") {
+                    run { explorerVM.isShowingNewFolderPrompt = true }
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(isBlocked || !explorerVM.canCreateFolder)
+
+                Button("Rename") {
+                    run { NotificationCenter.default.post(name: .beginRenameSelection, object: nil) }
+                }
+                .disabled(isBlocked || explorerVM.selectedIndices.count != 1)
+
+                Button("Batch Rename…") {
+                    run { explorerVM.batchRenameOpen = true }
+                }
+                .disabled(isBlocked || explorerVM.batchRenameTargets.isEmpty)
+
+                Divider()
+
+                Button("Move to Trash") {
+                    // A focused text field uses ⌘⌫ for "delete to line start";
+                    // the menu's key equivalent would otherwise steal it.
+                    if ModalKeyGuard.isTextInputFocused {
+                        NSApp.sendAction(#selector(NSText.deleteToBeginningOfLine(_:)), to: nil, from: nil)
+                        return
+                    }
+                    run(allowInLightbox: false) { explorerVM.trashSelection() }
+                }
+                .keyboardShortcut(.delete, modifiers: .command)
+                .disabled(isBlocked || !hasSelection)
+
+                Button("Reveal in Finder") {
+                    run { explorerVM.revealSelectionInFinder() }
+                }
+                .keyboardShortcut("r", modifiers: [.command, .option])
+                .disabled(isBlocked || (!hasSelection && explorerVM.selectedFolderPath == nil))
+
+                Divider()
+
+                Menu("Add to Collection") {
+                    if explorerVM.collections.isEmpty {
+                        Text("No Collections")
+                    } else {
+                        CollectionMenuItems(vm: explorerVM) { collection in
+                            run { explorerVM.addSelection(toCollection: collection.id) }
+                        }
+                    }
+                }
+                .disabled(isBlocked || explorerVM.selectedFileItems.isEmpty)
+
+                Button("New Collection from Selection") {
+                    run { explorerVM.createCollection(named: defaultCollectionName, withSelection: true) }
+                }
+                .disabled(isBlocked || explorerVM.selectedFileItems.isEmpty)
+
+                if explorerVM.isCollectionMode {
+                    Button("Remove from Collection") {
+                        run { explorerVM.removeSelectionFromActiveCollection() }
+                    }
+                    .disabled(isBlocked || !hasSelection)
+                }
             }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {
-                    explorerVM.settingsOpen = true
+                    explorerVM.openSettings()
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
+
+            // MARK: Edit
             CommandGroup(replacing: .undoRedo) {
                 Button(undoCommandTitle) {
                     performUndo()
@@ -67,6 +187,254 @@ struct PromptLibraryExplorerApp: App {
                 .keyboardShortcut("z", modifiers: [.command, .shift])
                 .disabled(!canRedo)
             }
+            CommandGroup(after: .pasteboard) {
+                Divider()
+
+                Button("Copy Prompt") {
+                    run { explorerVM.copyPromptOfSelection() }
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(isBlocked || explorerVM.selectedFileItems.isEmpty)
+
+                Menu("Copy Prompt As") {
+                    ForEach(PromptCopyFormat.allCases) { format in
+                        Button(format.title) {
+                            run { explorerVM.copySelection(as: format) }
+                        }
+                    }
+                }
+                .disabled(isBlocked || explorerVM.selectedFileItems.isEmpty)
+
+                Button("Copy Path") {
+                    run { explorerVM.copyPathsOfSelection() }
+                }
+                .keyboardShortcut("c", modifiers: [.command, .option])
+                .disabled(isBlocked || !hasSelection)
+            }
+            CommandGroup(replacing: .textEditing) {
+                Button("Find") {
+                    // Works from a focused text field too.
+                    run { NotificationCenter.default.post(name: .focusSearchField, object: nil) }
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                .disabled(isBlocked || explorerVM.explorerRootPath == nil)
+
+                Button("Find in Library…") {
+                    run { explorerVM.librarySearchOpen = true }
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .disabled(isBlocked || explorerVM.explorerRootPath == nil)
+
+                Button("Clear All Filters") {
+                    run { explorerVM.clearAllFilters() }
+                }
+                .disabled(isBlocked || !explorerVM.hasActiveFilters)
+            }
+
+            // MARK: View
+            CommandGroup(after: .sidebar) {
+                Toggle("as Grid", isOn: viewModeBinding(.grid))
+                    .keyboardShortcut("1", modifiers: .command)
+                    .disabled(isBlocked)
+
+                Toggle("as List", isOn: viewModeBinding(.list))
+                    .keyboardShortcut("2", modifiers: .command)
+                    .disabled(isBlocked)
+
+                Divider()
+
+                Picker("Group By", selection: Binding(
+                    get: { explorerVM.groupBy },
+                    set: { field in run { explorerVM.groupBy = field } }
+                )) {
+                    ForEach(GroupByField.allCases) { field in
+                        Text(field.title).tag(field)
+                    }
+                }
+                .disabled(isBlocked)
+
+                Menu("Sort By") {
+                    Picker("Sort By", selection: Binding(
+                        get: { explorerVM.sortConfig.field },
+                        set: { field in run { setSortField(field) } }
+                    )) {
+                        ForEach(SortField.allCases) { field in
+                            Text(field.title).tag(field)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+
+                    Divider()
+
+                    Picker("Direction", selection: Binding(
+                        get: { explorerVM.sortConfig.direction },
+                        set: { direction in
+                            run {
+                                explorerVM.sortConfig.direction = direction
+                                explorerVM.persistSortConfig()
+                            }
+                        }
+                    )) {
+                        ForEach(SortDirection.allCases, id: \.self) { direction in
+                            Text(direction.title).tag(direction)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                    .disabled(!explorerVM.sortConfig.field.supportsDirection)
+                }
+                .disabled(isBlocked)
+
+                Divider()
+            }
+            CommandGroup(after: .toolbar) {
+                Toggle("Status Bar", isOn: Binding(
+                    get: { explorerVM.showStatusBar },
+                    set: { newValue in
+                        explorerVM.showStatusBar = newValue
+                        explorerVM.persistStatusBarVisibility()
+                    }
+                ))
+
+                Button(explorerVM.previewPaneCollapsed ? "Show Preview Pane" : "Hide Preview Pane") {
+                    run { explorerVM.togglePreviewPane() }
+                }
+                .disabled(isBlocked)
+
+                Divider()
+
+                Button("Quick Look") {
+                    // Allowed while the Quick Look panel itself is key (⌘Y closes it).
+                    guard !explorerVM.isModalBlockingCommands, !explorerVM.lightboxOpen else { return }
+                    explorerVM.quickLookSelection()
+                }
+                .keyboardShortcut("y", modifiers: .command)
+                .disabled(explorerVM.isAnyModalOpen || explorerVM.lightboxOpen || !hasSelection)
+
+                Button("Compare Prompts") {
+                    run { explorerVM.openPromptDiff() }
+                }
+                .keyboardShortcut("d", modifiers: .command)
+                .disabled(isBlocked || explorerVM.selectedIndices.count != 2)
+
+                Button("Compare Selected .aoe Files") {
+                    run { Task { await explorerVM.openComparison() } }
+                }
+                .disabled(isBlocked || explorerVM.selectedAoeItems.count < 2 || explorerVM.isLoadingComparison)
+
+                Divider()
+
+                Button("Refresh") {
+                    run { Task { await explorerVM.refreshFolder() } }
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(isBlocked)
+
+                Button("Folder Statistics") {
+                    run { explorerVM.statisticsOpen = true }
+                }
+                .disabled(isBlocked || explorerVM.selectedFolderPath == nil)
+
+                Button("New Smart Folder...") {
+                    run {
+                        explorerVM.editingSmartFolder = nil
+                        explorerVM.showSmartFolderEditor = true
+                    }
+                }
+                .disabled(isBlocked)
+            }
+
+            // MARK: Go
+            CommandMenu("Go") {
+                Button("Back") {
+                    run { Task { await explorerVM.navigateBack() } }
+                }
+                .keyboardShortcut("[", modifiers: .command)
+                .disabled(isBlocked || !explorerVM.canNavigateBack)
+
+                Button("Forward") {
+                    run { Task { await explorerVM.navigateForward() } }
+                }
+                .keyboardShortcut("]", modifiers: .command)
+                .disabled(isBlocked || !explorerVM.canNavigateForward)
+
+                Button("Enclosing Folder") {
+                    // In a text field ⌘↑ moves to the start of the text.
+                    if ModalKeyGuard.isTextInputFocused {
+                        NSApp.sendAction(#selector(NSResponder.moveToBeginningOfDocument(_:)), to: nil, from: nil)
+                        return
+                    }
+                    run {
+                        if explorerVM.isCollectionMode {
+                            explorerVM.openCollection(nil)
+                        } else {
+                            Task { await explorerVM.navigateUpToParentFolder() }
+                        }
+                    }
+                }
+                .keyboardShortcut(.upArrow, modifiers: .command)
+                .disabled(isBlocked || explorerVM.selectedFolderPath == nil)
+
+                Divider()
+
+                Button("Command Palette") {
+                    run { NotificationCenter.default.post(name: .toggleCommandPalette, object: nil) }
+                }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(isBlocked || explorerVM.explorerRootPath == nil)
+
+                Divider()
+
+                Menu("Recent Folders") {
+                    recentFolderItems
+                }
+                .disabled(isBlocked)
+
+                Menu("Collections") {
+                    if explorerVM.collections.isEmpty {
+                        Text("No Collections")
+                    } else {
+                        CollectionMenuItems(vm: explorerVM, disabledID: explorerVM.activeCollectionID) { collection in
+                            run { explorerVM.openCollection(collection.id) }
+                        }
+                    }
+                    if explorerVM.isCollectionMode {
+                        Divider()
+                        Button("Close Collection") {
+                            run { explorerVM.openCollection(nil) }
+                        }
+                    }
+                }
+                .disabled(isBlocked)
+            }
+
+            // MARK: Library
+            CommandMenu("Library") {
+                Button("Find in Library…") {
+                    run { explorerVM.librarySearchOpen = true }
+                }
+                .disabled(isBlocked || explorerVM.explorerRootPath == nil)
+
+                Button("Find Similar Prompts…") {
+                    run { explorerVM.duplicatesOpen = true }
+                }
+                .disabled(isBlocked || explorerVM.explorerRootPath == nil)
+
+                Button("Prompt Snippets…") {
+                    run { explorerVM.snippetsOpen = true }
+                }
+                .disabled(isBlocked)
+
+                Divider()
+
+                Button(explorerVM.isLibraryIndexing ? "Indexing Library…" : "Reindex Library") {
+                    run { explorerVM.reindexLibrary() }
+                }
+                .disabled(isBlocked || explorerVM.explorerRootPath == nil || explorerVM.isLibraryIndexing)
+            }
+
+            // MARK: Help
             CommandGroup(replacing: .help) {
                 Button("PromptLibrary Explorer Help") {
                     explorerVM.helpOpen = true
@@ -78,37 +446,59 @@ struct PromptLibraryExplorerApp: App {
                     explorerVM.openDeveloperWebsite()
                 }
             }
-            CommandGroup(after: .toolbar) {
-                Toggle("Status Bar", isOn: Binding(
-                    get: { explorerVM.showStatusBar },
-                    set: { newValue in
-                        explorerVM.showStatusBar = newValue
-                        explorerVM.persistStatusBarVisibility()
-                    }
-                ))
+        }
+    }
 
-                Divider()
+    // MARK: - Command helpers
 
-                Button("Refresh") {
-                    Task { await explorerVM.refreshFolder() }
-                }
-                .keyboardShortcut("r", modifiers: .command)
+    /// Observable "a sheet/modal is up" state used to disable menu items.
+    private var isBlocked: Bool { explorerVM.isAnyModalOpen }
 
-                Button("Compare Selected .aoe Files") {
-                    Task { await explorerVM.openComparison() }
-                }
-                .disabled(explorerVM.selectedAoeItems.count < 2 || explorerVM.isLoadingComparison)
+    private var hasSelection: Bool { !explorerVM.selectedIndices.isEmpty }
 
-                Divider()
+    private var defaultCollectionName: String {
+        let existing = Set(explorerVM.collections.map(\.name))
+        var name = "New Collection"
+        var counter = 2
+        while existing.contains(name) {
+            name = "New Collection \(counter)"
+            counter += 1
+        }
+        return name
+    }
 
-                Button("Folder Statistics") {
-                    explorerVM.statisticsOpen = true
-                }
-                .disabled(explorerVM.selectedFolderPath == nil)
+    /// Runs a menu action unless something modal owns the window (menu key
+    /// equivalents still fire while a sheet is up).
+    private func run(allowInLightbox: Bool = true, _ action: () -> Void) {
+        guard !explorerVM.isModalBlockingCommands else { return }
+        if !allowInLightbox, explorerVM.lightboxOpen { return }
+        action()
+    }
 
-                Button("New Smart Folder...") {
-                    explorerVM.editingSmartFolder = nil
-                    explorerVM.showSmartFolderEditor = true
+    private func viewModeBinding(_ mode: BrowserViewMode) -> Binding<Bool> {
+        Binding(
+            get: { explorerVM.viewMode == mode },
+            set: { _ in run { explorerVM.viewMode = mode } }
+        )
+    }
+
+    private func setSortField(_ field: SortField) {
+        if field == .custom {
+            explorerVM.ensureCustomSortForCurrentFolder()
+            return
+        }
+        explorerVM.sortConfig = SortConfig(field: field, direction: explorerVM.sortConfig.direction)
+        explorerVM.persistSortConfig()
+    }
+
+    @ViewBuilder
+    private var recentFolderItems: some View {
+        if explorerVM.recentFolders.isEmpty {
+            Text("No Recent Folders")
+        } else {
+            ForEach(explorerVM.recentFolders) { item in
+                Button(item.name) {
+                    run { Task { await explorerVM.openRecentFolder(item) } }
                 }
             }
         }

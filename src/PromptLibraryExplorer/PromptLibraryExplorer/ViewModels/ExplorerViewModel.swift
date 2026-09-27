@@ -3,19 +3,47 @@ import Foundation
 import Observation
 
 struct DeleteConfirmationRequest: Identifiable {
+    enum Kind {
+        case trash
+        case permanent
+    }
+
     let id = UUID()
+    let kind: Kind
     let urls: [URL]
     let names: [String]
 
     var title: String {
-        urls.count == 1 ? "Delete Permanently?" : "Delete \(urls.count) Items Permanently?"
+        switch kind {
+        case .trash:
+            return urls.count == 1 ? "Move to Trash?" : "Move \(urls.count) Items to Trash?"
+        case .permanent:
+            return urls.count == 1 ? "Delete Permanently?" : "Delete \(urls.count) Items Permanently?"
+        }
     }
 
     var message: String {
-        if names.count == 1, let name = names.first {
-            return "\"\(name)\" will be deleted immediately. This action cannot be undone."
+        let subject = names.count == 1 ? names.first.map { "\"\($0)\"" } : nil
+
+        switch kind {
+        case .trash:
+            if let subject {
+                return "\(subject) will be moved to the Trash. You can put it back from there or undo this action."
+            }
+            return "These \(urls.count) items will be moved to the Trash. You can put them back from there or undo this action."
+        case .permanent:
+            if let subject {
+                return "\(subject) will be deleted immediately. This action cannot be undone."
+            }
+            return "These \(urls.count) items will be deleted immediately. This action cannot be undone."
         }
-        return "These \(urls.count) items will be deleted immediately. This action cannot be undone."
+    }
+
+    var confirmButtonTitle: String {
+        switch kind {
+        case .trash: return "Move to Trash"
+        case .permanent: return "Delete"
+        }
     }
 }
 
@@ -24,14 +52,61 @@ private struct PathMoveRecord {
     let to: URL
 }
 
+/// Result of a batch move: what to undo, plus how many files moved, were
+/// skipped because the name was already taken, or failed.
+private struct MoveOutcome {
+    let historyEntry: FolderHistoryEntry?
+    let movedCount: Int
+    let skippedCount: Int
+    let failedCount: Int
+    let firstError: Error?
+}
+
+/// Path-keyed metadata (ratings, tags, favorites, custom order) lifted off a
+/// file or folder and its descendants, so it can be put back later.
+private struct PathMetadataSnapshot {
+    var ratings: [String: Int] = [:]
+    var tags: [String: [UUID]] = [:]
+    var favorites: Set<String> = []
+    var customOrders: [String: [String]] = [:]
+    /// Collection id -> (index in that collection, path) of every removed member.
+    var collectionMemberships: [UUID: [(index: Int, path: String)]] = [:]
+
+    var isEmpty: Bool {
+        ratings.isEmpty && tags.isEmpty && favorites.isEmpty && customOrders.isEmpty
+            && collectionMemberships.isEmpty
+    }
+}
+
 private struct TrashRestoreRecord {
     let trashedURL: URL
     let originalURL: URL
+    /// Metadata removed from the stores when the item was trashed; restored
+    /// together with the file on undo.
+    let metadata: PathMetadataSnapshot
+}
+
+/// Outcome of applying one history entry. A partially failed apply yields both
+/// an inverse (for what did happen) and a remainder (for what didn't), so a
+/// half-applied entry is never retried as a whole.
+private struct FolderHistoryApplyResult {
+    let inverse: FolderHistoryEntry?
+    let remaining: FolderHistoryEntry?
+    let appliedCount: Int
+    let failedCount: Int
+    let firstError: Error?
 }
 
 private struct FolderHistoryEntry {
     let title: String
-    let apply: @MainActor () async throws -> FolderHistoryEntry
+    let apply: @MainActor () async -> FolderHistoryApplyResult
+}
+
+/// A visited location in the folder navigation history: the selected folder plus
+/// the root it was browsed under, so going back can restore a previous root too.
+private struct FolderNavigationLocation: Equatable {
+    let folder: URL
+    let root: URL
 }
 
 private enum FolderHistoryError: LocalizedError {
@@ -53,15 +128,17 @@ final class ExplorerViewModel {
 
     var explorerRootPath: URL?
     var folderTree: [FileEntry] = []
-    var selectedFolderPath: URL?
+    var selectedFolderPath: URL? {
+        didSet { invalidateSortedFolderContents() }
+    }
     var folderContents: [FileEntry] = [] {
-        didSet { invalidateProcessedFolderContents() }
+        didSet { invalidateSortedFolderContents() }
     }
     var isLoadingFolder = false
 
     // Sort & Filter
     var sortConfig = SortConfig() {
-        didSet { invalidateProcessedFolderContents() }
+        didSet { invalidateSortedFolderContents() }
     }
     var filterConfig = FilterConfig() {
         didSet { invalidateProcessedFolderContents() }
@@ -76,10 +153,18 @@ final class ExplorerViewModel {
         didSet { invalidateProcessedFolderContents() }
     }
     private var customOrderByFolder: [String: [String]] = [:] {
-        didSet { invalidateProcessedFolderContents() }
+        didSet { invalidateSortedFolderContents() }
     }
     private var ratingsByPath: [String: Int] = [:] {
-        didSet { invalidateProcessedFolderContents() }
+        didSet {
+            // Ratings only affect ordering when sorting by rating; otherwise
+            // just the min-rating / smart folder filters need re-running.
+            if sortConfig.field == .rating {
+                invalidateSortedFolderContents()
+            } else {
+                invalidateProcessedFolderContents()
+            }
+        }
     }
     private var lastStandardSortConfigByFolder: [String: SortConfig] = [:]
     private var collapsedSidebarFolderPaths: Set<String> = []
@@ -110,22 +195,77 @@ final class ExplorerViewModel {
     var batchMetadataEditorOpen = false
 
     // Selection
-    var selectedItemIndex: Int = -1
-    var selectedIndices: Set<Int> = []
-    var selectionAnchorIndex: Int?
+    //
+    // Indices are positions in `processedFolderContents`. They are mirrored by
+    // paths so that whenever the processed list changes (search, filters, sort,
+    // refresh...) the indices can be recomputed to point at the same files.
+    var selectedItemIndex: Int = -1 {
+        didSet {
+            guard !isRemappingSelection else { return }
+            primarySelectionPath = processedPath(at: selectedItemIndex)
+        }
+    }
+    var selectedIndices: Set<Int> = [] {
+        didSet {
+            guard !isRemappingSelection else { return }
+            guard !selectedIndices.isEmpty else {
+                selectionPathSet = []
+                return
+            }
+            let items = processedFolderContents
+            selectionPathSet = Set(selectedIndices.compactMap { index in
+                index >= 0 && index < items.count ? items[index].path : nil
+            })
+        }
+    }
+    var selectionAnchorIndex: Int? {
+        didSet {
+            guard !isRemappingSelection else { return }
+            selectionAnchorPath = selectionAnchorIndex.flatMap { processedPath(at: $0) }
+        }
+    }
+    @ObservationIgnored private var selectionPathSet: Set<String> = []
+    @ObservationIgnored private var primarySelectionPath: String?
+    @ObservationIgnored private var selectionAnchorPath: String?
+    @ObservationIgnored private var lightboxPath: String?
+    @ObservationIgnored private var isRemappingSelection = false
     var selectedPromptEntry: PromptEntry?
     var activePane: ExplorerPane = .content
     var gridColumnCount: Int = 1
     var sidebarContentRowHint: Int = 0
     var showStatusBar = true
-    var appearanceMode: AppAppearanceMode = .dark
+    var appearanceMode: AppAppearanceMode = .dark {
+        didSet {
+            guard appearanceMode != oldValue else { return }
+            appearanceMode.applyToApp()
+        }
+    }
+
+    // File operation preferences
+    var confirmBeforeTrash = false
+    var duplicateNamePolicy: DuplicateNamePolicy = .keepBoth
+    var externalDragOperation: ExternalDragOperation = .copy
 
     // UI State
     var thumbnailSize: Double = 5
     var thumbnailsOnly = false
-    var lightboxOpen = false
-    var lightboxIndex: Int = 0
+    var lightboxOpen = false {
+        didSet {
+            if lightboxOpen, !oldValue {
+                lightboxPath = processedPath(at: lightboxIndex)
+            }
+        }
+    }
+    var lightboxIndex: Int = 0 {
+        didSet {
+            guard !isRemappingSelection else { return }
+            lightboxPath = processedPath(at: lightboxIndex)
+        }
+    }
     var toastMessage: (message: String, type: ToastType)?
+    var toastID: Int = 0
+    @ObservationIgnored private var toastDismissWorkItem: DispatchWorkItem?
+    /// Settings is a modal sheet, so the main window is blocked while it is up.
     var settingsOpen = false
     var helpOpen = false
     var statisticsOpen = false
@@ -134,13 +274,94 @@ final class ExplorerViewModel {
     var deleteConfirmationRequest: DeleteConfirmationRequest?
     var metadataEditorPath: String?
 
+    // View mode & grouping
+    var viewMode: BrowserViewMode = .grid {
+        didSet {
+            guard viewMode != oldValue else { return }
+            settings.viewMode = viewMode.rawValue
+        }
+    }
+    var groupBy: GroupByField = .none {
+        didSet {
+            guard groupBy != oldValue else { return }
+            settings.groupBy = groupBy.rawValue
+            contentGroupsRevision &+= 1
+            if groupBy.needsGenerationParameters {
+                loadListingPromptDataIfNeeded(force: true)
+            }
+        }
+    }
+    /// Generation parameters for files in the current listing, filled from the
+    /// library index and from the per-folder prompt index build.
+    var parametersByPath: [String: GenerationParameters] = [:] {
+        didSet {
+            if groupBy.needsGenerationParameters { contentGroupsRevision &+= 1 }
+            if activeSmartFolder != nil { invalidateProcessedFolderContents() }
+        }
+    }
+    /// Original-case positive / negative prompt text per path for the current
+    /// listing (the prompt index stores lowercased text only).
+    var promptTextByPath: [String: String] = [:] {
+        didSet { if activeSmartFolder != nil { invalidateProcessedFolderContents() } }
+    }
+    var negativePromptByPath: [String: String] = [:] {
+        didSet { if activeSmartFolder != nil { invalidateProcessedFolderContents() } }
+    }
+    /// Bumped when grouping inputs other than the processed list change.
+    private var contentGroupsRevision = 0
+    @ObservationIgnored private var contentGroupsCacheKey: (processed: Int, groups: Int) = (-1, -1)
+    @ObservationIgnored private var contentGroupsCache: [ContentGroup] = []
+
+    // Feature sheets (UI lives in the views; these just drive presentation)
+    var batchRenameOpen = false
+    var librarySearchOpen = false
+    var duplicatesOpen = false
+    var snippetsOpen = false
+
+    // Collections
+    var collections: [FileCollection] = []
+    var collectionSets: [CollectionSet] = []
+    /// When set, the listing is that collection's files (cross-folder) instead
+    /// of `selectedFolderPath`'s contents.
+    var activeCollectionID: UUID? {
+        didSet {
+            guard activeCollectionID != oldValue else { return }
+            invalidateSortedFolderContents()
+        }
+    }
+    /// Existing files of the active collection, in collection order.
+    var collectionContents: [FileEntry] = [] {
+        didSet { invalidateSortedFolderContents() }
+    }
+
+    // Library search
+    var librarySearchQuery = ""
+    var librarySearchResults: [LibrarySearchHit] = []
+    var isLibrarySearching = false
+    var isLibraryIndexing = false
+    var libraryIndexProgress: (done: Int, total: Int)?
+    @ObservationIgnored var librarySearchTask: Task<Void, Never>?
+    @ObservationIgnored var libraryIndexTask: Task<Void, Never>?
+    @ObservationIgnored var libraryIndexRoot: String?
+    /// Serialises fire-and-forget library index mutations (moves / removals).
+    @ObservationIgnored var libraryIndexMutationTask: Task<Void, Never>?
+    @ObservationIgnored var libraryParametersTask: Task<Void, Never>?
+
+    // Duplicates
+    var duplicateClusters: [[String]] = []
+    var isFindingDuplicates = false
+    @ObservationIgnored var duplicatesTask: Task<Void, Never>?
+
     // Recent History
     var recentFolders: [RecentItem] = []
 
     // Smart Folders
     var smartFolders: [SmartFolder] = []
     var activeSmartFolder: SmartFolder? {
-        didSet { invalidateProcessedFolderContents() }
+        didSet {
+            invalidateProcessedFolderContents()
+            if activeSmartFolderNeedsPromptData { loadListingPromptDataIfNeeded(force: false) }
+        }
     }
     var showSmartFolderEditor = false
     var editingSmartFolder: SmartFolder?
@@ -158,12 +379,29 @@ final class ExplorerViewModel {
     private let settings = SettingsStore.shared
     private var undoHistory: [FolderHistoryEntry] = []
     private var redoHistory: [FolderHistoryEntry] = []
+    private var backNavigationStack: [FolderNavigationLocation] = []
+    private var forwardNavigationStack: [FolderNavigationLocation] = []
+    private let maxNavigationHistoryEntries = 50
     @ObservationIgnored private var promptEntryLoadTask: Task<Void, Never>?
     @ObservationIgnored private var contentSearchTask: Task<Void, Never>?
-    @ObservationIgnored private var isIndexingPrompts = false
+    /// Folder-owned prompt index build; searches await it instead of cancelling it.
+    @ObservationIgnored private var promptIndexBuildTask: Task<Void, Never>?
+    @ObservationIgnored private var promptIndexBuildFolderPath: String?
+    @ObservationIgnored private var promptIndexBuildID = 0
+    /// Scope whose full build also filled `promptTextByPath` / `parametersByPath`.
+    /// The prompt index can outlive those maps (they reset on navigation), so a
+    /// complete index alone doesn't mean the maps are filled.
+    @ObservationIgnored var promptDataCompleteScope: String?
+    /// Bumped by every navigation so stale async results can be discarded.
+    @ObservationIgnored private var navigationGeneration = 0
     private var processedFolderContentsRevision = 0
     @ObservationIgnored private var processedFolderContentsCacheRevision = -1
     @ObservationIgnored private var processedFolderContentsCache: [FileEntry] = []
+    /// Sorted (but unfiltered) folder contents. Only contents, sort config,
+    /// ratings and custom order invalidate it, so typing a search just filters.
+    @ObservationIgnored private var sortedFolderContentsRevision = 0
+    @ObservationIgnored private var sortedFolderContentsCacheRevision = -1
+    @ObservationIgnored private var sortedFolderContentsCache: [FileEntry] = []
 
     init() {
         customOrderByFolder = settings.loadCustomOrders()
@@ -173,17 +411,21 @@ final class ExplorerViewModel {
             field: SortField(rawValue: settings.sortField) ?? .type,
             direction: SortDirection(rawValue: settings.sortDirection) ?? .asc
         )
-        filterConfig = FilterConfig(
-            hideOther: settings.hideOther,
-            hideJpg: settings.hideJpg,
-            hidePng: settings.hidePng,
-            filterMinRating: settings.filterMinRating
-        )
+        filterConfig = settings.loadFilterConfig()
         showStatusBar = settings.showStatusBar
+        thumbnailsOnly = settings.thumbnailsOnly
         appearanceMode = AppAppearanceMode(rawValue: settings.appearanceMode) ?? .dark
+
+        confirmBeforeTrash = settings.confirmBeforeTrash
+        duplicateNamePolicy = DuplicateNamePolicy(rawValue: settings.duplicateNamePolicy) ?? .keepBoth
+        externalDragOperation = ExternalDragOperation(rawValue: settings.externalDragOperation) ?? .copy
 
         searchMode = SearchMode(rawValue: settings.searchMode) ?? .filename
         previewPaneCollapsed = settings.previewPaneCollapsed
+        viewMode = BrowserViewMode(rawValue: settings.viewMode) ?? .grid
+        groupBy = GroupByField(rawValue: settings.groupBy) ?? .none
+        collections = CollectionService.shared.all()
+        collectionSets = CollectionService.shared.allSets()
 
         // Load recent history & smart folders
         recentFolders = RecentHistoryService.shared.loadRecentFolders()
@@ -194,13 +436,68 @@ final class ExplorerViewModel {
         tagAssignments = TagService.shared.loadAssignments()
         favoritePaths = FavoritesService.shared.loadFavorites()
 
-        // Restore last folder
+        // Restore last root, folder and selected file
         if !settings.lastOpenedFolder.isEmpty {
             let url = URL(fileURLWithPath: settings.lastOpenedFolder)
             if FileManager.default.fileExists(atPath: url.path) {
-                Task { await selectFolder(url, setAsRoot: true) }
+                let lastFolder = settings.lastSelectedFolder
+                let lastFile = settings.lastSelectedFilePath
+                Task { await restoreLastSession(root: url, folderPath: lastFolder, filePath: lastFile) }
             }
         }
+
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.persistWindowState() }
+        }
+
+        let mode = appearanceMode
+        DispatchQueue.main.async { mode.applyToApp() }
+    }
+
+    /// Re-opens the last root, the folder below it that was showing, and the
+    /// file that was selected there, without adding navigation history.
+    private func restoreLastSession(root: URL, folderPath: String, filePath: String) async {
+        var folder = root
+        if !folderPath.isEmpty {
+            let candidate = URL(fileURLWithPath: folderPath)
+            if isSameOrDescendant(candidate, of: root), isExistingDirectory(candidate) {
+                folder = candidate
+            }
+        }
+
+        let generationBefore = navigationGeneration
+        await applyFolderSelection(folder, rootToEstablish: root)
+        // Any other navigation since then wins over the restored selection.
+        guard !filePath.isEmpty,
+              navigationGeneration == generationBefore &+ 1,
+              selectedFolderPath?.standardizedFileURL.path == folder.standardizedFileURL.path,
+              primarySelectionPath == nil
+        else { return }
+        selectPath(filePath)
+    }
+
+    /// Saves what window restoration needs (called at quit).
+    func persistWindowState() {
+        settings.previewPaneCollapsed = previewPaneCollapsed
+        settings.viewMode = viewMode.rawValue
+        settings.groupBy = groupBy.rawValue
+        if activeCollectionID == nil {
+            settings.lastSelectedFolder = selectedFolderPath?.path ?? ""
+            settings.lastSelectedFilePath = primarySelectionPath ?? ""
+        }
+    }
+
+    /// Selects the listed item at `path`; returns false when it isn't listed.
+    @discardableResult
+    func selectPath(_ path: String) -> Bool {
+        let items = processedFolderContents
+        guard let index = items.firstIndex(where: { $0.path == path }) else { return false }
+        selectItem(at: index)
+        return true
     }
 
     // MARK: - Processed Contents (sorted/filtered)
@@ -211,15 +508,15 @@ final class ExplorerViewModel {
             return processedFolderContentsCache
         }
 
-        var items = folderContents
+        // Filtering preserves order, so filters run on top of the cached sort.
+        var items = sortedFolderContents
+        let query = searchQuery.lowercased()
 
         // Filter
         items = items.filter { item in
-            let name = item.name.lowercased()
-
             // Search
-            if !searchQuery.isEmpty {
-                let query = searchQuery.lowercased()
+            if !query.isEmpty {
+                let name = item.name.lowercased()
                 switch searchMode {
                 case .filename:
                     if !name.contains(query) { return false }
@@ -230,19 +527,10 @@ final class ExplorerViewModel {
                 }
             }
 
-            // Extension filters
-            if filterConfig.hideJpg && (name.hasSuffix(".jpg") || name.hasSuffix(".jpeg")) { return false }
-            if filterConfig.hidePng && name.hasSuffix(".png") { return false }
-
-            // Hide unsupported types
-            if filterConfig.hideOther {
-                let isDir = item.isDirectory
-                let isAllowed = isDir
-                    || FileHelpers.isPromptSnapshotFile(name)
-                    || FileHelpers.isImageFile(name)
-                    || FileHelpers.isVideoFile(name)
-                    || FileHelpers.isAudioFile(name)
-                if !isAllowed { return false }
+            if let fileType = FileHelpers.filterType(for: item),
+               filterConfig.hides(fileType)
+            {
+                return false
             }
 
             return true
@@ -260,17 +548,36 @@ final class ExplorerViewModel {
 
         // Smart folder filter
         if let smartFolder = activeSmartFolder {
-            items = SmartFolderService.shared.filterEntries(
+            items = SmartFolderService.filter(
                 items,
                 criteria: smartFolder.criteria,
-                ratingLookup: { self.rating(for: $0) }
+                context: smartFolderContext()
             )
         }
 
-        let sortedItems = sortItems(items, using: sortConfig)
-        processedFolderContentsCache = sortedItems
+        processedFolderContentsCache = items
         processedFolderContentsCacheRevision = revision
-        return sortedItems
+        return items
+    }
+
+    /// `folderContents` sorted by the current sort config, cached until the
+    /// contents, sort config, ratings or custom order change.
+    private var sortedFolderContents: [FileEntry] {
+        let revision = sortedFolderContentsRevision
+        if sortedFolderContentsCacheRevision == revision {
+            return sortedFolderContentsCache
+        }
+
+        let sorted: [FileEntry]
+        if activeCollectionID != nil, sortConfig.field == .custom {
+            // Collection order is the custom order in collection mode.
+            sorted = collectionContents
+        } else {
+            sorted = sortItems(listingSourceContents, using: sortConfig)
+        }
+        sortedFolderContentsCache = sorted
+        sortedFolderContentsCacheRevision = revision
+        return sorted
     }
 
     var currentCustomOrder: [String] {
@@ -303,7 +610,21 @@ final class ExplorerViewModel {
     }
 
     var hiddenItemCount: Int {
-        max(0, folderContents.count - processedFolderContents.count)
+        max(0, listingSourceContents.count - processedFolderContents.count)
+    }
+
+    /// Unsorted, unfiltered entries behind the listing: the active collection's
+    /// files, or the selected folder's contents.
+    var listingSourceContents: [FileEntry] {
+        activeCollectionID != nil ? collectionContents : folderContents
+    }
+
+    /// True while the listing shows a collection instead of a folder.
+    var isCollectionMode: Bool { activeCollectionID != nil }
+
+    var activeCollection: FileCollection? {
+        guard let activeCollectionID else { return nil }
+        return collections.first(where: { $0.id == activeCollectionID })
     }
 
     var sidebarFolders: [SidebarFolderItem] {
@@ -331,23 +652,60 @@ final class ExplorerViewModel {
     }
 
     func selectFolder(_ url: URL, setAsRoot: Bool = false) async {
-        if setAsRoot {
-            explorerRootPath = url
-            settings.lastOpenedFolder = url.path
+        recordNavigationHistory(destination: url, root: setAsRoot ? url : explorerRootPath)
+        await applyFolderSelection(url, rootToEstablish: setAsRoot ? url : nil)
+    }
+
+    private func applyFolderSelection(_ url: URL, rootToEstablish: URL?) async {
+        // Every navigation gets a token; after each await we bail if a newer
+        // navigation has started, so root/folder/history changes can't interleave.
+        navigationGeneration &+= 1
+        let generation = navigationGeneration
+        let folderChanged = selectedFolderPath?.standardizedFileURL.path != url.standardizedFileURL.path
+
+        // All synchronous state first, so the model is never half-switched.
+        if let rootToEstablish {
+            explorerRootPath = rootToEstablish
+            settings.lastOpenedFolder = rootToEstablish.path
             collapsedSidebarFolderPaths = []
             previousSidebarCollapsedFolderPaths = nil
             undoHistory = []
             redoHistory = []
-            await clearParserCaches()
+            folderTree = []
         }
 
+        clearSelection()
+        let leavingCollection = activeCollectionID != nil
+        if folderChanged || rootToEstablish != nil || leavingCollection {
+            // Stale entries from the previous folder must not stay actionable
+            // while the new one is scanned off the main thread.
+            folderContents = []
+            resetListingPromptData()
+        }
+        activeCollectionID = nil
+        collectionContents = []
         selectedFolderPath = url
+        settings.lastSelectedFolder = url.path
         activeSmartFolder = nil
         rememberStandardSortConfig(sortConfig, for: url)
         revealSidebarSelection(url)
-        clearSelection()
-        await refreshFolderContents()
-        await refreshFolderTree()
+
+        // The prompt index belongs to the folder it was built for.
+        cancelPromptIndexBuild()
+
+        if rootToEstablish != nil {
+            await clearParserCaches()
+            guard generation == navigationGeneration else { return }
+        }
+
+        guard await refreshFolderContents(showLoading: true) else { return }
+        guard generation == navigationGeneration else { return }
+        loadListingPromptDataIfNeeded(force: false)
+        if let rootToEstablish {
+            autoIndexLibraryIfNeeded(root: rootToEstablish)
+        }
+        guard await refreshFolderTree() else { return }
+        guard generation == navigationGeneration else { return }
         refreshPromptSearchIfNeeded()
     }
 
@@ -363,10 +721,125 @@ final class ExplorerViewModel {
     }
 
     func refreshFolder() async {
+        let generation = navigationGeneration
+        // Parser caches are keyed by path with no modification check and only
+        // support clear-all, so a refresh must drop them to pick up changes.
         await clearParserCaches()
-        await refreshFolderContents()
-        await refreshFolderTree()
+        guard generation == navigationGeneration else { return }
+        if activeCollectionID != nil {
+            guard await reloadCollectionContents() else { return }
+        } else {
+            guard await refreshFolderContents(showLoading: false) else { return }
+        }
+        loadListingPromptDataIfNeeded(force: true)
+        guard await refreshFolderTree() else { return }
         refreshPromptSearchIfNeeded()
+    }
+
+    // MARK: - Back / Forward Navigation
+
+    var canNavigateBack: Bool { !backNavigationStack.isEmpty }
+    var canNavigateForward: Bool { !forwardNavigationStack.isEmpty }
+
+    var backNavigationTitle: String {
+        backNavigationStack.last.map { "Back to \"\(navigationDisplayName(for: $0.folder))\"" } ?? "Back"
+    }
+
+    var forwardNavigationTitle: String {
+        forwardNavigationStack.last.map { "Forward to \"\(navigationDisplayName(for: $0.folder))\"" } ?? "Forward"
+    }
+
+    func navigateBack() async {
+        guard let next = nextReachableLocation(in: backNavigationStack) else {
+            backNavigationStack = []
+            showToast("No previous folder is still available", type: .info)
+            return
+        }
+
+        let origin = currentNavigationLocation
+        backNavigationStack = next.remaining
+        await applyHistoryLocation(next.location)
+
+        if let origin, origin != next.location {
+            forwardNavigationStack = trimmedNavigationStack(forwardNavigationStack + [origin])
+        }
+    }
+
+    func navigateForward() async {
+        guard let next = nextReachableLocation(in: forwardNavigationStack) else {
+            forwardNavigationStack = []
+            showToast("No forward folder is still available", type: .info)
+            return
+        }
+
+        let origin = currentNavigationLocation
+        forwardNavigationStack = next.remaining
+        await applyHistoryLocation(next.location)
+
+        if let origin, origin != next.location {
+            backNavigationStack = trimmedNavigationStack(backNavigationStack + [origin])
+        }
+    }
+
+    private var currentNavigationLocation: FolderNavigationLocation? {
+        guard let selectedFolderPath, let explorerRootPath else { return nil }
+        return FolderNavigationLocation(
+            folder: selectedFolderPath.standardizedFileURL,
+            root: explorerRootPath.standardizedFileURL
+        )
+    }
+
+    private func recordNavigationHistory(destination url: URL, root: URL?) {
+        guard let current = currentNavigationLocation, let root else { return }
+
+        let destination = FolderNavigationLocation(
+            folder: url.standardizedFileURL,
+            root: root.standardizedFileURL
+        )
+        guard destination != current else { return }
+
+        backNavigationStack = trimmedNavigationStack(backNavigationStack + [current])
+        forwardNavigationStack.removeAll()
+    }
+
+    private func applyHistoryLocation(_ location: FolderNavigationLocation) async {
+        let rootChanged = explorerRootPath?.standardizedFileURL.path != location.root.path
+        await applyFolderSelection(location.folder, rootToEstablish: rootChanged ? location.root : nil)
+    }
+
+    /// Pops the most recent entry that still exists on disk, discarding stale ones along the way.
+    private func nextReachableLocation(
+        in stack: [FolderNavigationLocation]
+    ) -> (location: FolderNavigationLocation, remaining: [FolderNavigationLocation])? {
+        var remaining = stack
+
+        while let candidate = remaining.popLast() {
+            if isReachable(candidate) {
+                return (candidate, remaining)
+            }
+        }
+
+        return nil
+    }
+
+    private func isReachable(_ location: FolderNavigationLocation) -> Bool {
+        isExistingDirectory(location.folder) && isExistingDirectory(location.root)
+    }
+
+    private func isExistingDirectory(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+        return exists && isDirectory.boolValue
+    }
+
+    private func trimmedNavigationStack(_ stack: [FolderNavigationLocation]) -> [FolderNavigationLocation] {
+        guard stack.count > maxNavigationHistoryEntries else { return stack }
+        return Array(stack.suffix(maxNavigationHistoryEntries))
+    }
+
+    private func navigationDisplayName(for url: URL) -> String {
+        let name = url.lastPathComponent
+        return name.isEmpty ? url.path : name
     }
 
     // MARK: - File Operations
@@ -411,7 +884,25 @@ final class ExplorerViewModel {
             return
         }
 
-        deleteConfirmationRequest = DeleteConfirmationRequest(urls: urls, names: names)
+        deleteConfirmationRequest = DeleteConfirmationRequest(kind: .permanent, urls: urls, names: names)
+    }
+
+    /// Entry point for every "move to Trash" action, so the confirmation
+    /// preference is honoured in one place rather than at each call site.
+    func requestTrash(at urls: [URL]) {
+        let targets = deduplicatedURLs(urls)
+        guard !targets.isEmpty else { return }
+
+        guard confirmBeforeTrash else {
+            Task { await trashItems(at: targets) }
+            return
+        }
+
+        deleteConfirmationRequest = DeleteConfirmationRequest(
+            kind: .trash,
+            urls: targets,
+            names: targets.map(\.lastPathComponent)
+        )
     }
 
     func clearDeleteConfirmation() {
@@ -422,17 +913,36 @@ final class ExplorerViewModel {
         let targets = deduplicatedURLs(urls)
         guard !targets.isEmpty else { return }
 
-        do {
-            for target in targets {
-                try FileSystemService.deleteEntry(at: target)
-            }
+        var deletedCount = 0
+        var failedCount = 0
+        var firstError: Error?
 
-            clearSelection()
-            await refreshFolder()
-            showToast(targets.count == 1 ? "Item deleted permanently" : "Deleted \(targets.count) items permanently", type: .success)
-        } catch {
+        for target in targets {
+            do {
+                try FileSystemService.deleteEntry(at: target)
+                deletedCount += 1
+                // A new file at this path must not inherit the old one's metadata.
+                _ = removeMetadata(under: target.path)
+            } catch {
+                failedCount += 1
+                if firstError == nil { firstError = error }
+            }
+        }
+
+        // Always refresh: some items may be gone even when others failed.
+        clearSelection()
+        await refreshFolder()
+
+        if failedCount == 0 {
+            showToast(deletedCount == 1 ? "Item deleted permanently" : "Deleted \(deletedCount) items permanently", type: .success)
+        } else if deletedCount == 0 {
             let noun = targets.count == 1 ? "item" : "items"
-            showToast("Failed to delete \(noun): \(error.localizedDescription)", type: .error)
+            showToast("Failed to delete \(noun): \(firstError?.localizedDescription ?? "Unknown error")", type: .error)
+        } else {
+            showToast(
+                "Deleted \(deletedCount) of \(targets.count) items; \(failedCount) failed: \(firstError?.localizedDescription ?? "Unknown error")",
+                type: .error
+            )
         }
     }
 
@@ -450,6 +960,7 @@ final class ExplorerViewModel {
 
         do {
             let renamedURL = try FileSystemService.rename(at: sourceURL, to: newName).standardizedFileURL
+            migrateMetadataKeys(from: sourceURL.path, to: renamedURL.path)
             await refreshAfterMutation(preferredPaths: [renamedURL.path])
             recordFolderHistoryEntry(
                 makeMoveHistoryEntry(
@@ -465,17 +976,67 @@ final class ExplorerViewModel {
         }
     }
 
+    // MARK: - Create Folder
+
+    var isShowingNewFolderPrompt = false {
+        didSet {
+            // Collections are not folders: nothing to create a folder in.
+            if isShowingNewFolderPrompt, !canCreateFolder {
+                isShowingNewFolderPrompt = false
+            }
+        }
+    }
+
+    /// False in collection mode or without a folder.
+    var canCreateFolder: Bool {
+        activeCollectionID == nil && selectedFolderPath != nil
+    }
+    var newFolderName = "untitled folder"
+
+    func createNewFolder() async {
+        guard activeCollectionID == nil, let parent = selectedFolderPath else {
+            showToast("No folder selected", type: .error)
+            return
+        }
+
+        let name = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            showToast("Folder name cannot be empty", type: .error)
+            return
+        }
+
+        do {
+            let newURL = try FileSystemService.createFolder(in: parent, named: name)
+            await refreshFolder()
+            showToast("Created \"\(newURL.lastPathComponent)\"", type: .success)
+        } catch {
+            showToast("Failed to create folder: \(error.localizedDescription)", type: .error)
+        }
+
+        newFolderName = "untitled folder"
+    }
+
     func trashItems(at urls: [URL]) async {
         let targets = deduplicatedURLs(urls)
         guard !targets.isEmpty else { return }
 
-        do {
-            let undoEntry = try await performTrashOperation(targets, title: "Move to Trash")
-            recordFolderHistoryEntry(undoEntry)
-            showToast(targets.count == 1 ? "Moved to Trash" : "Moved \(targets.count) items to Trash", type: .success)
-        } catch {
+        let outcome = await trashURLs(targets)
+        if !outcome.records.isEmpty {
+            recordFolderHistoryEntry(
+                makeRestoreTrashHistoryEntry(recordsToApplyNext: outcome.records, title: "Move to Trash")
+            )
+        }
+
+        let trashedCount = outcome.records.count
+        let failedCount = outcome.failed.count
+        let errorText = outcome.firstError?.localizedDescription ?? "Unknown error"
+        if failedCount == 0 {
+            showToast(trashedCount == 1 ? "Moved to Trash" : "Moved \(trashedCount) items to Trash", type: .success)
+        } else if trashedCount == 0 {
             let noun = targets.count == 1 ? "item" : "items"
-            showToast("Failed to trash \(noun): \(error.localizedDescription)", type: .error)
+            showToast("Failed to trash \(noun): \(errorText)", type: .error)
+        } else {
+            showToast("Moved \(trashedCount) of \(targets.count) items to Trash; \(failedCount) failed: \(errorText)", type: .error)
         }
     }
 
@@ -488,6 +1049,10 @@ final class ExplorerViewModel {
     }
 
     func importExternalFiles(_ urls: [URL]) async {
+        guard activeCollectionID == nil else {
+            showToast("Open a folder to import files into it", type: .info)
+            return
+        }
         guard let dest = selectedFolderPath else { return }
         await importExternalFiles(urls, to: dest)
     }
@@ -499,44 +1064,68 @@ final class ExplorerViewModel {
             return
         }
 
-        do {
-            let undoEntry = try await performMoveOperation(allowed, to: destinationDir, title: "Import")
-            recordFolderHistoryEntry(undoEntry)
-            showToast("Imported \(allowed.count) file(s)", type: .success)
-        } catch {
-            showToast("Failed to import file(s): \(error.localizedDescription)", type: .error)
+        let outcome = await performMoveOperation(allowed, to: destinationDir, title: "Import")
+        if let historyEntry = outcome.historyEntry {
+            recordFolderHistoryEntry(historyEntry)
         }
+        showToast(
+            moveOutcomeMessage(verb: "Imported", outcome: outcome),
+            type: moveOutcomeToastType(outcome)
+        )
     }
 
     func undoLastFolderAction() async {
         guard let entry = undoHistory.popLast() else { return }
 
-        do {
-            let redoEntry = try await entry.apply()
-            redoHistory.append(redoEntry)
-            showToast("Undid \(entry.title.lowercased())", type: .success)
-        } catch {
-            undoHistory.append(entry)
-            showToast("Failed to undo \(entry.title.lowercased()): \(error.localizedDescription)", type: .error)
+        let result = await entry.apply()
+        // Only what did not apply goes back on the undo stack; what did apply
+        // becomes redoable.
+        if let remaining = result.remaining {
+            undoHistory.append(remaining)
         }
+        if let inverse = result.inverse {
+            redoHistory.append(inverse)
+        }
+        showHistoryToast(verb: "undo", pastVerb: "Undid", title: entry.title, result: result)
     }
 
     func redoLastFolderAction() async {
         guard let entry = redoHistory.popLast() else { return }
 
-        do {
-            let undoEntry = try await entry.apply()
-            undoHistory.append(undoEntry)
-            showToast("Redid \(entry.title.lowercased())", type: .success)
-        } catch {
-            redoHistory.append(entry)
-            showToast("Failed to redo \(entry.title.lowercased()): \(error.localizedDescription)", type: .error)
+        let result = await entry.apply()
+        if let remaining = result.remaining {
+            redoHistory.append(remaining)
+        }
+        if let inverse = result.inverse {
+            undoHistory.append(inverse)
+        }
+        showHistoryToast(verb: "redo", pastVerb: "Redid", title: entry.title, result: result)
+    }
+
+    private func showHistoryToast(verb: String, pastVerb: String, title: String, result: FolderHistoryApplyResult) {
+        let action = title.lowercased()
+        let errorText = result.firstError?.localizedDescription ?? "Unknown error"
+
+        if result.failedCount == 0 {
+            showToast("\(pastVerb) \(action)", type: .success)
+        } else if result.appliedCount == 0 {
+            showToast("Failed to \(verb) \(action): \(errorText)", type: .error)
+        } else {
+            let noun = result.failedCount == 1 ? "item" : "items"
+            showToast(
+                "\(pastVerb) \(action) for \(result.appliedCount) items; \(result.failedCount) \(noun) failed: \(errorText)",
+                type: .error
+            )
         }
     }
 
     func openDeveloperWebsite() {
         guard let url = URL(string: HelpContent.developerResource.urlString) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    func openSettings() {
+        settingsOpen = true
     }
 
     // MARK: - Selection
@@ -567,6 +1156,24 @@ final class ExplorerViewModel {
 
         selectedItemIndex = index
         loadPromptEntry(for: items[index])
+        syncQuickLookWithSelection()
+    }
+
+    /// ⌘A: selects everything in the current listing (files and folders, like Finder).
+    /// Keeps the current primary item when there is one, so the preview doesn't jump.
+    func selectAllItems() {
+        let items = processedFolderContents
+        guard !items.isEmpty else { return }
+        activePane = .content
+
+        let primary = (selectedItemIndex >= 0 && selectedItemIndex < items.count) ? selectedItemIndex : 0
+        selectedIndices = Set(items.indices)
+        selectionAnchorIndex = 0
+        if selectedItemIndex != primary {
+            selectedItemIndex = primary
+            loadPromptEntry(for: items[primary])
+        }
+        syncQuickLookWithSelection()
     }
 
     func clearSelection() {
@@ -575,7 +1182,15 @@ final class ExplorerViewModel {
         selectedIndices = []
         selectedItemIndex = -1
         selectionAnchorIndex = nil
+        selectionPathSet = []
+        primarySelectionPath = nil
+        selectionAnchorPath = nil
         selectedPromptEntry = nil
+    }
+
+    /// Path of the primary selected item, independent of list position.
+    var selectedItemPath: String? {
+        primarySelectionPath
     }
 
     func focusSidebar(preservingContentRow row: Int) {
@@ -591,12 +1206,22 @@ final class ExplorerViewModel {
         let folders = sidebarFolders
         guard !folders.isEmpty else { return }
 
-        let currentURL = selectedFolderPath ?? folders[0].url
-        let currentIndex = folders.firstIndex(where: { $0.url == currentURL }) ?? 0
-        let nextIndex = max(0, min(folders.count - 1, currentIndex + offset))
-
         activePane = .sidebar
-        guard nextIndex != currentIndex || selectedFolderPath == nil else { return }
+
+        guard let selectedFolderPath else {
+            await selectFolder(folders[0].url)
+            return
+        }
+
+        // The sidebar only lists a few levels; when the current folder is deeper
+        // (or hidden) there is no sensible neighbour, so do nothing rather than
+        // jumping to the root's first child.
+        let currentPath = selectedFolderPath.standardizedFileURL.path
+        guard let currentIndex = folders.firstIndex(where: { $0.url.standardizedFileURL.path == currentPath })
+        else { return }
+
+        let nextIndex = max(0, min(folders.count - 1, currentIndex + offset))
+        guard nextIndex != currentIndex else { return }
         await selectFolder(folders[nextIndex].url)
     }
 
@@ -673,6 +1298,20 @@ final class ExplorerViewModel {
     }
 
     func ensureCustomSortForCurrentFolder() {
+        if let collectionID = activeCollectionID {
+            // In collection mode the collection's own order is the custom order;
+            // adopt the order currently on screen before switching to it.
+            if sortConfig.field != .custom {
+                let order = sortedFolderContents.map(\.path)
+                CollectionService.shared.reorder(id: collectionID, paths: order)
+                collections = CollectionService.shared.all()
+                let byPath = Dictionary(collectionContents.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+                collectionContents = order.compactMap { byPath[$0] }
+                sortConfig = SortConfig(field: .custom, direction: .asc)
+                persistSortConfig()
+            }
+            return
+        }
         guard let folderPath = selectedFolderPath?.path else { return }
 
         let nextOrder: [String]
@@ -680,7 +1319,7 @@ final class ExplorerViewModel {
             nextOrder = completedCustomOrderForCurrentFolder()
         } else {
             rememberStandardSortConfig(sortConfig, for: selectedFolderPath)
-            nextOrder = sortItems(folderContents, using: sortConfig).map(\.path)
+            nextOrder = sortedFolderContents.map(\.path)
         }
         guard !nextOrder.isEmpty else { return }
 
@@ -697,6 +1336,10 @@ final class ExplorerViewModel {
     }
 
     func reorderItems(sourcePaths: [String], targetPath: String, position: ReorderPosition) {
+        if activeCollectionID != nil {
+            reorderCollectionItems(sourcePaths: sourcePaths, targetPath: targetPath, position: position)
+            return
+        }
         guard let folderPath = selectedFolderPath?.path else { return }
         ensureCustomSortForCurrentFolder()
 
@@ -792,10 +1435,7 @@ final class ExplorerViewModel {
     }
 
     func persistFilterConfig() {
-        settings.hideOther = filterConfig.hideOther
-        settings.hideJpg = filterConfig.hideJpg
-        settings.hidePng = filterConfig.hidePng
-        settings.filterMinRating = filterConfig.filterMinRating
+        settings.saveFilterConfig(filterConfig)
     }
 
     func persistThumbnailSize() {
@@ -804,6 +1444,22 @@ final class ExplorerViewModel {
 
     func persistStatusBarVisibility() {
         settings.showStatusBar = showStatusBar
+    }
+
+    func persistThumbnailsOnly() {
+        settings.thumbnailsOnly = thumbnailsOnly
+    }
+
+    func persistConfirmBeforeTrash() {
+        settings.confirmBeforeTrash = confirmBeforeTrash
+    }
+
+    func persistDuplicateNamePolicy() {
+        settings.duplicateNamePolicy = duplicateNamePolicy.rawValue
+    }
+
+    func persistExternalDragOperation() {
+        settings.externalDragOperation = externalDragOperation.rawValue
     }
 
     func persistAppearanceMode() {
@@ -830,6 +1486,11 @@ final class ExplorerViewModel {
 
     func openRecentFolder(_ item: RecentItem) async {
         await selectFolder(item.url, setAsRoot: true)
+    }
+
+    func removeRecentFolder(_ item: RecentItem) {
+        RecentHistoryService.shared.removeRecentFolder(path: item.path)
+        recentFolders = RecentHistoryService.shared.loadRecentFolders()
     }
 
     func clearRecentFolders() {
@@ -873,6 +1534,11 @@ final class ExplorerViewModel {
         }
         smartFolders = SmartFolderService.shared.loadSmartFolders()
         editingSmartFolder = nil
+
+        // Editing the active smart folder must apply its new criteria now.
+        if activeSmartFolder?.id == folder.id {
+            activeSmartFolder = folder  // didSet invalidates processed contents
+        }
     }
 
     // MARK: - Tags
@@ -900,9 +1566,19 @@ final class ExplorerViewModel {
         tagAssignments = TagService.shared.loadAssignments()
     }
 
+    /// Applies one target state to the whole selection: if every selected file
+    /// already has the tag it is removed from all, otherwise added to all.
     func toggleTagForSelectedFiles(_ tagID: UUID) {
-        for path in selectedPaths {
-            TagService.shared.toggleTag(tagID, forPath: path)
+        let paths = selectedPaths
+        guard !paths.isEmpty else { return }
+
+        let shouldRemove = paths.allSatisfy { fileHasTag(tagID, path: $0) }
+        for path in paths {
+            if shouldRemove {
+                TagService.shared.removeTag(tagID, fromPath: path)
+            } else {
+                TagService.shared.assignTag(tagID, toPath: path)
+            }
         }
         tagAssignments = TagService.shared.loadAssignments()
     }
@@ -932,10 +1608,18 @@ final class ExplorerViewModel {
         FavoritesService.shared.saveFavorites(favoritePaths)
     }
 
+    /// Applies one target state to the whole selection: if every selected file
+    /// is already a favorite all are unfavorited, otherwise all are favorited.
     func toggleFavoriteForSelectedFiles() {
-        for path in selectedPaths {
-            toggleFavorite(path: path)
+        let paths = selectedPaths
+        guard !paths.isEmpty else { return }
+
+        if paths.allSatisfy(favoritePaths.contains) {
+            favoritePaths.subtract(paths)
+        } else {
+            favoritePaths.formUnion(paths)
         }
+        FavoritesService.shared.saveFavorites(favoritePaths)
     }
 
     // MARK: - Prompt Content Search
@@ -952,19 +1636,17 @@ final class ExplorerViewModel {
 
         let query = searchQuery
         let mode = searchMode
-        let selectedFolderPath = selectedFolderPath?.path
+        let selectedFolderPath = promptIndexScope
 
         // Debounce prompt search so rapid typing or mode changes do not pile up parse work.
+        // Cancelling this task never cancels the index build it waits on.
         contentSearchTask = Task(priority: .utility) { [weak self] in
             guard let self else { return }
 
             try? await Task.sleep(for: .milliseconds(200))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, let selectedFolderPath else { return }
 
-            let indexCount = await PromptIndexService.shared.count
-            if indexCount == 0, !self.isIndexingPrompts {
-                await self.buildPromptIndex()
-            }
+            await self.ensurePromptIndex(for: selectedFolderPath)
 
             guard !Task.isCancelled else { return }
             let matches = await PromptIndexService.shared.search(query: query)
@@ -972,7 +1654,7 @@ final class ExplorerViewModel {
 
             guard self.searchQuery == query,
                   self.searchMode == mode,
-                  self.selectedFolderPath?.path == selectedFolderPath
+                  self.promptIndexScope == selectedFolderPath
             else {
                 return
             }
@@ -983,41 +1665,143 @@ final class ExplorerViewModel {
         }
     }
 
-    /// Build the prompt index for all parseable files in the current folder.
-    /// Runs parsing off the main actor to avoid blocking UI.
-    private func buildPromptIndex() async {
-        isIndexingPrompts = true
-        defer { isIndexingPrompts = false }
+    /// Makes sure the prompt index holds a complete build for `folderPath`,
+    /// starting a build if needed or waiting on the one already running.
+    /// Key the prompt index is built for: the active collection, else the folder.
+    var promptIndexScope: String? {
+        if let activeCollectionID { return "collection:\(activeCollectionID.uuidString)" }
+        return selectedFolderPath?.path
+    }
 
-        await PromptIndexService.shared.clearIndex()
+    /// Makes sure the prompt index (and the prompt text / parameter maps
+    /// captured with it) is complete for the current listing.
+    func ensurePromptIndexForCurrentListing() async {
+        guard let scope = promptIndexScope else { return }
+        await ensurePromptIndex(for: scope)
+    }
 
-        // Capture the file list on main actor, then parse off main
-        let items = folderContents.filter { !$0.isDirectory }
+    private func ensurePromptIndex(for folderPath: String) async {
+        if promptDataCompleteScope == folderPath,
+           await PromptIndexService.shared.isIndexComplete(for: folderPath) { return }
+        guard promptIndexScope == folderPath else { return }
 
-        for item in items {
-            guard !Task.isCancelled else { return }
+        if let task = promptIndexBuildTask, promptIndexBuildFolderPath == folderPath {
+            await task.value
+            return
+        }
 
-            // Parse off main actor via the existing actor-isolated parsers
-            let prompt: String? = await { () async -> String? in
-                if FileHelpers.isPlibFile(item.name) {
-                    return await PlibParser.shared.parse(at: item.url)?.prompt
-                } else if FileHelpers.isAoeFile(item.name) {
-                    if let entry = await AoeParser.shared.parse(at: item.url) {
-                        return entry.prompt
-                    }
-                    return nil
-                } else if FileHelpers.isImageFile(item.name) {
-                    let meta = await ImageMetadataParser.shared.parse(at: item.url)
-                    return meta.prompt.isEmpty ? nil : meta.prompt
-                }
-                return nil
-            }()
+        promptIndexBuildTask?.cancel()
+        promptIndexBuildID &+= 1
+        let buildID = promptIndexBuildID
+        let items = listingSourceContents.filter { !$0.isDirectory }
 
-            guard !Task.isCancelled else { return }
-            if let prompt, !prompt.isEmpty {
-                await PromptIndexService.shared.index(path: item.path, prompt: prompt)
+        let task = Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+            await self.buildPromptIndex(items: items, folderPath: folderPath)
+            if self.promptIndexBuildID == buildID {
+                self.promptIndexBuildTask = nil
+                self.promptIndexBuildFolderPath = nil
             }
         }
+        promptIndexBuildTask = task
+        promptIndexBuildFolderPath = folderPath
+        await task.value
+    }
+
+    private func cancelPromptIndexBuild() {
+        promptIndexBuildTask?.cancel()
+        promptIndexBuildTask = nil
+        promptIndexBuildFolderPath = nil
+        promptIndexBuildID &+= 1
+    }
+
+    /// Build the prompt index for all parseable files in `folderPath`.
+    /// Parsing happens on the parser actors, off the main actor. Only a build
+    /// that reaches the end is marked complete.
+    private func buildPromptIndex(items: [FileEntry], folderPath: String) async {
+        let generation = await PromptIndexService.shared.beginBuild(folderPath: folderPath)
+
+        var pendingPrompts: [String: String] = [:]
+        var pendingNegatives: [String: String] = [:]
+        var pendingParameters: [String: GenerationParameters] = [:]
+
+        func flush() {
+            guard promptIndexScope == folderPath else { return }
+            if !pendingPrompts.isEmpty { promptTextByPath.merge(pendingPrompts) { _, new in new } }
+            if !pendingNegatives.isEmpty { negativePromptByPath.merge(pendingNegatives) { _, new in new } }
+            if !pendingParameters.isEmpty {
+                // Parsed values fill gaps left by the library index.
+                var next = parametersByPath
+                for (path, parsed) in pendingParameters {
+                    next[path] = (next[path] ?? GenerationParameters()).filling(from: parsed)
+                }
+                parametersByPath = next
+            }
+            pendingPrompts = [:]
+            pendingNegatives = [:]
+            pendingParameters = [:]
+        }
+
+        for (offset, item) in items.enumerated() {
+            guard !Task.isCancelled else { return }
+
+            let parsed = await Self.parsePromptData(for: item)
+
+            guard !Task.isCancelled else { return }
+            if let prompt = parsed.searchText, !prompt.isEmpty {
+                await PromptIndexService.shared.index(path: item.path, prompt: prompt, generation: generation)
+            }
+            if let prompt = parsed.prompt, !prompt.isEmpty { pendingPrompts[item.path] = prompt }
+            if let negative = parsed.negative, !negative.isEmpty { pendingNegatives[item.path] = negative }
+            if !parsed.parameters.isEmpty { pendingParameters[item.path] = parsed.parameters }
+
+            if offset % 40 == 39 { flush() }
+        }
+
+        guard !Task.isCancelled else { return }
+        flush()
+        await PromptIndexService.shared.finishBuild(generation: generation)
+        if promptIndexScope == folderPath {
+            promptDataCompleteScope = folderPath
+        }
+    }
+
+    /// Prompt text, negative prompt and generation parameters parsed from one
+    /// file. `searchText` is what the content search indexes.
+    struct ParsedPromptData: Sendable {
+        var searchText: String?
+        var prompt: String?
+        var negative: String?
+        var parameters = GenerationParameters()
+    }
+
+    nonisolated static func parsePromptData(for item: FileEntry) async -> ParsedPromptData {
+        var result = ParsedPromptData()
+        if FileHelpers.isPlibFile(item.name) || FileHelpers.isAoeFile(item.name) {
+            let entry = FileHelpers.isPlibFile(item.name)
+                ? await PlibParser.shared.parse(at: item.url)
+                : await AoeParser.shared.parse(at: item.url)
+            guard let entry else { return result }
+            result.prompt = entry.prompt
+            result.searchText = entry.prompt
+            result.negative = entry.blindPrompt
+            result.parameters = GenerationParameters.parsed(
+                from: entry.embeddedMetadata,
+                model: entry.generationInfo.model
+            )
+        } else if FileHelpers.isImageFile(item.name) {
+            let meta = await ImageMetadataParser.shared.parse(at: item.url)
+            if !meta.prompt.isEmpty {
+                result.prompt = meta.prompt
+                result.searchText = meta.prompt
+            }
+            result.negative = meta.negativePrompt
+            result.parameters = GenerationParameters.parsed(from: meta.fields, model: meta.model)
+        } else if FileHelpers.isAudioFile(item.name) {
+            let meta = await AudioMetadataParser.shared.parse(at: item.url)
+            result.searchText = meta.searchText.isEmpty ? nil : meta.searchText
+        }
+        return result
     }
 
     func persistSearchMode() {
@@ -1034,7 +1818,17 @@ final class ExplorerViewModel {
     // MARK: - Prompt Diff
 
     func openPromptDiff() {
-        let items = Array(selectedItems.prefix(2))
+        openPromptDiff(for: Array(selectedItems.prefix(2)))
+    }
+
+    /// Opens the prompt diff for the first two of `paths` (e.g. a duplicate cluster).
+    func compareCluster(_ paths: [String]) {
+        let listed = Dictionary(listingSourceContents.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        let items = paths.prefix(2).compactMap { listed[$0] ?? FileEntry.load(from: URL(fileURLWithPath: $0)) }
+        openPromptDiff(for: items)
+    }
+
+    private func openPromptDiff(for items: [FileEntry]) {
         guard items.count == 2 else {
             showToast("Select two files to compare prompts", type: .info)
             return
@@ -1079,6 +1873,15 @@ final class ExplorerViewModel {
         return ext == "png" || ext == "jpg" || ext == "jpeg"
     }
 
+    func isEmbeddableAudioFile(_ name: String) -> Bool {
+        let ext = URL(fileURLWithPath: name).pathExtension.lowercased()
+        return ext == "mp3" || ext == "wav"
+    }
+
+    func isEmbeddableMetadataFile(_ name: String) -> Bool {
+        isEmbeddableImageFile(name) || isEmbeddableAudioFile(name)
+    }
+
     var selectedEmbeddableImages: [FileEntry] {
         selectedItems.filter { !$0.isDirectory && isEmbeddableImageFile($0.name) }
     }
@@ -1089,33 +1892,58 @@ final class ExplorerViewModel {
         metadataEditorPath = path
     }
 
-    /// Called after metadata is successfully embedded into an image.
+    /// Called after metadata is successfully embedded into a supported media file.
     /// Clears caches and reloads the entry so the UI reflects the new metadata.
     func didEmbedMetadata(at path: String) {
-        Task { await ImageMetadataParser.shared.clearCache() }
         ThumbnailService.shared.clearCache()
 
         showToast("Metadata embedded", type: .success)
         metadataEditorPath = nil
 
-        // Reload the selected entry to pick up new metadata
-        if let index = selectedItemIndex as Int?,
-           index >= 0 && index < processedFolderContents.count,
-           processedFolderContents[index].path == path
-        {
-            loadPromptEntry(for: processedFolderContents[index])
+        Task {
+            // The parsers only support clear-all; the caches must be dropped
+            // *before* reloading or the old metadata is served again.
+            await ImageMetadataParser.shared.clearCache()
+            await AudioMetadataParser.shared.clearCache()
+            // The index holds this file's old text; rebuild it on the next search.
+            self.cancelPromptIndexBuild()
+            await PromptIndexService.shared.clearIndex()
+
+            // Reload the selected entry to pick up new metadata
+            if self.primarySelectionPath == path,
+               let item = self.processedFolderContents.first(where: { $0.path == path })
+            {
+                self.loadPromptEntry(for: item)
+            }
+            self.refreshPromptSearchIfNeeded()
         }
     }
 
     // MARK: - Toast
 
     func showToast(_ message: String, type: ToastType) {
+        toastDismissWorkItem?.cancel()
         toastMessage = (message, type)
+        toastID += 1
+
+        let currentID = toastID
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.toastID == currentID else { return }
+            self.toastMessage = nil
+        }
+        toastDismissWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }
 
     // MARK: - Breadcrumbs
 
     var breadcrumbs: [(name: String, url: URL)] {
+        if let collection = activeCollection {
+            // A single crumb; clicking it returns to the folder the collection
+            // was opened from.
+            let back = selectedFolderPath ?? explorerRootPath ?? URL(fileURLWithPath: NSHomeDirectory())
+            return [(collection.name, back)]
+        }
         guard let root = explorerRootPath, let current = selectedFolderPath else { return [] }
         var crumbs: [(String, URL)] = []
         var url = current
@@ -1132,33 +1960,49 @@ final class ExplorerViewModel {
 
     // MARK: - Private
 
-    private func refreshFolderContents() async {
+    /// Reads the selected folder off the main actor. Returns false (and applies
+    /// nothing) when a newer navigation made the result stale.
+    @discardableResult
+    private func refreshFolderContents(showLoading: Bool) async -> Bool {
         guard let path = selectedFolderPath else {
             folderContents = []
-            return
+            isLoadingFolder = false
+            return true
         }
 
-        isLoadingFolder = true
-        defer { isLoadingFolder = false }
-
-        do {
-            folderContents = try FileSystemService.readDirectory(at: path)
-        } catch {
-            folderContents = []
+        let generation = navigationGeneration
+        if showLoading {
+            isLoadingFolder = true
         }
+
+        let entries = await Task.detached(priority: .userInitiated) {
+            (try? FileSystemService.readDirectory(at: path)) ?? []
+        }.value
+
+        // A newer navigation owns `isLoadingFolder` from here on.
+        guard generation == navigationGeneration, selectedFolderPath == path else { return false }
+
+        folderContents = entries
+        isLoadingFolder = false
+        return true
     }
 
-    private func refreshFolderTree() async {
+    /// Builds the sidebar tree off the main actor. Returns false when stale.
+    @discardableResult
+    private func refreshFolderTree() async -> Bool {
         guard let root = explorerRootPath else {
             folderTree = []
-            return
+            return true
         }
 
-        do {
-            folderTree = try FileSystemService.buildFolderTree(root: root, depth: 3)
-        } catch {
-            folderTree = []
-        }
+        let generation = navigationGeneration
+        let tree = await Task.detached(priority: .userInitiated) {
+            (try? FileSystemService.buildFolderTree(root: root, depth: 3)) ?? []
+        }.value
+
+        guard generation == navigationGeneration, explorerRootPath == root else { return false }
+        folderTree = tree
+        return true
     }
 
     private func loadPromptEntry(for item: FileEntry) {
@@ -1178,22 +2022,21 @@ final class ExplorerViewModel {
             let entry = await self.promptEntry(for: item)
             guard !Task.isCancelled else { return }
 
-            let selectedPath =
-                self.selectedItemIndex >= 0 && self.selectedItemIndex < self.processedFolderContents.count
-                ? self.processedFolderContents[self.selectedItemIndex].path
-                : nil
-            guard selectedPath == expectedPath else { return }
+            guard self.primarySelectionPath == expectedPath else { return }
 
             self.selectedPromptEntry = entry
 
             // Index prompt content in background for content search.
-            if let entry, !entry.prompt.isEmpty, !Task.isCancelled {
-                await PromptIndexService.shared.index(path: expectedPath, prompt: entry.prompt)
+            if let entry, !Task.isCancelled {
+                let searchText = self.searchIndexText(for: entry)
+                if !searchText.isEmpty {
+                    await PromptIndexService.shared.index(path: expectedPath, prompt: searchText)
+                }
             }
         }
     }
 
-    private func promptEntry(for item: FileEntry) async -> PromptEntry? {
+    func promptEntry(for item: FileEntry) async -> PromptEntry? {
         guard !item.isDirectory else { return nil }
 
         if FileHelpers.isPlibFile(item.name) {
@@ -1223,7 +2066,7 @@ final class ExplorerViewModel {
             let fileMetadata = await metadata
             let parsedMetadata = await imageMetadata
 
-            return PromptEntry(
+            var entry = PromptEntry(
                 prompt: parsedMetadata.prompt,
                 blindPrompt: parsedMetadata.negativePrompt,
                 generationInfo: GenerationInfo(
@@ -1240,6 +2083,9 @@ final class ExplorerViewModel {
                 embeddedMetadata: parsedMetadata.fields,
                 fileMetadata: fileMetadata
             )
+            entry.comfyPromptJSON = parsedMetadata.comfyPromptJSON
+            entry.comfyWorkflowJSON = parsedMetadata.comfyWorkflowJSON
+            return entry
         }
 
         if FileHelpers.isVideoFile(item.name) {
@@ -1268,7 +2114,11 @@ final class ExplorerViewModel {
         }
 
         if FileHelpers.isAudioFile(item.name) {
-            let fileMetadata = await FileSystemService.getMetadataAsync(for: item.url)
+            async let metadata = FileSystemService.getMetadataAsync(for: item.url)
+            async let audioMetadata = AudioMetadataParser.shared.parse(at: item.url)
+
+            let fileMetadata = await metadata
+            let parsedMetadata = await audioMetadata
 
             return PromptEntry(
                 prompt: "",
@@ -1287,7 +2137,7 @@ final class ExplorerViewModel {
                 sourcePath: item.path,
                 audioURL: item.url,
                 analysis: nil,
-                embeddedMetadata: [],
+                embeddedMetadata: parsedMetadata.fields,
                 fileMetadata: fileMetadata
             )
         }
@@ -1320,10 +2170,45 @@ final class ExplorerViewModel {
         return .notAvailable
     }
 
+    private func searchIndexText(for entry: PromptEntry) -> String {
+        let prompt = entry.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !prompt.isEmpty {
+            return prompt
+        }
+
+        var seen = Set<String>()
+        var values: [String] = []
+
+        for field in entry.embeddedMetadata {
+            let key = canonicalMetadataKey(field.label)
+            guard key != "software" else { continue }
+
+            let value = field.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { continue }
+
+            let identity = value.lowercased()
+            guard seen.insert(identity).inserted else { continue }
+            values.append(value)
+        }
+
+        return values.joined(separator: "\n")
+    }
+
+    private func canonicalMetadataKey(_ value: String) -> String {
+        value
+            .lowercased()
+            .unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init)
+            .joined()
+    }
+
     private func clearParserCaches() async {
+        cancelPromptIndexBuild()
         await PlibParser.shared.clearCache()
         await AoeParser.shared.clearCache()
         await ImageMetadataParser.shared.clearCache()
+        await AudioMetadataParser.shared.clearCache()
         await PromptIndexService.shared.clearIndex()
     }
 
@@ -1340,8 +2225,115 @@ final class ExplorerViewModel {
         updateContentSearch()
     }
 
+    private func invalidateSortedFolderContents() {
+        sortedFolderContentsRevision &+= 1
+        invalidateProcessedFolderContents()
+    }
+
     private func invalidateProcessedFolderContents() {
         processedFolderContentsRevision &+= 1
+
+        // Selection and lightbox are stored as indices into the processed list;
+        // re-point them at the same files in the new list.
+        if !selectionPathSet.isEmpty || primarySelectionPath != nil || lightboxOpen {
+            remapSelectionToProcessedContents()
+        }
+    }
+
+    private func processedPath(at index: Int) -> String? {
+        guard index >= 0 else { return nil }
+        let items = processedFolderContents
+        guard index >= 0 && index < items.count else { return nil }
+        return items[index].path
+    }
+
+    /// Recomputes `selectedIndices`, `selectedItemIndex`, `selectionAnchorIndex`
+    /// and `lightboxIndex` from the stored paths against the current processed
+    /// list. Paths that are no longer listed are dropped.
+    private func remapSelectionToProcessedContents() {
+        guard !isRemappingSelection else { return }
+        isRemappingSelection = true
+        defer { isRemappingSelection = false }
+
+        let items = processedFolderContents
+        var indexByPath: [String: Int] = [:]
+        indexByPath.reserveCapacity(items.count)
+        for (index, item) in items.enumerated() where indexByPath[item.path] == nil {
+            indexByPath[item.path] = index
+        }
+
+        // Multi-selection
+        let survivingPaths = selectionPathSet.filter { indexByPath[$0] != nil }
+        selectionPathSet = survivingPaths
+        let nextIndices = Set(survivingPaths.compactMap { indexByPath[$0] })
+        if nextIndices != selectedIndices {
+            selectedIndices = nextIndices
+        }
+
+        // Primary item: keep it when still listed, else fall back to the first
+        // remaining selected item.
+        let previousPrimaryPath = primarySelectionPath
+        var nextPrimaryIndex = primarySelectionPath.flatMap { indexByPath[$0] }
+        if nextPrimaryIndex == nil {
+            nextPrimaryIndex = nextIndices.min()
+        }
+        let nextPrimaryPath = nextPrimaryIndex.map { items[$0].path }
+        primarySelectionPath = nextPrimaryPath
+        let nextSelectedItemIndex = nextPrimaryIndex ?? -1
+        if nextSelectedItemIndex != selectedItemIndex {
+            selectedItemIndex = nextSelectedItemIndex
+        }
+
+        if nextPrimaryPath != previousPrimaryPath {
+            if let nextPrimaryIndex {
+                loadPromptEntry(for: items[nextPrimaryIndex])
+            } else {
+                promptEntryLoadTask?.cancel()
+                promptEntryLoadTask = nil
+                selectedPromptEntry = nil
+            }
+        }
+
+        // Anchor
+        var nextAnchorIndex = selectionAnchorPath.flatMap { indexByPath[$0] }
+        if nextAnchorIndex == nil, !nextIndices.isEmpty {
+            nextAnchorIndex = nextPrimaryIndex
+        }
+        selectionAnchorPath = nextAnchorIndex.map { items[$0].path }
+        if nextAnchorIndex != selectionAnchorIndex {
+            selectionAnchorIndex = nextAnchorIndex
+        }
+
+        // Lightbox: follow its item; if it vanished, move to the nearest
+        // previewable item, or close when there is none.
+        if lightboxOpen {
+            if let lightboxPath, let index = indexByPath[lightboxPath] {
+                if lightboxIndex != index { lightboxIndex = index }
+            } else if let index = nearestPreviewableIndex(in: items, around: lightboxIndex) {
+                lightboxIndex = index
+                lightboxPath = items[index].path
+            } else {
+                lightboxOpen = false
+                lightboxIndex = 0
+                lightboxPath = nil
+            }
+        } else if lightboxIndex < 0 || lightboxIndex >= max(1, items.count) {
+            lightboxIndex = 0
+            lightboxPath = nil
+        }
+    }
+
+    private func nearestPreviewableIndex(in items: [FileEntry], around index: Int) -> Int? {
+        guard !items.isEmpty else { return nil }
+        let start = max(0, min(items.count - 1, index))
+        for distance in 0..<items.count {
+            let after = start + distance
+            if after < items.count, FileHelpers.isPreviewable(items[after]) { return after }
+            let before = start - distance
+            if distance > 0, before >= 0, FileHelpers.isPreviewable(items[before]) { return before }
+            if after >= items.count && before < 0 { break }
+        }
+        return nil
     }
 
     private func taggedPaths(for tagID: UUID) -> Set<String> {
@@ -1357,14 +2349,14 @@ final class ExplorerViewModel {
             return
         }
 
-        do {
-            let undoEntry = try await performMoveOperation(sources, to: destinationDir, title: "Move")
-            recordFolderHistoryEntry(undoEntry)
-            showToast(sources.count == 1 ? "Item moved" : "Moved \(sources.count) items", type: .success)
-        } catch {
-            let noun = sources.count == 1 ? "item" : "items"
-            showToast("Failed to move \(noun): \(error.localizedDescription)", type: .error)
+        let outcome = await performMoveOperation(sources, to: destinationDir, title: "Move")
+        if let historyEntry = outcome.historyEntry {
+            recordFolderHistoryEntry(historyEntry)
         }
+        showToast(
+            moveOutcomeMessage(verb: "Moved", outcome: outcome),
+            type: moveOutcomeToastType(outcome)
+        )
     }
 
     private func resolvedDragSourceURLs(from urls: [URL], to destinationDir: URL) -> [URL] {
@@ -1471,25 +2463,91 @@ final class ExplorerViewModel {
             return sortedItems
         }
 
-        sortedItems.sort { a, b in
-            let comparison: ComparisonResult
-            if config.field == .type {
-                let rankA = FileHelpers.typeRank(for: a)
-                let rankB = FileHelpers.typeRank(for: b)
-                if rankA != rankB {
-                    comparison = rankA < rankB ? .orderedAscending : .orderedDescending
-                } else {
-                    comparison = a.name.localizedCaseInsensitiveCompare(b.name)
+        if config.field == .dateModified || config.field == .dateCreated || config.field == .size {
+            // Folders first (like Finder), then by value; missing values sort
+            // last in either direction; ties fall back to name.
+            let field = config.field
+            func value(_ entry: FileEntry) -> Double? {
+                switch field {
+                case .dateModified: return entry.modifiedDate?.timeIntervalSinceReferenceDate
+                case .dateCreated: return entry.creationDate?.timeIntervalSinceReferenceDate
+                default: return entry.fileSize.map(Double.init)
                 }
-            } else {
-                comparison = a.name.localizedCaseInsensitiveCompare(b.name)
             }
-            return config.direction == .asc
-                ? comparison == .orderedAscending
-                : comparison == .orderedDescending
+            let decorated = sortedItems.map { (entry: $0, value: value($0)) }
+            return decorated.sorted { lhs, rhs in
+                if lhs.entry.isDirectory != rhs.entry.isDirectory { return lhs.entry.isDirectory }
+                switch (lhs.value, rhs.value) {
+                case let (a?, b?) where a != b:
+                    return config.direction == .asc ? a < b : a > b
+                case (.some, nil):
+                    return true
+                case (nil, .some):
+                    return false
+                default:
+                    let nameComparison = lhs.entry.name.localizedCaseInsensitiveCompare(rhs.entry.name)
+                    if nameComparison != .orderedSame { return nameComparison == .orderedAscending }
+                    return lhs.entry.path < rhs.entry.path
+                }
+            }.map(\.entry)
         }
 
-        return sortedItems
+        func compareStrings(_ lhs: String, _ rhs: String) -> ComparisonResult {
+            lhs.localizedCaseInsensitiveCompare(rhs)
+        }
+
+        func comesBefore(_ comparison: ComparisonResult, direction: SortDirection) -> Bool {
+            switch comparison {
+            case .orderedAscending:
+                return direction == .asc
+            case .orderedDescending:
+                return direction == .desc
+            case .orderedSame:
+                return false
+            }
+        }
+
+        // Decorate-sort-undecorate: compute each entry's type descriptor once
+        // instead of twice per comparison.
+        let sortsByType = config.field == .type
+        let decorated = sortedItems.map { entry in
+            (entry: entry, descriptor: sortsByType ? FileHelpers.typeSortDescriptor(for: entry) : nil)
+        }
+
+        let sortedDecorated = decorated.sorted { lhs, rhs in
+            let a = lhs.entry
+            let b = rhs.entry
+
+            if sortsByType, let descriptorA = lhs.descriptor, let descriptorB = rhs.descriptor {
+                if a.isDirectory != b.isDirectory {
+                    return a.isDirectory
+                }
+
+                if descriptorA.rank != descriptorB.rank {
+                    let comparison = descriptorA.rank < descriptorB.rank ? ComparisonResult.orderedAscending : .orderedDescending
+                    return comesBefore(comparison, direction: config.direction)
+                }
+
+                let typeComparison = compareStrings(descriptorA.typeLabel, descriptorB.typeLabel)
+                if typeComparison != .orderedSame {
+                    return comesBefore(typeComparison, direction: config.direction)
+                }
+
+                let extensionComparison = compareStrings(descriptorA.canonicalExtension, descriptorB.canonicalExtension)
+                if extensionComparison != .orderedSame {
+                    return comesBefore(extensionComparison, direction: config.direction)
+                }
+            }
+
+            let nameComparison = compareStrings(a.name, b.name)
+            if nameComparison != .orderedSame {
+                return comesBefore(nameComparison, direction: config.direction)
+            }
+
+            return compareStrings(a.path, b.path) == .orderedAscending
+        }
+
+        return sortedDecorated.map(\.entry)
     }
 
     private func recordFolderHistoryEntry(_ entry: FolderHistoryEntry) {
@@ -1501,82 +2559,427 @@ final class ExplorerViewModel {
         }
     }
 
-    private func performMoveOperation(_ sources: [URL], to destinationDir: URL, title: String) async throws -> FolderHistoryEntry {
+    /// Moves each source into `destinationDir`, continuing past failures.
+    /// Always refreshes, and the history entry covers exactly what moved.
+    private func performMoveOperation(_ sources: [URL], to destinationDir: URL, title: String) async -> MoveOutcome {
         var appliedRecords: [PathMoveRecord] = []
+        var skippedCount = 0
+        var failedCount = 0
+        var firstError: Error?
 
         for source in sources {
             let sourceURL = source.standardizedFileURL
-            let movedURL = try FileSystemService.moveFile(from: sourceURL, to: destinationDir).standardizedFileURL
-            appliedRecords.append(PathMoveRecord(from: sourceURL, to: movedURL))
+            do {
+                let resolution = try FileSystemService.moveFile(
+                    from: sourceURL,
+                    to: destinationDir,
+                    onDuplicate: duplicateNamePolicy
+                )
+
+                switch resolution {
+                case let .moved(movedURL):
+                    let record = PathMoveRecord(from: sourceURL, to: movedURL.standardizedFileURL)
+                    appliedRecords.append(record)
+                    migrateMetadataKeys(from: record.from.path, to: record.to.path)
+                case .skipped:
+                    skippedCount += 1
+                }
+            } catch {
+                failedCount += 1
+                if firstError == nil { firstError = error }
+            }
         }
 
         await refreshAfterMutation(preferredPaths: appliedRecords.map { $0.to.path })
-        return makeMoveHistoryEntry(recordsToApplyNext: invertedMoveRecords(appliedRecords), title: title)
+
+        // Nothing moved means nothing to undo, so no history entry is recorded.
+        let historyEntry = appliedRecords.isEmpty
+            ? nil
+            : makeMoveHistoryEntry(recordsToApplyNext: invertedMoveRecords(appliedRecords), title: title)
+
+        return MoveOutcome(
+            historyEntry: historyEntry,
+            movedCount: appliedRecords.count,
+            skippedCount: skippedCount,
+            failedCount: failedCount,
+            firstError: firstError
+        )
     }
 
-    private func performExactMoveRecords(_ records: [PathMoveRecord]) async throws -> [PathMoveRecord] {
+    /// Builds the toast for a move that may have skipped same-named files or
+    /// failed for some of them.
+    private func moveOutcomeMessage(verb: String, outcome: MoveOutcome) -> String {
+        var parts: [String] = []
+
+        if outcome.movedCount > 0 {
+            let noun = outcome.movedCount == 1 ? "file" : "files"
+            parts.append("\(verb) \(outcome.movedCount) \(noun)")
+        }
+
+        if outcome.skippedCount > 0 {
+            if outcome.movedCount > 0 {
+                parts.append("skipped \(outcome.skippedCount) already here")
+            } else {
+                parts.append(outcome.skippedCount == 1
+                    ? "Skipped 1 file already named that here"
+                    : "Skipped \(outcome.skippedCount) files already named that here")
+            }
+        }
+
+        if outcome.failedCount > 0 {
+            let errorText = outcome.firstError?.localizedDescription ?? "Unknown error"
+            if parts.isEmpty {
+                let noun = outcome.failedCount == 1 ? "item" : "items"
+                parts.append("\(outcome.failedCount) \(noun) could not be \(verb.lowercased()): \(errorText)")
+            } else {
+                parts.append("\(outcome.failedCount) failed: \(errorText)")
+            }
+        }
+
+        return parts.isEmpty ? "Nothing to \(verb.lowercased())" : parts.joined(separator: ", ")
+    }
+
+    private func moveOutcomeToastType(_ outcome: MoveOutcome) -> ToastType {
+        if outcome.failedCount > 0 { return .error }
+        return outcome.movedCount > 0 ? .success : .info
+    }
+
+    /// Applies exact path moves, continuing past failures.
+    private func performExactMoveRecords(
+        _ records: [PathMoveRecord]
+    ) async -> (applied: [PathMoveRecord], failed: [PathMoveRecord], firstError: Error?) {
         var appliedRecords: [PathMoveRecord] = []
+        var failedRecords: [PathMoveRecord] = []
+        var firstError: Error?
 
         for record in records {
-            let movedURL = try FileSystemService.moveEntry(from: record.from, to: record.to).standardizedFileURL
-            appliedRecords.append(PathMoveRecord(from: record.from.standardizedFileURL, to: movedURL))
+            do {
+                let movedURL = try FileSystemService.moveEntry(from: record.from, to: record.to).standardizedFileURL
+                let applied = PathMoveRecord(from: record.from.standardizedFileURL, to: movedURL)
+                appliedRecords.append(applied)
+                migrateMetadataKeys(from: applied.from.path, to: applied.to.path)
+            } catch {
+                failedRecords.append(record)
+                if firstError == nil { firstError = error }
+            }
         }
 
         await refreshAfterMutation(preferredPaths: appliedRecords.map { $0.to.path })
-        return invertedMoveRecords(appliedRecords)
+        return (appliedRecords, failedRecords, firstError)
     }
 
-    private func performTrashOperation(_ urls: [URL], title: String) async throws -> FolderHistoryEntry {
-        let restoreRecords = try await trashURLs(urls)
-        return makeRestoreTrashHistoryEntry(recordsToApplyNext: restoreRecords, title: title)
-    }
-
-    private func trashURLs(_ urls: [URL]) async throws -> [TrashRestoreRecord] {
+    /// Trashes each URL, continuing past failures. Metadata is lifted off each
+    /// trashed item (so a new file at the same path starts clean) and kept in
+    /// its restore record for undo.
+    private func trashURLs(
+        _ urls: [URL]
+    ) async -> (records: [TrashRestoreRecord], failed: [URL], firstError: Error?) {
         var restoreRecords: [TrashRestoreRecord] = []
+        var failedURLs: [URL] = []
+        var firstError: Error?
 
         for url in deduplicatedURLs(urls) {
             let sourceURL = url.standardizedFileURL
-            let trashedURL = try FileSystemService.moveToTrash(at: sourceURL).standardizedFileURL
-            restoreRecords.append(TrashRestoreRecord(trashedURL: trashedURL, originalURL: sourceURL))
+            do {
+                let trashedURL = try FileSystemService.moveToTrash(at: sourceURL).standardizedFileURL
+                let metadata = removeMetadata(under: sourceURL.path)
+                restoreRecords.append(
+                    TrashRestoreRecord(trashedURL: trashedURL, originalURL: sourceURL, metadata: metadata)
+                )
+            } catch {
+                failedURLs.append(sourceURL)
+                if firstError == nil { firstError = error }
+            }
         }
 
         await refreshAfterMutation()
-        return restoreRecords
+        return (restoreRecords, failedURLs, firstError)
     }
 
-    private func restoreTrashedRecords(_ records: [TrashRestoreRecord]) async throws -> [URL] {
+    private func restoreTrashedRecords(
+        _ records: [TrashRestoreRecord]
+    ) async -> (restored: [URL], failed: [TrashRestoreRecord], firstError: Error?) {
         var restoredURLs: [URL] = []
+        var failedRecords: [TrashRestoreRecord] = []
+        var firstError: Error?
 
         for record in records {
-            let restoredURL = try FileSystemService.moveEntry(from: record.trashedURL, to: record.originalURL).standardizedFileURL
-            restoredURLs.append(restoredURL)
+            do {
+                let restoredURL = try FileSystemService.moveEntry(from: record.trashedURL, to: record.originalURL).standardizedFileURL
+                restoredURLs.append(restoredURL)
+                restoreMetadata(record.metadata, from: record.originalURL.path, to: restoredURL.path)
+            } catch {
+                failedRecords.append(record)
+                if firstError == nil { firstError = error }
+            }
         }
 
         await refreshAfterMutation(preferredPaths: restoredURLs.map(\.path))
-        return restoredURLs
+        return (restoredURLs, failedRecords, firstError)
     }
 
     private func makeMoveHistoryEntry(recordsToApplyNext: [PathMoveRecord], title: String) -> FolderHistoryEntry {
         FolderHistoryEntry(title: title) { [weak self] in
-            guard let self else { throw FolderHistoryError.viewModelReleased }
-            let inverseRecords = try await self.performExactMoveRecords(recordsToApplyNext)
-            return self.makeMoveHistoryEntry(recordsToApplyNext: inverseRecords, title: title)
+            guard let self else { return ExplorerViewModel.releasedHistoryResult(count: recordsToApplyNext.count) }
+            let outcome = await self.performExactMoveRecords(recordsToApplyNext)
+            return FolderHistoryApplyResult(
+                inverse: outcome.applied.isEmpty
+                    ? nil
+                    : self.makeMoveHistoryEntry(recordsToApplyNext: self.invertedMoveRecords(outcome.applied), title: title),
+                remaining: outcome.failed.isEmpty
+                    ? nil
+                    : self.makeMoveHistoryEntry(recordsToApplyNext: outcome.failed, title: title),
+                appliedCount: outcome.applied.count,
+                failedCount: outcome.failed.count,
+                firstError: outcome.firstError
+            )
         }
     }
 
     private func makeRestoreTrashHistoryEntry(recordsToApplyNext: [TrashRestoreRecord], title: String) -> FolderHistoryEntry {
         FolderHistoryEntry(title: title) { [weak self] in
-            guard let self else { throw FolderHistoryError.viewModelReleased }
-            let restoredURLs = try await self.restoreTrashedRecords(recordsToApplyNext)
-            return self.makeTrashHistoryEntry(urlsToApplyNext: restoredURLs, title: title)
+            guard let self else { return ExplorerViewModel.releasedHistoryResult(count: recordsToApplyNext.count) }
+            let outcome = await self.restoreTrashedRecords(recordsToApplyNext)
+            return FolderHistoryApplyResult(
+                inverse: outcome.restored.isEmpty
+                    ? nil
+                    : self.makeTrashHistoryEntry(urlsToApplyNext: outcome.restored, title: title),
+                remaining: outcome.failed.isEmpty
+                    ? nil
+                    : self.makeRestoreTrashHistoryEntry(recordsToApplyNext: outcome.failed, title: title),
+                appliedCount: outcome.restored.count,
+                failedCount: outcome.failed.count,
+                firstError: outcome.firstError
+            )
         }
     }
 
     private func makeTrashHistoryEntry(urlsToApplyNext: [URL], title: String) -> FolderHistoryEntry {
         FolderHistoryEntry(title: title) { [weak self] in
-            guard let self else { throw FolderHistoryError.viewModelReleased }
-            let restoreRecords = try await self.trashURLs(urlsToApplyNext)
-            return self.makeRestoreTrashHistoryEntry(recordsToApplyNext: restoreRecords, title: title)
+            guard let self else { return ExplorerViewModel.releasedHistoryResult(count: urlsToApplyNext.count) }
+            let outcome = await self.trashURLs(urlsToApplyNext)
+            return FolderHistoryApplyResult(
+                inverse: outcome.records.isEmpty
+                    ? nil
+                    : self.makeRestoreTrashHistoryEntry(recordsToApplyNext: outcome.records, title: title),
+                remaining: outcome.failed.isEmpty
+                    ? nil
+                    : self.makeTrashHistoryEntry(urlsToApplyNext: outcome.failed, title: title),
+                appliedCount: outcome.records.count,
+                failedCount: outcome.failed.count,
+                firstError: outcome.firstError
+            )
+        }
+    }
+
+    private static func releasedHistoryResult(count: Int) -> FolderHistoryApplyResult {
+        FolderHistoryApplyResult(
+            inverse: nil,
+            remaining: nil,
+            appliedCount: 0,
+            failedCount: max(1, count),
+            firstError: FolderHistoryError.viewModelReleased
+        )
+    }
+
+    // MARK: - Path-keyed metadata
+
+    /// Moves ratings, tags, favorites and custom sort order from `oldPath` (and,
+    /// for folders, everything under it) to `newPath`, in memory and on disk.
+    func migrateMetadataKeys(from oldPath: String, to newPath: String) {
+        guard oldPath != newPath else { return }
+
+        CollectionService.shared.migratePaths(from: oldPath, to: newPath)
+        collections = CollectionService.shared.all()
+        enqueueLibraryIndexMutation { await LibraryIndexService.shared.movePath(from: oldPath, to: newPath) }
+        if let migrated = MetadataPathKeys.migratingKeys(of: parametersByPath, from: oldPath, to: newPath) {
+            parametersByPath = migrated
+        }
+        if let migrated = MetadataPathKeys.migratingKeys(of: promptTextByPath, from: oldPath, to: newPath) {
+            promptTextByPath = migrated
+        }
+        if let migrated = MetadataPathKeys.migratingKeys(of: negativePromptByPath, from: oldPath, to: newPath) {
+            negativePromptByPath = migrated
+        }
+
+        if let migrated = MetadataPathKeys.migratingKeys(of: ratingsByPath, from: oldPath, to: newPath) {
+            ratingsByPath = migrated
+            settings.saveRatings(ratingsByPath)
+        }
+
+        if let migrated = MetadataPathKeys.migratingKeys(of: tagAssignments, from: oldPath, to: newPath) {
+            TagService.shared.saveAssignments(migrated)
+            tagAssignments = migrated
+        }
+
+        var nextFavorites: Set<String> = []
+        var favoritesChanged = false
+        for path in favoritePaths {
+            if let rewritten = MetadataPathKeys.rewrite(path, from: oldPath, to: newPath), rewritten != path {
+                nextFavorites.insert(rewritten)
+                favoritesChanged = true
+            } else {
+                nextFavorites.insert(path)
+            }
+        }
+        if favoritesChanged {
+            favoritePaths = nextFavorites
+            FavoritesService.shared.saveFavorites(nextFavorites)
+        }
+
+        // Custom orders are keyed by folder path and list item paths.
+        let migratedOrderKeys = MetadataPathKeys.migratingKeys(of: customOrderByFolder, from: oldPath, to: newPath)
+        var nextOrders = migratedOrderKeys ?? customOrderByFolder
+        var ordersChanged = migratedOrderKeys != nil
+        for (folder, order) in nextOrders {
+            var orderChanged = false
+            let rewrittenOrder = order.map { path -> String in
+                if let rewritten = MetadataPathKeys.rewrite(path, from: oldPath, to: newPath), rewritten != path {
+                    orderChanged = true
+                    return rewritten
+                }
+                return path
+            }
+            if orderChanged {
+                nextOrders[folder] = rewrittenOrder
+                ordersChanged = true
+            }
+        }
+        if ordersChanged {
+            customOrderByFolder = nextOrders
+            settings.saveCustomOrders(nextOrders)
+        }
+
+        if let migrated = MetadataPathKeys.migratingKeys(
+            of: lastStandardSortConfigByFolder, from: oldPath, to: newPath
+        ) {
+            lastStandardSortConfigByFolder = migrated
+        }
+    }
+
+    /// Removes and returns every metadata entry keyed by `path` or a descendant.
+    @discardableResult
+    private func removeMetadata(under path: String) -> PathMetadataSnapshot {
+        var snapshot = PathMetadataSnapshot()
+
+        let ratingKeys = ratingsByPath.keys.filter { MetadataPathKeys.isSameOrDescendant($0, of: path) }
+        if !ratingKeys.isEmpty {
+            var next = ratingsByPath
+            for key in ratingKeys {
+                snapshot.ratings[key] = next.removeValue(forKey: key)
+            }
+            ratingsByPath = next
+            settings.saveRatings(next)
+        }
+
+        let tagKeys = tagAssignments.keys.filter { MetadataPathKeys.isSameOrDescendant($0, of: path) }
+        if !tagKeys.isEmpty {
+            var next = tagAssignments
+            for key in tagKeys {
+                snapshot.tags[key] = next.removeValue(forKey: key)
+            }
+            TagService.shared.saveAssignments(next)
+            tagAssignments = next
+        }
+
+        let favoriteKeys = favoritePaths.filter { MetadataPathKeys.isSameOrDescendant($0, of: path) }
+        if !favoriteKeys.isEmpty {
+            snapshot.favorites = favoriteKeys
+            favoritePaths.subtract(favoriteKeys)
+            FavoritesService.shared.saveFavorites(favoritePaths)
+        }
+
+        let orderKeys = customOrderByFolder.keys.filter { MetadataPathKeys.isSameOrDescendant($0, of: path) }
+        if !orderKeys.isEmpty {
+            var next = customOrderByFolder
+            for key in orderKeys {
+                snapshot.customOrders[key] = next.removeValue(forKey: key)
+            }
+            customOrderByFolder = next
+            settings.saveCustomOrders(next)
+        }
+
+        var removedCollectionPaths: [String] = []
+        for collection in CollectionService.shared.all() {
+            let members = collection.paths.enumerated()
+                .filter { MetadataPathKeys.isSameOrDescendant($0.element, of: path) }
+                .map { (index: $0.offset, path: $0.element) }
+            guard !members.isEmpty else { continue }
+            snapshot.collectionMemberships[collection.id] = members
+            removedCollectionPaths.append(contentsOf: members.map(\.path))
+        }
+        if !removedCollectionPaths.isEmpty {
+            CollectionService.shared.removePaths(Array(Set(removedCollectionPaths)))
+            collections = CollectionService.shared.all()
+        }
+
+        enqueueLibraryIndexMutation { await LibraryIndexService.shared.removeEntries(under: path) }
+
+        return snapshot
+    }
+
+    /// Puts a snapshot taken at `oldPath` back, rewritten to `newPath`.
+    private func restoreMetadata(_ snapshot: PathMetadataSnapshot, from oldPath: String, to newPath: String) {
+        guard !snapshot.isEmpty else { return }
+
+        func target(_ key: String) -> String {
+            MetadataPathKeys.rewrite(key, from: oldPath, to: newPath) ?? key
+        }
+
+        if !snapshot.ratings.isEmpty {
+            var next = ratingsByPath
+            for (key, value) in snapshot.ratings { next[target(key)] = value }
+            ratingsByPath = next
+            settings.saveRatings(next)
+        }
+
+        if !snapshot.tags.isEmpty {
+            var next = tagAssignments
+            for (key, value) in snapshot.tags { next[target(key)] = value }
+            TagService.shared.saveAssignments(next)
+            tagAssignments = next
+        }
+
+        if !snapshot.favorites.isEmpty {
+            favoritePaths.formUnion(snapshot.favorites.map(target))
+            FavoritesService.shared.saveFavorites(favoritePaths)
+        }
+
+        if !snapshot.customOrders.isEmpty {
+            var next = customOrderByFolder
+            for (key, order) in snapshot.customOrders {
+                next[target(key)] = order.map(target)
+            }
+            customOrderByFolder = next
+            settings.saveCustomOrders(next)
+        }
+
+        if !snapshot.collectionMemberships.isEmpty {
+            for collection in CollectionService.shared.all() {
+                guard let members = snapshot.collectionMemberships[collection.id] else { continue }
+                var paths = collection.paths
+                var added: [String] = []
+                for member in members.sorted(by: { $0.index < $1.index }) {
+                    let restored = target(member.path)
+                    guard !paths.contains(restored) else { continue }
+                    paths.insert(restored, at: min(member.index, paths.count))
+                    added.append(restored)
+                }
+                guard !added.isEmpty else { continue }
+                // `reorder` ignores unknown paths, so add first, then place them.
+                CollectionService.shared.add(paths: added, to: collection.id)
+                CollectionService.shared.reorder(id: collection.id, paths: paths)
+            }
+            collections = CollectionService.shared.all()
+        }
+    }
+
+    /// Runs library-index mutations one after another, in call order.
+    func enqueueLibraryIndexMutation(_ operation: @escaping @Sendable () async -> Void) {
+        let previous = libraryIndexMutationTask
+        libraryIndexMutationTask = Task(priority: .utility) {
+            await previous?.value
+            await operation()
         }
     }
 
@@ -1591,6 +2994,8 @@ final class ExplorerViewModel {
         restoreSelection(afterRefreshing: preferredPaths)
     }
 
+    /// Selects `preferredPaths` (the first listed one becomes primary) against
+    /// the current processed list; paths that aren't listed are dropped.
     private func restoreSelection(afterRefreshing preferredPaths: [String]) {
         let uniquePaths = Array(NSOrderedSet(array: preferredPaths).compactMap { $0 as? String })
         guard !uniquePaths.isEmpty else {
@@ -1598,31 +3003,20 @@ final class ExplorerViewModel {
             return
         }
 
-        let items = processedFolderContents
-        let indices = Set(uniquePaths.compactMap { path in
-            items.firstIndex(where: { $0.path == path })
-        })
+        selectionPathSet = Set(uniquePaths)
+        primarySelectionPath = uniquePaths.first
+        selectionAnchorPath = uniquePaths.first
+        remapSelectionToProcessedContents()
 
-        guard !indices.isEmpty else {
+        guard !selectedIndices.isEmpty else {
             clearSelection()
             return
         }
 
-        let primaryIndex =
-            uniquePaths.compactMap { path in
-                items.firstIndex(where: { $0.path == path })
-            }.first
-            ?? indices.min()
-
-        selectedIndices = indices
-        selectionAnchorIndex = primaryIndex
-
-        if let primaryIndex {
-            selectedItemIndex = primaryIndex
-            loadPromptEntry(for: items[primaryIndex])
-        } else {
-            selectedItemIndex = -1
-            selectedPromptEntry = nil
+        // Always reload: the file behind the primary path may have changed.
+        let items = processedFolderContents
+        if selectedItemIndex >= 0, selectedItemIndex < items.count {
+            loadPromptEntry(for: items[selectedItemIndex])
         }
     }
 
@@ -1843,4 +3237,446 @@ struct PromptDiffSession: Identifiable {
     let nameA: String
     let sourceB: PromptEntry
     let nameB: String
+}
+
+// MARK: - Grouping, collections, batch rename (need file-private state)
+
+extension ExplorerViewModel {
+    /// Sections of `processedFolderContents` for `groupBy`; `[]` when not grouping.
+    /// Order within each group follows the processed list; groups appear in the
+    /// order of their first item, except "Unknown", which is always last.
+    var contentGroups: [ContentGroup] {
+        guard groupBy != .none else { return [] }
+        let key = (processed: processedFolderContentsRevision, groups: contentGroupsRevision)
+        if contentGroupsCacheKey == key { return contentGroupsCache }
+
+        let items = processedFolderContents
+        let field = groupBy
+        var order: [String] = []
+        var titles: [String: String] = [:]
+        var indicesByKey: [String: [Int]] = [:]
+        let unknownKey = "__unknown__"
+
+        let dayFormatter = DateFormatter()
+        dayFormatter.dateStyle = .medium
+        dayFormatter.timeStyle = .none
+        let keyFormatter = DateFormatter()
+        keyFormatter.dateFormat = "yyyy-MM-dd"
+        keyFormatter.locale = Locale(identifier: "en_US_POSIX")
+
+        for (index, item) in items.enumerated() {
+            var groupKey: String?
+            var title: String?
+
+            switch field {
+            case .none:
+                break
+            case .model:
+                groupKey = parametersByPath[item.path]?.model.flatMap(Self.nonEmpty)
+                title = groupKey
+            case .sampler:
+                groupKey = parametersByPath[item.path]?.sampler.flatMap(Self.nonEmpty)
+                title = groupKey
+            case .seed:
+                groupKey = parametersByPath[item.path]?.seed.flatMap(Self.nonEmpty)
+                title = groupKey.map { "Seed \($0)" }
+            case .day:
+                if let date = item.modifiedDate {
+                    groupKey = keyFormatter.string(from: date)
+                    title = dayFormatter.string(from: date)
+                }
+            case .type:
+                let descriptor = FileHelpers.typeSortDescriptor(for: item)
+                groupKey = "\(descriptor.rank)|\(descriptor.typeLabel)"
+                title = descriptor.typeLabel
+            }
+
+            let resolvedKey = groupKey.map { $0.lowercased() } ?? unknownKey
+            if indicesByKey[resolvedKey] == nil {
+                order.append(resolvedKey)
+                titles[resolvedKey] = title ?? "Unknown"
+            }
+            indicesByKey[resolvedKey, default: []].append(index)
+        }
+
+        if let unknownIndex = order.firstIndex(of: unknownKey) {
+            order.remove(at: unknownIndex)
+            order.append(unknownKey)
+        }
+
+        let groups = order.map { key in
+            ContentGroup(id: "\(field.rawValue):\(key)", title: titles[key] ?? "Unknown", indices: indicesByKey[key] ?? [])
+        }
+        contentGroupsCache = groups
+        contentGroupsCacheKey = key
+        return groups
+    }
+
+    private static func nonEmpty(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "N/A" else { return nil }
+        return trimmed
+    }
+
+    // MARK: Listing prompt data
+
+    func resetListingPromptData() {
+        libraryParametersTask?.cancel()
+        libraryParametersTask = nil
+        promptDataCompleteScope = nil
+        if !parametersByPath.isEmpty { parametersByPath = [:] }
+        if !promptTextByPath.isEmpty { promptTextByPath = [:] }
+        if !negativePromptByPath.isEmpty { negativePromptByPath = [:] }
+    }
+
+    /// Fills `parametersByPath` from the library index for the current listing,
+    /// and — when grouping or the active smart folder needs prompt data — builds
+    /// the per-listing prompt index, which captures prompts and parameters too.
+    func loadListingPromptDataIfNeeded(force: Bool) {
+        let paths = listingSourceContents.filter { !$0.isDirectory }.map(\.path)
+        guard !paths.isEmpty, let scope = promptIndexScope else { return }
+
+        libraryParametersTask?.cancel()
+        let needsParse = groupBy.needsGenerationParameters || activeSmartFolderNeedsPromptData
+        libraryParametersTask = Task(priority: .utility) { [weak self] in
+            let fromLibrary = await LibraryIndexService.shared.parameters(forPaths: paths)
+            guard !Task.isCancelled, let self, self.promptIndexScope == scope else { return }
+            if !fromLibrary.isEmpty {
+                var next = self.parametersByPath
+                for (path, value) in fromLibrary {
+                    // Values parsed from the file itself are fresher.
+                    next[path] = next[path].map { $0.filling(from: value) } ?? value
+                }
+                if next != self.parametersByPath { self.parametersByPath = next }
+            }
+            if needsParse {
+                await self.ensurePromptIndexForCurrentListing()
+            }
+        }
+    }
+
+    var activeSmartFolderNeedsPromptData: Bool {
+        guard let criteria = activeSmartFolder?.criteria else { return false }
+        return !criteria.modelContains.isEmpty || criteria.requiresPrompt || criteria.requiresNegativePrompt
+    }
+
+    func smartFolderContext() -> SmartFolderService.SmartFolderContext {
+        var tagsByPath: [String: Set<UUID>] = [:]
+        tagsByPath.reserveCapacity(tagAssignments.count)
+        for (path, ids) in tagAssignments { tagsByPath[path] = Set(ids) }
+        var modelByPath: [String: String] = [:]
+        for (path, parameters) in parametersByPath {
+            if let model = parameters.model, !model.isEmpty { modelByPath[path] = model }
+        }
+        return SmartFolderService.SmartFolderContext(
+            tagsByPath: tagsByPath,
+            favorites: favoritePaths,
+            ratings: ratingsByPath,
+            promptByPath: promptTextByPath,
+            negativeByPath: negativePromptByPath,
+            modelByPath: modelByPath
+        )
+    }
+
+    // MARK: Collections
+
+    /// Shows `id`'s files as the listing (nil returns to the folder).
+    func openCollection(_ id: UUID?) {
+        guard id != activeCollectionID else { return }
+        navigationGeneration &+= 1
+        cancelPromptIndexBuild()
+        clearSelection()
+        resetListingPromptData()
+        activeSmartFolder = nil
+
+        guard let id, collections.contains(where: { $0.id == id }) else {
+            activeCollectionID = nil
+            collectionContents = []
+            // The folder listing may have been dropped by the generation bump.
+            Task {
+                guard await self.refreshFolderContents(showLoading: true) else { return }
+                self.loadListingPromptDataIfNeeded(force: false)
+                self.refreshPromptSearchIfNeeded()
+            }
+            return
+        }
+
+        collectionContents = []
+        activeCollectionID = id
+        Task {
+            guard await self.reloadCollectionContents() else { return }
+            self.loadListingPromptDataIfNeeded(force: false)
+            self.refreshPromptSearchIfNeeded()
+        }
+    }
+
+    /// Re-reads the active collection's files from disk (missing files are
+    /// skipped). Returns false when the result went stale.
+    @discardableResult
+    func reloadCollectionContents() async -> Bool {
+        collections = CollectionService.shared.all()
+        guard let id = activeCollectionID, let collection = collections.first(where: { $0.id == id }) else {
+            if activeCollectionID != nil {
+                activeCollectionID = nil
+                collectionContents = []
+            }
+            return false
+        }
+
+        let generation = navigationGeneration
+        let paths = collection.paths
+        isLoadingFolder = true
+        let entries = await Task.detached(priority: .userInitiated) {
+            paths.compactMap { FileEntry.load(from: URL(fileURLWithPath: $0)) }
+        }.value
+        guard generation == navigationGeneration, activeCollectionID == id else { return false }
+        collectionContents = entries
+        isLoadingFolder = false
+        return true
+    }
+
+    func createCollection(named name: String, withSelection: Bool, inSet setID: UUID? = nil) {
+        let paths = withSelection ? selectedPaths : []
+        let collection = CollectionService.shared.create(name: name, paths: paths, parentID: setID)
+        collections = CollectionService.shared.all()
+        showToast(
+            paths.isEmpty
+                ? "Created collection \"\(collection.name)\""
+                : "Created \"\(collection.name)\" with \(paths.count) item\(paths.count == 1 ? "" : "s")",
+            type: .success
+        )
+    }
+
+    func addSelection(toCollection id: UUID) {
+        let paths = selectedItems.filter { !$0.isDirectory }.map(\.path)
+        guard !paths.isEmpty else {
+            showToast("Select files to add to the collection", type: .info)
+            return
+        }
+        CollectionService.shared.add(paths: paths, to: id)
+        collections = CollectionService.shared.all()
+        let name = collections.first(where: { $0.id == id })?.name ?? "collection"
+        showToast("Added \(paths.count) item\(paths.count == 1 ? "" : "s") to \"\(name)\"", type: .success)
+        if activeCollectionID == id {
+            Task { await self.reloadCollectionContents() }
+        }
+    }
+
+    func removeSelectionFromActiveCollection() {
+        guard let id = activeCollectionID else { return }
+        let paths = selectedPaths
+        guard !paths.isEmpty else { return }
+        CollectionService.shared.remove(paths: paths, from: id)
+        collections = CollectionService.shared.all()
+        let removing = Set(paths)
+        collectionContents.removeAll { removing.contains($0.path) }
+        showToast("Removed \(paths.count) item\(paths.count == 1 ? "" : "s") from the collection", type: .success)
+    }
+
+    func renameCollection(_ id: UUID, to name: String) {
+        CollectionService.shared.rename(id: id, to: name)
+        collections = CollectionService.shared.all()
+    }
+
+    func deleteCollection(_ id: UUID) {
+        CollectionService.shared.delete(id: id)
+        collections = CollectionService.shared.all()
+        if activeCollectionID == id {
+            openCollection(nil)
+        }
+    }
+
+    // MARK: Collection sets
+
+    func createCollectionSet(named name: String, inSet parentID: UUID? = nil) {
+        let set = CollectionService.shared.createSet(name: name, parentID: parentID)
+        collectionSets = CollectionService.shared.allSets()
+        showToast("Created collection set \"\(set.name)\"", type: .success)
+    }
+
+    func renameCollectionSet(_ id: UUID, to name: String) {
+        CollectionService.shared.renameSet(id: id, to: name)
+        collectionSets = CollectionService.shared.allSets()
+    }
+
+    /// Deletes the set; its contents move up one level.
+    func deleteCollectionSet(_ id: UUID) {
+        CollectionService.shared.deleteSet(id: id)
+        collectionSets = CollectionService.shared.allSets()
+        collections = CollectionService.shared.all()
+    }
+
+    func moveCollection(_ id: UUID, toSet setID: UUID?) {
+        CollectionService.shared.move(collection: id, toSet: setID)
+        collections = CollectionService.shared.all()
+    }
+
+    /// Returns false when the move was refused (a set can't go inside itself).
+    @discardableResult
+    func moveCollectionSet(_ id: UUID, toParent parentID: UUID?) -> Bool {
+        let before = CollectionService.shared.allSets()
+        CollectionService.shared.moveSet(id: id, toParent: parentID)
+        collectionSets = CollectionService.shared.allSets()
+        let moved = collectionSets.first(where: { $0.id == id })?.parentID == parentID
+        if !moved, before.first(where: { $0.id == id })?.parentID != parentID {
+            showToast("A set can't be moved inside itself", type: .info)
+        }
+        return moved
+    }
+
+    /// Direct children of `parentID` (nil = top level), each list sorted by name.
+    func collectionChildren(of parentID: UUID?) -> (sets: [CollectionSet], collections: [FileCollection]) {
+        let order: (String, String) -> Bool = { $0.localizedStandardCompare($1) == .orderedAscending }
+        return (
+            collectionSets.filter { $0.parentID == parentID }.sorted { order($0.name, $1.name) },
+            collections.filter { $0.parentID == parentID }.sorted { order($0.name, $1.name) }
+        )
+    }
+
+    /// Ancestor sets of a collection or set, outermost first.
+    func collectionSetAncestors(ofParent parentID: UUID?) -> [CollectionSet] {
+        var chain: [CollectionSet] = []
+        var seen = Set<UUID>()
+        var current = parentID
+        while let id = current, seen.insert(id).inserted,
+              let set = collectionSets.first(where: { $0.id == id }) {
+            chain.insert(set, at: 0)
+            current = set.parentID
+        }
+        return chain
+    }
+
+    /// Unique files across every collection inside `setID`, at any depth.
+    func collectionSetItemCount(_ setID: UUID) -> Int {
+        let setIDs = CollectionService.shared.descendantSetIDs(of: setID, including: true)
+        var paths = Set<String>()
+        for collection in collections {
+            if let parent = collection.parentID, setIDs.contains(parent) {
+                paths.formUnion(collection.paths)
+            }
+        }
+        return paths.count
+    }
+
+    func reorderCollectionItems(sourcePaths: [String], targetPath: String, position: ReorderPosition) {
+        guard let id = activeCollectionID else { return }
+        ensureCustomSortForCurrentFolder()
+
+        let currentOrder = collectionContents.map(\.path)
+        let available = Set(currentOrder)
+        let sources = sourcePaths.filter { available.contains($0) }
+        guard !sources.isEmpty, !sources.contains(targetPath) else { return }
+
+        let withoutSources = currentOrder.filter { !sources.contains($0) }
+        guard let targetIndex = withoutSources.firstIndex(of: targetPath) else { return }
+        let insertIndex = position == .after ? targetIndex + 1 : targetIndex
+        let nextOrder = Array(withoutSources[..<insertIndex]) + sources + Array(withoutSources[insertIndex...])
+
+        CollectionService.shared.reorder(id: id, paths: nextOrder)
+        collections = CollectionService.shared.all()
+
+        let previousSelection = selectedPaths
+        let byPath = Dictionary(collectionContents.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        collectionContents = nextOrder.compactMap { byPath[$0] }
+
+        let nextSelection = previousSelection.contains(where: sources.contains) ? previousSelection : sources
+        restoreSelection(afterRefreshing: nextSelection)
+    }
+
+    // MARK: Batch rename
+
+    /// Plans a template rename of the selection (or the whole listing when
+    /// nothing is selected). Folders are skipped.
+    func batchRenamePlan(template: String) async -> [RenamePlanItem] {
+        let targets = batchRenameTargets
+        guard !targets.isEmpty else { return [] }
+
+        let needsParsedData = ["{prompt", "{model", "{seed", "{sampler", "{steps", "{cfg", "{width", "{height"]
+            .contains(where: template.contains)
+        if needsParsedData {
+            await ensurePromptIndexForCurrentListing()
+        }
+
+        let contexts = targets.enumerated().map { offset, item in
+            let parameters = parametersByPath[item.path]
+            return RenameTemplateContext(
+                url: item.url,
+                index: offset + 1,
+                modifiedDate: item.modifiedDate,
+                prompt: promptTextByPath[item.path],
+                model: parameters?.model,
+                seed: parameters?.seed,
+                sampler: parameters?.sampler,
+                steps: parameters?.steps,
+                cfg: parameters?.cfg,
+                width: parameters?.width,
+                height: parameters?.height
+            )
+        }
+        return await Task.detached(priority: .userInitiated) {
+            RenameTemplateService.plan(template: template, items: contexts)
+        }.value
+    }
+
+    var batchRenameTargets: [FileEntry] {
+        let source = selectedItems.isEmpty ? processedFolderContents : selectedItems
+        return source.filter { !$0.isDirectory }
+    }
+
+    /// Applies a rename plan as a single undoable step. Conflicting and
+    /// unchanged items are skipped; failures are reported in one toast.
+    func applyBatchRename(_ plan: [RenamePlanItem]) async {
+        let actionable = plan.filter { !$0.conflict && !$0.unchanged }
+        guard !actionable.isEmpty else {
+            showToast("Nothing to rename", type: .info)
+            return
+        }
+
+        var applied: [PathMoveRecord] = []
+        var failedCount = 0
+        var firstError: Error?
+
+        for item in actionable {
+            let source = item.source.standardizedFileURL
+            do {
+                let renamed = try FileSystemService.rename(at: source, to: item.proposedName).standardizedFileURL
+                applied.append(PathMoveRecord(from: source, to: renamed))
+                migrateMetadataKeys(from: source.path, to: renamed.path)
+            } catch {
+                failedCount += 1
+                if firstError == nil { firstError = error }
+            }
+        }
+
+        // Refreshing also reloads the active collection's files.
+        await refreshAfterMutation(preferredPaths: applied.map(\.to.path))
+
+        if !applied.isEmpty {
+            recordFolderHistoryEntry(
+                makeMoveHistoryEntry(recordsToApplyNext: invertedMoveRecords(applied), title: "Batch Rename")
+            )
+        }
+
+        let skipped = plan.count - actionable.count
+        if failedCount == 0 {
+            var message = "Renamed \(applied.count) file\(applied.count == 1 ? "" : "s")"
+            if skipped > 0 { message += ", skipped \(skipped)" }
+            showToast(message, type: .success)
+        } else {
+            showToast(
+                "Renamed \(applied.count) of \(actionable.count); \(failedCount) failed: \(firstError?.localizedDescription ?? "Unknown error")",
+                type: .error
+            )
+        }
+    }
+}
+
+extension GroupByField {
+    /// Grouping that needs parsed generation parameters.
+    var needsGenerationParameters: Bool {
+        switch self {
+        case .model, .sampler, .seed: return true
+        case .none, .day, .type: return false
+        }
+    }
 }

@@ -21,18 +21,18 @@ struct ToastView: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: AppSpacing.md) {
             Image(systemName: icon)
                 .foregroundStyle(color)
             Text(message)
                 .font(.appBody)
                 .foregroundStyle(Color.appPrimaryText)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, AppSpacing.xl)
         .padding(.vertical, 10)
         .background(Color.appSurface)
-        .cornerRadius(8)
+        .cornerRadius(AppRadius.md)
         .shadow(color: Color.appShadowColor.opacity(0.9), radius: 8, y: 4)
-        .padding(.top, 8)
+        .padding(.top, AppSpacing.md)
     }
 }

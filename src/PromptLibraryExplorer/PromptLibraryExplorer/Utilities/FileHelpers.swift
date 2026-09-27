@@ -2,6 +2,12 @@ import Foundation
 import UniformTypeIdentifiers
 
 enum FileHelpers {
+    struct TypeSortDescriptor {
+        let rank: Int
+        let typeLabel: String
+        let canonicalExtension: String
+    }
+
     static let imageExtensions: Set<String> = [
         "png", "jpg", "jpeg", "webp", "gif", "bmp",
         "tif", "tiff", "psd", "psb", "heic", "heif", "avif", "icns"
@@ -108,14 +114,87 @@ enum FileHelpers {
         }
     }
 
-    /// Returns the type-sort rank for an entry (directories first, then prompts, images, other).
-    static func typeRank(for entry: FileEntry) -> Int {
-        if entry.isDirectory { return 0 }
+    static func filterType(for entry: FileEntry) -> FileTypeFilter? {
+        guard !entry.isDirectory else { return nil }
+        return filterType(forName: entry.name)
+    }
+
+    static func filterType(forName name: String) -> FileTypeFilter {
+        let lowercasedName = name.lowercased()
+        let ext = canonicalTypeExtension(fileExtension(lowercasedName))
+
+        switch ext {
+        case "plib":
+            return .plib
+        case "aoe":
+            return .aoe
+        case "png":
+            return .png
+        case "jpg":
+            return .jpg
+        case "webp":
+            return .webp
+        case "gif":
+            return .gif
+        default:
+            break
+        }
+
+        if isImageFile(lowercasedName) {
+            return .otherImages
+        }
+
+        if isVideoFile(lowercasedName) {
+            return .video
+        }
+
+        if isAudioFile(lowercasedName) {
+            return .audio
+        }
+
+        return .unsupported
+    }
+
+    static func typeSortDescriptor(for entry: FileEntry) -> TypeSortDescriptor {
+        if entry.isDirectory {
+            return TypeSortDescriptor(rank: 0, typeLabel: "Folder", canonicalExtension: "")
+        }
+
         let name = entry.name.lowercased()
-        if name.hasSuffix(".plib") || name.hasSuffix(".aoe") { return 1 }
-        if isImageFile(name) || isVideoFile(name) { return 2 }
-        if isAudioFile(name) { return 2 }
-        return 3
+        let ext = canonicalTypeExtension(fileExtension(name))
+        let rank: Int
+
+        if isPromptSnapshotFile(name) {
+            rank = 1
+        } else if isImageFile(name) {
+            rank = 2
+        } else if isVideoFile(name) {
+            rank = 3
+        } else if isAudioFile(name) {
+            rank = 4
+        } else {
+            rank = 5
+        }
+
+        return TypeSortDescriptor(
+            rank: rank,
+            typeLabel: describeFileType(ext),
+            canonicalExtension: ext
+        )
+    }
+
+    /// Returns the top-level type-sort rank for an entry.
+    static func typeRank(for entry: FileEntry) -> Int {
+        typeSortDescriptor(for: entry).rank
+    }
+
+    static func canonicalTypeExtension(_ ext: String?) -> String {
+        switch ext?.lowercased() {
+        case "jpeg": return "jpg"
+        case "tif": return "tiff"
+        case "aif": return "aiff"
+        default: return ext?.lowercased() ?? ""
+        }
     }
 
     static func isLikelyBase64(_ value: String) -> Bool {

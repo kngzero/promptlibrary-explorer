@@ -13,8 +13,8 @@ enum AspectRatio: String, Codable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        let raw = try container.decode(String.self)
-        self = AspectRatio(rawValue: raw) ?? .notAvailable
+        let raw = (try? container.decode(String.self)) ?? ""
+        self = AspectRatio(rawValue: raw.trimmingCharacters(in: .whitespaces)) ?? .notAvailable
     }
 }
 
@@ -25,6 +25,45 @@ struct GenerationInfo: Codable {
     let model: String
     let timestamp: String
     let numberOfImages: Int
+
+    enum CodingKeys: String, CodingKey {
+        case aspectRatio, model, timestamp, numberOfImages
+    }
+}
+
+extension GenerationInfo {
+    /// Lenient decoding: a .plib missing (or mistyping) any single field still loads,
+    /// falling back to the same placeholders the app uses elsewhere.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let model = (try? c.decodeIfPresent(String.self, forKey: .model))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.init(
+            aspectRatio: (try? c.decodeIfPresent(AspectRatio.self, forKey: .aspectRatio)) ?? .notAvailable,
+            model: (model?.isEmpty == false ? model : nil) ?? "N/A",
+            timestamp: Self.decodeTimestamp(c) ?? "",
+            numberOfImages: Self.decodeCount(c) ?? 0
+        )
+    }
+
+    private static func decodeTimestamp(_ c: KeyedDecodingContainer<CodingKeys>) -> String? {
+        if let s = try? c.decodeIfPresent(String.self, forKey: .timestamp) { return s }
+        // Some writers store epoch milliseconds/seconds as a number.
+        if let n = try? c.decodeIfPresent(Double.self, forKey: .timestamp) {
+            let seconds = n > 10_000_000_000 ? n / 1000 : n
+            return ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: seconds))
+        }
+        return nil
+    }
+
+    private static func decodeCount(_ c: KeyedDecodingContainer<CodingKeys>) -> Int? {
+        if let n = try? c.decodeIfPresent(Int.self, forKey: .numberOfImages) { return n }
+        if let d = try? c.decodeIfPresent(Double.self, forKey: .numberOfImages), d.isFinite { return Int(d) }
+        if let s = try? c.decodeIfPresent(String.self, forKey: .numberOfImages) {
+            return Int(s.trimmingCharacters(in: .whitespaces))
+        }
+        return nil
+    }
 }
 
 // MARK: - Prompt Analysis
@@ -52,6 +91,51 @@ struct PromptAnalysis: Codable {
         case lighting
         case colorPalette = "color_palette"
         case mood
+    }
+
+    init(
+        fullPrompt: String? = nil,
+        shortDescription: String? = nil,
+        subject: String? = nil,
+        subjectPose: String? = nil,
+        composition: String? = nil,
+        artStyle: String? = nil,
+        cameraSettings: String? = nil,
+        lighting: String? = nil,
+        colorPalette: String? = nil,
+        mood: String? = nil
+    ) {
+        self.fullPrompt = fullPrompt
+        self.shortDescription = shortDescription
+        self.subject = subject
+        self.subjectPose = subjectPose
+        self.composition = composition
+        self.artStyle = artStyle
+        self.cameraSettings = cameraSettings
+        self.lighting = lighting
+        self.colorPalette = colorPalette
+        self.mood = mood
+    }
+
+    /// Lenient decoding: a mistyped segment (e.g. a number or object) becomes nil instead of
+    /// failing the whole file.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func field(_ key: CodingKeys) -> String? {
+            (try? c.decodeIfPresent(String.self, forKey: key)) ?? nil
+        }
+        self.init(
+            fullPrompt: field(.fullPrompt),
+            shortDescription: field(.shortDescription),
+            subject: field(.subject),
+            subjectPose: field(.subjectPose),
+            composition: field(.composition),
+            artStyle: field(.artStyle),
+            cameraSettings: field(.cameraSettings),
+            lighting: field(.lighting),
+            colorPalette: field(.colorPalette),
+            mood: field(.mood)
+        )
     }
 
     /// All non-nil segments as (label, value) pairs.
@@ -97,4 +181,8 @@ struct PromptEntry: Identifiable {
     var analysis: PromptAnalysis?
     var embeddedMetadata: [PromptMetadataField] = []
     var fileMetadata: FileMetadata?
+    /// Raw ComfyUI API-graph JSON from the PNG `prompt` chunk, when present.
+    var comfyPromptJSON: String? = nil
+    /// Raw ComfyUI UI workflow JSON from the PNG `workflow` chunk, when present.
+    var comfyWorkflowJSON: String? = nil
 }

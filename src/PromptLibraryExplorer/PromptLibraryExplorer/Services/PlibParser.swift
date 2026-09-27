@@ -5,11 +5,17 @@ import Foundation
 actor PlibParser {
     static let shared = PlibParser()
 
-    private var cache: [String: PromptEntry] = [:]
+    /// Bounded: entries hold decoded images plus raw base64, so an unbounded map grows with
+    /// every file visited.
+    private var cache = LRUCache<ParsedFileCacheEntry<PromptEntry>>(capacity: 48)
 
     func parse(at url: URL) async -> PromptEntry? {
         let path = url.path
-        if let cached = cache[path] { return cached }
+        let signature = ParsedFileCacheEntry<PromptEntry>.signature(of: url)
+        if let cached = cache.value(forKey: path) {
+            if cached.matches(signature) { return cached.value }
+            cache.removeValue(forKey: path)
+        }
 
         do {
             let data = try Data(contentsOf: url)
@@ -44,7 +50,10 @@ actor PlibParser {
                 analysis: file.analysis
             )
 
-            cache[path] = entry
+            cache.setValue(
+                ParsedFileCacheEntry(value: entry, modificationDate: signature.0, fileSize: signature.1),
+                forKey: path
+            )
             return entry
         } catch {
             return nil
@@ -53,6 +62,17 @@ actor PlibParser {
 
     func clearCache() {
         cache.removeAll()
+    }
+
+    /// Drops the cached parse for a single file (e.g. after it was edited, moved or deleted).
+    func invalidate(path: String) {
+        cache.removeValue(forKey: path)
+        cache.removeValue(forKey: URL(fileURLWithPath: path).standardizedFileURL.path)
+    }
+
+    /// Number of parsed files currently held in memory.
+    var cachedCount: Int {
+        cache.count
     }
 
     // MARK: - Image Decoding

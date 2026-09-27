@@ -4,20 +4,36 @@ import SwiftUI
 /// Persisted app settings via @AppStorage.
 final class SettingsStore: ObservableObject {
     static let shared = SettingsStore()
+    private static let hiddenFileTypesUnsetValue = "__unset__"
 
     @AppStorage("lastOpenedFolder") var lastOpenedFolder: String = ""
     @AppStorage("thumbnailSize") var thumbnailSize: Double = 5
     @AppStorage("sortField") var sortField: String = "type"
     @AppStorage("sortDirection") var sortDirection: String = "asc"
-    @AppStorage("hideOther") var hideOther: Bool = true
-    @AppStorage("hideJpg") var hideJpg: Bool = false
-    @AppStorage("hidePng") var hidePng: Bool = false
+    @AppStorage("hiddenFileTypes") private var hiddenFileTypesValue: String = SettingsStore.hiddenFileTypesUnsetValue
+    @AppStorage("hideOther") private var legacyHideOther: Bool = true
+    @AppStorage("hideJpg") private var legacyHideJpg: Bool = false
+    @AppStorage("hidePng") private var legacyHidePng: Bool = false
     @AppStorage("showStatusBar") var showStatusBar: Bool = true
+    @AppStorage("thumbnailsOnly") var thumbnailsOnly: Bool = false
     @AppStorage("appearanceMode") var appearanceMode: String = AppAppearanceMode.dark.rawValue
+
+    @AppStorage("confirmBeforeTrash") var confirmBeforeTrash: Bool = false
+    @AppStorage("duplicateNamePolicy") var duplicateNamePolicy: String = DuplicateNamePolicy.keepBoth.rawValue
+    @AppStorage("externalDragOperation") var externalDragOperation: String = ExternalDragOperation.copy.rawValue
 
     @AppStorage("filterMinRating") var filterMinRating: Int = 0
     @AppStorage("previewPaneCollapsed") var previewPaneCollapsed: Bool = false
     @AppStorage("searchMode") var searchMode: String = "filename"
+
+    // Window restoration
+    @AppStorage("browserViewMode") var viewMode: String = BrowserViewMode.grid.rawValue
+    @AppStorage("browserGroupBy") var groupBy: String = GroupByField.none.rawValue
+    @AppStorage("sidebarVisible") var sidebarVisible: Bool = true
+    /// Folder that was showing when the app quit (may be below the root).
+    @AppStorage("lastSelectedFolder") var lastSelectedFolder: String = ""
+    /// Primary selected file in `lastSelectedFolder` when the app quit.
+    @AppStorage("lastSelectedFilePath") var lastSelectedFilePath: String = ""
 
     private static let customOrderKey = "promptlibrary.customSortOrder"
     private static let ratingsKey = "promptlibrary.ratings"
@@ -46,5 +62,90 @@ final class SettingsStore: ObservableObject {
         if let data = try? JSONEncoder().encode(ratings) {
             UserDefaults.standard.set(data, forKey: Self.ratingsKey)
         }
+    }
+
+    func loadFilterConfig() -> FilterConfig {
+        let hiddenFileTypes: Set<FileTypeFilter>
+
+        if hiddenFileTypesValue == Self.hiddenFileTypesUnsetValue {
+            var migratedTypes = FilterConfig.defaultHiddenFileTypes
+            if !legacyHideOther {
+                migratedTypes.remove(.unsupported)
+            }
+            if legacyHideJpg {
+                migratedTypes.insert(.jpg)
+            }
+            if legacyHidePng {
+                migratedTypes.insert(.png)
+            }
+
+            hiddenFileTypes = migratedTypes
+            saveHiddenFileTypes(migratedTypes)
+        } else {
+            hiddenFileTypes = decodeHiddenFileTypes(hiddenFileTypesValue)
+        }
+
+        return FilterConfig(hiddenFileTypes: hiddenFileTypes, filterMinRating: filterMinRating)
+    }
+
+    func saveFilterConfig(_ config: FilterConfig) {
+        saveHiddenFileTypes(config.hiddenFileTypes)
+        filterMinRating = config.filterMinRating
+    }
+
+    private func saveHiddenFileTypes(_ hiddenFileTypes: Set<FileTypeFilter>) {
+        hiddenFileTypesValue = hiddenFileTypes
+            .map(\.rawValue)
+            .sorted()
+            .joined(separator: ",")
+    }
+
+    private func decodeHiddenFileTypes(_ rawValue: String) -> Set<FileTypeFilter> {
+        guard !rawValue.isEmpty else { return [] }
+        return Set(
+            rawValue
+                .split(separator: ",")
+                .compactMap { FileTypeFilter(rawValue: String($0)) }
+        )
+    }
+}
+
+/// Helpers for metadata stores keyed by absolute file path (ratings, tags,
+/// favorites, custom sort orders). When a file or folder is renamed or moved,
+/// its own key and every key underneath it (for folders) must follow it.
+enum MetadataPathKeys {
+    /// True when `path` is `root` itself or lives inside it.
+    static func isSameOrDescendant(_ path: String, of root: String) -> Bool {
+        path == root || path.hasPrefix(directoryPrefix(root))
+    }
+
+    /// The rewritten path when `path` is `oldPath` or lives inside it, else nil.
+    static func rewrite(_ path: String, from oldPath: String, to newPath: String) -> String? {
+        if path == oldPath { return newPath }
+        let oldPrefix = directoryPrefix(oldPath)
+        guard path.hasPrefix(oldPrefix) else { return nil }
+        return directoryPrefix(newPath) + path.dropFirst(oldPrefix.count)
+    }
+
+    /// Returns `dictionary` with every key under `oldPath` moved under `newPath`,
+    /// or nil when nothing matched.
+    static func migratingKeys<Value>(
+        of dictionary: [String: Value],
+        from oldPath: String,
+        to newPath: String
+    ) -> [String: Value]? {
+        var result = dictionary
+        var changed = false
+        for (key, value) in dictionary {
+            guard let rewritten = rewrite(key, from: oldPath, to: newPath), rewritten != key else { continue }
+            result.removeValue(forKey: key)
+            result[rewritten] = value
+            changed = true
+        }
+        return changed ? result : nil
+    }
+
+    private static func directoryPrefix(_ path: String) -> String {
+        path.hasSuffix("/") ? path : path + "/"
     }
 }

@@ -2,7 +2,8 @@ import SwiftUI
 
 struct MainContentView: View {
     @Environment(ExplorerViewModel.self) private var vm
-    @State private var splitViewVisibility: NavigationSplitViewVisibility = .all
+    @State private var splitViewVisibility: NavigationSplitViewVisibility =
+        SettingsStore.shared.sidebarVisible ? .all : .doubleColumn
 
     var body: some View {
         @Bindable var vm = vm
@@ -51,6 +52,22 @@ struct MainContentView: View {
             BatchMetadataEditorView()
                 .environment(vm)
         }
+        .sheet(isPresented: $vm.librarySearchOpen) {
+            LibrarySearchView()
+                .environment(vm)
+        }
+        .sheet(isPresented: $vm.duplicatesOpen) {
+            SimilarPromptsView()
+                .environment(vm)
+        }
+        .sheet(isPresented: $vm.batchRenameOpen) {
+            BatchRenameView()
+                .environment(vm)
+        }
+        .sheet(isPresented: $vm.snippetsOpen) {
+            SnippetsView()
+                .environment(vm)
+        }
         .alert(
             vm.deleteConfirmationRequest?.title ?? "Delete Permanently?",
             isPresented: Binding(
@@ -66,12 +83,30 @@ struct MainContentView: View {
             Button("Cancel", role: .cancel) {
                 vm.clearDeleteConfirmation()
             }
-            Button("Delete", role: .destructive) {
+            Button(request.confirmButtonTitle, role: .destructive) {
                 vm.clearDeleteConfirmation()
-                Task { await vm.deleteItemsPermanently(at: request.urls) }
+                Task {
+                    switch request.kind {
+                    case .trash:
+                        await vm.trashItems(at: request.urls)
+                    case .permanent:
+                        await vm.deleteItemsPermanently(at: request.urls)
+                    }
+                }
             }
         } message: { request in
             Text(request.message)
+        }
+        .alert("New Folder", isPresented: $vm.isShowingNewFolderPrompt) {
+            TextField("Folder name", text: $vm.newFolderName)
+            Button("Create") {
+                Task { await vm.createNewFolder() }
+            }
+            Button("Cancel", role: .cancel) {
+                vm.newFolderName = "untitled folder"
+            }
+        } message: {
+            Text("Enter a name for the new folder.")
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -83,6 +118,18 @@ struct MainContentView: View {
         .background(WindowTitleConfigurator())
         .onGlobalKeyDown { event in
             handleGlobalKey(event)
+        }
+        .onChange(of: splitViewVisibility) { _, visibility in
+            SettingsStore.shared.sidebarVisible = visibility != .doubleColumn && visibility != .detailOnly
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleCommandPalette)) { _ in
+            if vm.commandPaletteOpen {
+                closeCommandPalette()
+            } else {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    vm.commandPaletteOpen = true
+                }
+            }
         }
     }
 
@@ -102,7 +149,7 @@ struct MainContentView: View {
                 .navigationSplitViewStyle(.balanced)
                 .styledSplitViewDividers()
             } else {
-                EmptyStateView()
+                FirstRunView()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -112,11 +159,7 @@ struct MainContentView: View {
                 ToastView(message: toast.message, type: toast.type)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .zIndex(200)
-                    .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                            withAnimation { vm.toastMessage = nil }
-                        }
-                    }
+                    .id(vm.toastID)
             }
         }
         .overlay {
@@ -145,27 +188,58 @@ struct MainContentView: View {
                 ) {
                     Task { await vm.openComparison() }
                 }
-                .padding(16)
+                .padding(AppSpacing.xl)
                 .zIndex(150)
             }
         }
     }
 
     /// Central keyboard dispatcher — routes keys based on app state.
+    ///
+    /// Keys with a menu key equivalent (⌘F, ⌘K, ⇧⌘N, ⌘D, ⌘⌫, ⌘↑, ⌘[, ⌘] …) are
+    /// owned by the menus in `PromptLibraryExplorerApp`; this monitor must pass
+    /// them through, or a single press would run twice.
     private func handleGlobalKey(_ event: NSEvent) -> Bool {
+        // Anything modal (sheets, alerts, save panels, the Quick Look panel)
+        // owns the keyboard until it is dismissed. The monitor is app-wide, so
+        // it would otherwise see those keys before the modal does.
+        guard !ModalKeyGuard.isModalPresentationActive else { return false }
+
         // Lightbox handles its own keys via its own .onGlobalKeyDown
         guard !vm.lightboxOpen else { return false }
+
+        let isCommand = event.modifierFlags.contains(.command)
 
         // Don't intercept keys when a text field is focused
         if let responder = NSApp.keyWindow?.firstResponder,
            responder is NSTextView || responder is NSTextField
         {
-            // But still allow Escape to blur the text field
-            if event.keyCode == KeyCode.escape.rawValue {
+            // Escape closes the command palette (its field has focus while open).
+            // Otherwise it goes to the field, so handlers such as the inline
+            // rename's `.onExitCommand` cancel get to run. ⌘K is the Go menu's.
+            if vm.commandPaletteOpen, event.keyCode == KeyCode.escape.rawValue {
+                closeCommandPalette()
+                return true
+            }
+
+            // The toolbar search field has no Escape handler of its own, so
+            // keep the old behaviour there: Escape hands focus back to the grid.
+            if event.keyCode == KeyCode.escape.rawValue,
+               (responder as? NSTextView)?.delegate is NSSearchField || responder is NSSearchField
+            {
                 NSApp.keyWindow?.makeFirstResponder(nil)
                 return true
             }
             return false  // let the text field handle it
+        }
+
+        // While the palette is up it owns the keyboard: nothing drives the grid.
+        if vm.commandPaletteOpen {
+            if event.keyCode == KeyCode.escape.rawValue {
+                closeCommandPalette()
+                return true
+            }
+            return false
         }
 
         // No root path = nothing to navigate
@@ -175,6 +249,16 @@ struct MainContentView: View {
         let selectionModifiers = contentSelectionModifiers(for: event)
 
         switch event.keyCode {
+        // Cmd+[ and Cmd+] are owned by the Go menu; Cmd+←/→ are extra aliases
+        // with no menu item, so they live here.
+        case KeyCode.leftArrow.rawValue where event.modifierFlags.contains(.command):
+            Task { await vm.navigateBack() }
+            return true
+
+        case KeyCode.rightArrow.rawValue where event.modifierFlags.contains(.command):
+            Task { await vm.navigateForward() }
+            return true
+
         case KeyCode.leftArrow.rawValue:
             if vm.activePane == .sidebar {
                 Task {
@@ -197,6 +281,11 @@ struct MainContentView: View {
                 handleContentRight(items: items, modifiers: selectionModifiers)
             }
             return true
+
+        // Cmd+↑ (Enclosing Folder) and Cmd+↓ belong to the menus / system.
+        case KeyCode.upArrow.rawValue where isCommand,
+             KeyCode.downArrow.rawValue where isCommand:
+            return false
 
         case KeyCode.upArrow.rawValue:
             if vm.activePane == .sidebar {
@@ -248,6 +337,10 @@ struct MainContentView: View {
             vm.clearSelection()
             return true
 
+        // Cmd+Delete is File > Move to Trash.
+        case KeyCode.delete.rawValue where isCommand, KeyCode.forwardDelete.rawValue where isCommand:
+            return false
+
         case KeyCode.delete.rawValue, KeyCode.forwardDelete.rawValue:
             if event.modifierFlags.contains(.shift) {
                 guard vm.activePane == .content, !vm.selectedItems.isEmpty else { return true }
@@ -258,36 +351,19 @@ struct MainContentView: View {
             Task { await vm.navigateUpToParentFolder() }
             return true
 
-        case KeyCode.f.rawValue where event.modifierFlags.contains(.command):
-            // Cmd+F -> focus search field
-            // Post notification that search should focus
-            NotificationCenter.default.post(name: .focusSearchField, object: nil)
-            return true
-
-        case KeyCode.z.rawValue where event.modifierFlags.contains(.command):
-            if event.modifierFlags.contains(.shift) {
-                Task { await vm.redoLastFolderAction() }
-            } else {
-                Task { await vm.undoLastFolderAction() }
-            }
-            return true
-
-        case KeyCode.k.rawValue where event.modifierFlags.contains(.command):
-            withAnimation(.easeOut(duration: 0.15)) {
-                vm.commandPaletteOpen.toggle()
-            }
-            return true
-
-        case KeyCode.d.rawValue where event.modifierFlags.contains(.command):
-            // Cmd+D -> Compare prompts of two selected items
-            if vm.selectedIndices.count == 2 {
-                vm.openPromptDiff()
-            }
-            return true
+        // Cmd+F, Cmd+K, Shift+Cmd+N, Cmd+D, Cmd+Z / Shift+Cmd+Z are owned by
+        // the menus; handling them here too would run them twice.
 
         default:
             return false
         }
+    }
+
+    private func closeCommandPalette() {
+        withAnimation(.easeOut(duration: 0.15)) {
+            vm.commandPaletteOpen = false
+        }
+        NSApp.keyWindow?.makeFirstResponder(nil)
     }
 
     private func contentSelectionModifiers(for event: NSEvent) -> EventModifiers {
@@ -353,13 +429,13 @@ struct CompareAoeBanner: View {
     let action: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: AppSpacing.lg) {
+            VStack(alignment: .leading, spacing: AppSpacing.xxs) {
                 Text("Compare .aoe snapshots")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.appHeadline)
                     .foregroundStyle(Color.appPrimaryText)
                 Text("Uses the first two of \(selectedCount) selected files")
-                    .font(.system(size: 11))
+                    .font(.appCaption)
                     .foregroundStyle(Color.appMuted)
             }
 
@@ -370,20 +446,20 @@ struct CompareAoeBanner: View {
                         .frame(width: 60)
                 } else {
                     Text("Open")
-                        .font(.system(size: 12, weight: .semibold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
+                        .font(.appCalloutEmphasis)
+                        .padding(.horizontal, AppSpacing.lg)
+                        .padding(.vertical, AppSpacing.sm)
                 }
             }
             .buttonStyle(.borderedProminent)
             .tint(Color.appAccent)
             .disabled(isLoading)
         }
-        .padding(14)
+        .padding(AppSpacing.lg)
         .background(Color.appSurface.opacity(0.94))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg))
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: AppRadius.lg)
                 .strokeBorder(Color.appAccent.opacity(0.35), lineWidth: 1)
         )
         .shadow(color: Color.appShadowColor.opacity(0.9), radius: 12, y: 6)
@@ -394,6 +470,8 @@ struct CompareAoeBanner: View {
 
 extension Notification.Name {
     static let focusSearchField = Notification.Name("focusSearchField")
+    /// Posted by Go > Command Palette (⌘K); MainContentView toggles the palette.
+    static let toggleCommandPalette = Notification.Name("toggleCommandPalette")
 }
 
 // MARK: - Empty State
@@ -402,24 +480,22 @@ struct EmptyStateView: View {
     @Environment(ExplorerViewModel.self) private var vm
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: AppSpacing.xl) {
             Image(systemName: "folder.badge.plus")
-                .font(.system(size: 56))
+                .font(.appIcon(56))
                 .foregroundStyle(Color.appAccent)
 
             Text("PromptLibrary Explorer")
-                .font(.title2)
-                .fontWeight(.semibold)
+                .font(.appLargeTitle)
 
             Text("Open a folder to browse your prompt library")
                 .foregroundStyle(Color.appMuted)
 
-            Button("Open Folder...") {
+            // ⌘O is owned by File > Open Folder…
+            Button("Open Folder…") {
                 Task { await vm.openFolder() }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.appAccent)
-            .keyboardShortcut("o", modifiers: .command)
+            .buttonStyle(AppPrimaryButtonStyle())
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.appBackground)

@@ -20,7 +20,9 @@ enum FileSystemService {
 
     /// Reads the contents of a directory (non-recursive).
     static func readDirectory(at url: URL) throws -> [FileEntry] {
-        let keys: [URLResourceKey] = [.isDirectoryKey, .nameKey]
+        let keys: [URLResourceKey] = [
+            .isDirectoryKey, .nameKey, .contentModificationDateKey, .creationDateKey, .fileSizeKey,
+        ]
         let contents = try fm.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: keys,
@@ -32,7 +34,14 @@ enum FileSystemService {
                   let isDir = values.isDirectory
             else { return nil }
 
-            return FileEntry(url: itemURL, isDirectory: isDir, children: isDir ? [] : nil)
+            return FileEntry(
+                url: itemURL,
+                isDirectory: isDir,
+                children: isDir ? [] : nil,
+                modifiedDate: values.contentModificationDate,
+                creationDate: values.creationDate,
+                fileSize: isDir ? nil : values.fileSize.map(Int64.init)
+            )
         }
     }
 
@@ -65,15 +74,103 @@ enum FileSystemService {
         let sourceURL = source.standardizedFileURL
         let targetURL = destinationURL.standardizedFileURL
         if sourceURL == targetURL { return targetURL }
+        // Same file reached through a different path (symlink, case variant): nothing to move
+        // unless the name itself changes (e.g. a case-only rename, which moveItem handles).
+        if sourceURL.lastPathComponent == targetURL.lastPathComponent,
+           isSameFile(sourceURL, targetURL) {
+            return sourceURL
+        }
         try fm.moveItem(at: sourceURL, to: targetURL)
         return targetURL
     }
 
     /// Moves a file from source to destination directory. Returns the final destination URL.
+    /// Throws if the name is already taken — callers that need a collision policy
+    /// should use `moveFile(from:to:onDuplicate:)`.
     @discardableResult
     static func moveFile(from source: URL, to destinationDir: URL) throws -> URL {
         let destURL = destinationDir.appendingPathComponent(source.lastPathComponent)
         return try moveEntry(from: source, to: destURL)
+    }
+
+    enum MoveResolution {
+        case moved(URL)
+        case skipped
+    }
+
+    /// Moves a file into a directory, resolving a name collision per `policy`.
+    static func moveFile(
+        from source: URL,
+        to destinationDir: URL,
+        onDuplicate policy: DuplicateNamePolicy
+    ) throws -> MoveResolution {
+        let sourceURL = source.standardizedFileURL
+        let proposedURL = destinationDir
+            .appendingPathComponent(sourceURL.lastPathComponent)
+            .standardizedFileURL
+
+        // No collision (or the file is already exactly where it is going).
+        guard fm.fileExists(atPath: proposedURL.path), proposedURL != sourceURL else {
+            return .moved(try moveEntry(from: sourceURL, to: proposedURL))
+        }
+
+        // The "existing" destination is the source itself, reached via a symlinked or
+        // case-variant path. Treat as a no-op rather than trashing the file we are moving.
+        if isSameFile(sourceURL, proposedURL) {
+            return .moved(sourceURL)
+        }
+
+        switch policy {
+        case .keepBoth:
+            return .moved(try moveEntry(from: sourceURL, to: nonConflictingURL(for: proposedURL)))
+        case .skip:
+            return .skipped
+        case .replace:
+            // Trash rather than delete, so a mistaken replace is still recoverable.
+            let trashedURL = try moveToTrash(at: proposedURL)
+            do {
+                return .moved(try moveEntry(from: sourceURL, to: proposedURL))
+            } catch {
+                // Put the replaced item back so a failed move doesn't lose it to the Trash.
+                if !fm.fileExists(atPath: proposedURL.path) {
+                    try? fm.moveItem(at: trashedURL, to: proposedURL)
+                }
+                throw error
+            }
+        }
+    }
+
+    /// True when both URLs refer to the same file system object, resolving symlinks and
+    /// case-insensitive path variants.
+    static func isSameFile(_ lhs: URL, _ rhs: URL) -> Bool {
+        let a = lhs.standardizedFileURL.resolvingSymlinksInPath()
+        let b = rhs.standardizedFileURL.resolvingSymlinksInPath()
+        if a.path == b.path { return true }
+
+        guard let idA = (try? a.resourceValues(forKeys: [.fileResourceIdentifierKey]))?.fileResourceIdentifier,
+              let idB = (try? b.resourceValues(forKeys: [.fileResourceIdentifierKey]))?.fileResourceIdentifier
+        else { return false }
+        return idA.isEqual(idB)
+    }
+
+    /// `sunset.png` -> `sunset 2.png` -> `sunset 3.png`, skipping names already on disk.
+    static func nonConflictingURL(for proposed: URL) -> URL {
+        guard fm.fileExists(atPath: proposed.path) else { return proposed }
+
+        let parent = proposed.deletingLastPathComponent()
+        let ext = proposed.pathExtension
+        let base = proposed.deletingPathExtension().lastPathComponent
+
+        for suffix in 2...1000 {
+            let name = ext.isEmpty ? "\(base) \(suffix)" : "\(base) \(suffix).\(ext)"
+            let candidate = parent.appendingPathComponent(name)
+            if !fm.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+
+        // A thousand collisions on one name is pathological; let the move report it.
+        return proposed
     }
 
     /// Renames a file or folder. Returns the new URL.
@@ -102,6 +199,14 @@ enum FileSystemService {
         return trashedURL.standardizedFileURL
     }
 
+    /// Creates a new folder inside a parent directory. Returns the new folder URL.
+    @discardableResult
+    static func createFolder(in parent: URL, named name: String) throws -> URL {
+        let folderURL = parent.appendingPathComponent(name)
+        try fm.createDirectory(at: folderURL, withIntermediateDirectories: false)
+        return folderURL
+    }
+
     /// Reveals a file in Finder.
     static func revealInFinder(url: URL) {
         NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -123,7 +228,9 @@ enum FileSystemService {
 
     // MARK: - File Metadata
 
-    /// Gets metadata for a file (name, type, dimensions for supported visual media, modified date).
+    /// Gets metadata for a file (name, type, image dimensions, modified date).
+    /// Video dimensions/duration require async AVFoundation loading, so they are only
+    /// filled in by `getMetadataAsync(for:)`.
     static func getMetadata(for url: URL) -> FileMetadata {
         let name = url.lastPathComponent
         let ext = url.pathExtension.lowercased()
@@ -135,12 +242,10 @@ enum FileSystemService {
 
         var width: Int?
         var height: Int?
-        var duration: TimeInterval?
+        let duration: TimeInterval? = nil
 
         if FileHelpers.isImageFile(name) {
             (width, height) = imageDimensions(at: url)
-        } else if FileHelpers.isVideoFile(name) {
-            (width, height, duration) = videoMetadata(at: url)
         }
 
         return FileMetadata(
@@ -156,11 +261,24 @@ enum FileSystemService {
 
     /// Resolves file metadata off the main thread so selection stays responsive.
     static func getMetadataAsync(for url: URL) async -> FileMetadata {
-        await withCheckedContinuation { continuation in
+        let base = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(returning: getMetadata(for: url))
             }
         }
+
+        guard FileHelpers.isVideoFile(url.lastPathComponent) else { return base }
+
+        let video = await videoMetadata(at: url)
+        return FileMetadata(
+            fileName: base.fileName,
+            fileType: base.fileType,
+            width: video.width,
+            height: video.height,
+            duration: video.duration,
+            modifiedDate: base.modifiedDate,
+            fileSize: base.fileSize
+        )
     }
 
     /// Reads image dimensions without loading the full image into memory.
@@ -176,20 +294,25 @@ enum FileSystemService {
         return (w, h)
     }
 
-    static func videoMetadata(at url: URL) -> (width: Int?, height: Int?, duration: TimeInterval?) {
+    static func videoMetadata(at url: URL) async -> (width: Int?, height: Int?, duration: TimeInterval?) {
         let asset = AVURLAsset(url: url)
 
         var width: Int?
         var height: Int?
 
-        if let track = asset.tracks(withMediaType: .video).first {
-            let transformedSize = track.naturalSize.applying(track.preferredTransform)
+        if let track = try? await asset.loadTracks(withMediaType: .video).first,
+           let (naturalSize, transform) = try? await track.load(.naturalSize, .preferredTransform)
+        {
+            let transformedSize = naturalSize.applying(transform)
             width = Int(abs(transformedSize.width).rounded())
             height = Int(abs(transformedSize.height).rounded())
         }
 
-        let durationSeconds = CMTimeGetSeconds(asset.duration)
-        let duration = durationSeconds.isFinite && !durationSeconds.isNaN ? durationSeconds : nil
+        var duration: TimeInterval?
+        if let time = try? await asset.load(.duration) {
+            let seconds = CMTimeGetSeconds(time)
+            duration = seconds.isFinite && !seconds.isNaN ? seconds : nil
+        }
 
         return (width, height, duration)
     }
@@ -237,6 +360,24 @@ enum FileSystemService {
         var destinationRoot: String = ""
     }
 
+    /// Thrown when a sort/unsort stops partway; carries what was already moved.
+    struct PartialSortError: LocalizedError {
+        let partialResult: SortResult
+        let underlying: Error
+
+        var errorDescription: String? {
+            let moved = partialResult.movedTotal
+            let reason = (underlying as? LocalizedError)?.errorDescription ?? underlying.localizedDescription
+            return moved > 0
+                ? "\(moved) file\(moved == 1 ? "" : "s") moved before the failure. \(reason)"
+                : reason
+        }
+    }
+
+    private static func finalize(_ result: inout SortResult) {
+        result.movedTotal = result.movedImg + result.movedAeo + result.movedPlib
+    }
+
     static func sortFilesIntoDatedSubfolders(directory: URL) throws -> SortResult {
         let entries = try fm.contentsOfDirectory(
             at: directory,
@@ -246,49 +387,12 @@ enum FileSystemService {
 
         var result = SortResult(destinationRoot: directory.path)
         let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter.calendar = Calendar(identifier: .gregorian)
+        dateFormatter.timeZone = .current
         dateFormatter.dateFormat = "yyyy-MM-dd"
 
-        for entry in entries {
-            guard let values = try? entry.resourceValues(forKeys: [.isRegularFileKey]),
-                  values.isRegularFile == true
-            else { continue }
-
-            let ext = entry.pathExtension.lowercased()
-            guard let destType = destinationFolderForExtension(ext) else { continue }
-
-            let attrs = try fm.attributesOfItem(atPath: entry.path)
-            let createdDate = (attrs[.creationDate] as? Date) ?? (attrs[.modificationDate] as? Date) ?? Date()
-            let dateSegment = dateFormatter.string(from: createdDate)
-
-            let destDir = directory.appendingPathComponent(dateSegment).appendingPathComponent(destType)
-            try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
-
-            let destPath = nextAvailablePath(destDir.appendingPathComponent(entry.lastPathComponent))
-            try fm.moveItem(at: entry, to: destPath)
-
-            switch destType {
-            case "img": result.movedImg += 1
-            case "aeo": result.movedAeo += 1
-            case "plib": result.movedPlib += 1
-            default: break
-            }
-        }
-
-        result.movedTotal = result.movedImg + result.movedAeo + result.movedPlib
-        return result
-    }
-
-    static func unsortFilesIntoCurrentFolder(directory: URL, includeSubfolders: Bool) throws -> SortResult {
-        let folders = collectUnsortFolders(root: directory, includeSubfolders: includeSubfolders)
-        var result = SortResult(destinationRoot: directory.path)
-
-        for folder in folders {
-            let entries = try fm.contentsOfDirectory(
-                at: folder,
-                includingPropertiesForKeys: [.isRegularFileKey],
-                options: [.skipsHiddenFiles]
-            )
-
+        do {
             for entry in entries {
                 guard let values = try? entry.resourceValues(forKeys: [.isRegularFileKey]),
                       values.isRegularFile == true
@@ -297,7 +401,14 @@ enum FileSystemService {
                 let ext = entry.pathExtension.lowercased()
                 guard let destType = destinationFolderForExtension(ext) else { continue }
 
-                let destPath = nextAvailablePath(directory.appendingPathComponent(entry.lastPathComponent))
+                let attrs = try fm.attributesOfItem(atPath: entry.path)
+                let createdDate = (attrs[.creationDate] as? Date) ?? (attrs[.modificationDate] as? Date) ?? Date()
+                let dateSegment = dateFormatter.string(from: createdDate)
+
+                let destDir = directory.appendingPathComponent(dateSegment).appendingPathComponent(destType)
+                try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+
+                let destPath = nextAvailablePath(destDir.appendingPathComponent(entry.lastPathComponent))
                 try fm.moveItem(at: entry, to: destPath)
 
                 switch destType {
@@ -307,9 +418,52 @@ enum FileSystemService {
                 default: break
                 }
             }
+        } catch {
+            finalize(&result)
+            throw PartialSortError(partialResult: result, underlying: error)
         }
 
-        result.movedTotal = result.movedImg + result.movedAeo + result.movedPlib
+        finalize(&result)
+        return result
+    }
+
+    static func unsortFilesIntoCurrentFolder(directory: URL, includeSubfolders: Bool) throws -> SortResult {
+        let folders = collectUnsortFolders(root: directory, includeSubfolders: includeSubfolders)
+        var result = SortResult(destinationRoot: directory.path)
+
+        do {
+            for folder in folders {
+                let entries = try fm.contentsOfDirectory(
+                    at: folder,
+                    includingPropertiesForKeys: [.isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                )
+
+                for entry in entries {
+                    guard let values = try? entry.resourceValues(forKeys: [.isRegularFileKey]),
+                          values.isRegularFile == true
+                    else { continue }
+
+                    let ext = entry.pathExtension.lowercased()
+                    guard let destType = destinationFolderForExtension(ext) else { continue }
+
+                    let destPath = nextAvailablePath(directory.appendingPathComponent(entry.lastPathComponent))
+                    try fm.moveItem(at: entry, to: destPath)
+
+                    switch destType {
+                    case "img": result.movedImg += 1
+                    case "aeo": result.movedAeo += 1
+                    case "plib": result.movedPlib += 1
+                    default: break
+                    }
+                }
+            }
+        } catch {
+            finalize(&result)
+            throw PartialSortError(partialResult: result, underlying: error)
+        }
+
+        finalize(&result)
         return result
     }
 

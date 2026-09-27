@@ -52,6 +52,11 @@ struct GlobalEventHandler: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onAppear {
+                // onAppear can fire more than once; never stack a second monitor.
+                if let existing = monitor {
+                    NSEvent.removeMonitor(existing)
+                    monitor = nil
+                }
                 monitor = NSEvent.addLocalMonitorForEvents(matching: eventMask) { event in
                     if handler(event) {
                         return nil  // consumed, don't propagate
@@ -96,5 +101,6 @@ enum KeyCode: UInt16 {
     case z = 6
     case k = 40
     case d = 2
+    case n = 45
     case t = 17
 }

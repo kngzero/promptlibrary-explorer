@@ -24,72 +24,83 @@ struct FileTag: Codable, Identifiable, Hashable {
 }
 
 /// Manages tag definitions and per-file tag assignments.
+///
+/// Both collections are decoded from UserDefaults once and then served from
+/// memory; every save writes through to UserDefaults.
 final class TagService {
     static let shared = TagService()
 
     private static let tagsKey = "promptlibrary.tags"
     private static let assignmentsKey = "promptlibrary.tagAssignments"
 
+    private let lock = NSLock()
+    private var tagsCache: [FileTag]?
+    private var assignmentsCache: [String: [UUID]]?
+
     private init() {}
 
     // MARK: - Tag Definitions
 
     func loadTags() -> [FileTag] {
-        guard let data = UserDefaults.standard.data(forKey: Self.tagsKey),
-              let tags = try? JSONDecoder().decode([FileTag].self, from: data)
-        else { return [] }
-        return tags
+        lock.lock()
+        defer { lock.unlock() }
+        return cachedTags()
     }
 
     func saveTags(_ tags: [FileTag]) {
-        if let data = try? JSONEncoder().encode(tags) {
-            UserDefaults.standard.set(data, forKey: Self.tagsKey)
-        }
+        lock.lock()
+        defer { lock.unlock() }
+        storeTags(tags)
     }
 
     func addTag(_ tag: FileTag) {
-        var tags = loadTags()
+        lock.lock()
+        defer { lock.unlock() }
+        var tags = cachedTags()
         tags.append(tag)
-        saveTags(tags)
+        storeTags(tags)
     }
 
     func removeTag(id: UUID) {
-        var tags = loadTags()
+        lock.lock()
+        defer { lock.unlock() }
+        var tags = cachedTags()
         tags.removeAll { $0.id == id }
-        saveTags(tags)
+        storeTags(tags)
 
         // Remove all assignments for this tag
-        var assignments = loadAssignments()
+        var assignments = cachedAssignments()
         for (path, tagIDs) in assignments {
             assignments[path] = tagIDs.filter { $0 != id }
             if assignments[path]?.isEmpty == true {
                 assignments.removeValue(forKey: path)
             }
         }
-        saveAssignments(assignments)
+        storeAssignments(assignments)
     }
 
     func updateTag(_ tag: FileTag) {
-        var tags = loadTags()
+        lock.lock()
+        defer { lock.unlock() }
+        var tags = cachedTags()
         if let index = tags.firstIndex(where: { $0.id == tag.id }) {
             tags[index] = tag
         }
-        saveTags(tags)
+        storeTags(tags)
     }
 
     // MARK: - Assignments (path -> [tagID])
 
     func loadAssignments() -> [String: [UUID]] {
-        guard let data = UserDefaults.standard.data(forKey: Self.assignmentsKey),
-              let decoded = try? JSONDecoder().decode([String: [UUID]].self, from: data)
-        else { return [:] }
-        return decoded
+        lock.lock()
+        defer { lock.unlock() }
+        return cachedAssignments()
     }
 
     func saveAssignments(_ assignments: [String: [UUID]]) {
-        if let data = try? JSONEncoder().encode(assignments) {
-            UserDefaults.standard.set(data, forKey: Self.assignmentsKey)
-        }
+        lock.lock()
+        defer { lock.unlock() }
+        storeAssignments(assignments)
     }
 
     func tagsForFile(at path: String, allTags: [FileTag]) -> [FileTag] {
@@ -100,16 +111,20 @@ final class TagService {
     }
 
     func assignTag(_ tagID: UUID, toPath path: String) {
-        var assignments = loadAssignments()
+        lock.lock()
+        defer { lock.unlock() }
+        var assignments = cachedAssignments()
         var tagIDs = assignments[path] ?? []
         guard !tagIDs.contains(tagID) else { return }
         tagIDs.append(tagID)
         assignments[path] = tagIDs
-        saveAssignments(assignments)
+        storeAssignments(assignments)
     }
 
     func removeTag(_ tagID: UUID, fromPath path: String) {
-        var assignments = loadAssignments()
+        lock.lock()
+        defer { lock.unlock() }
+        var assignments = cachedAssignments()
         guard var tagIDs = assignments[path] else { return }
         tagIDs.removeAll { $0 == tagID }
         if tagIDs.isEmpty {
@@ -117,11 +132,13 @@ final class TagService {
         } else {
             assignments[path] = tagIDs
         }
-        saveAssignments(assignments)
+        storeAssignments(assignments)
     }
 
     func toggleTag(_ tagID: UUID, forPath path: String) {
-        var assignments = loadAssignments()
+        lock.lock()
+        defer { lock.unlock() }
+        var assignments = cachedAssignments()
         var tagIDs = assignments[path] ?? []
         if tagIDs.contains(tagID) {
             tagIDs.removeAll { $0 == tagID }
@@ -133,7 +150,7 @@ final class TagService {
         } else {
             assignments[path] = tagIDs
         }
-        saveAssignments(assignments)
+        storeAssignments(assignments)
     }
 
     func pathsWithTag(_ tagID: UUID) -> Set<String> {
@@ -143,6 +160,50 @@ final class TagService {
             paths.insert(path)
         }
         return paths
+    }
+
+    // MARK: - Private (call with the lock held)
+
+    private func cachedTags() -> [FileTag] {
+        if let tagsCache { return tagsCache }
+        let decoded: [FileTag]
+        if let data = UserDefaults.standard.data(forKey: Self.tagsKey),
+           let value = try? JSONDecoder().decode([FileTag].self, from: data)
+        {
+            decoded = value
+        } else {
+            decoded = []
+        }
+        tagsCache = decoded
+        return decoded
+    }
+
+    private func cachedAssignments() -> [String: [UUID]] {
+        if let assignmentsCache { return assignmentsCache }
+        let decoded: [String: [UUID]]
+        if let data = UserDefaults.standard.data(forKey: Self.assignmentsKey),
+           let value = try? JSONDecoder().decode([String: [UUID]].self, from: data)
+        {
+            decoded = value
+        } else {
+            decoded = [:]
+        }
+        assignmentsCache = decoded
+        return decoded
+    }
+
+    private func storeTags(_ tags: [FileTag]) {
+        tagsCache = tags
+        if let data = try? JSONEncoder().encode(tags) {
+            UserDefaults.standard.set(data, forKey: Self.tagsKey)
+        }
+    }
+
+    private func storeAssignments(_ assignments: [String: [UUID]]) {
+        assignmentsCache = assignments
+        if let data = try? JSONEncoder().encode(assignments) {
+            UserDefaults.standard.set(data, forKey: Self.assignmentsKey)
+        }
     }
 }
 

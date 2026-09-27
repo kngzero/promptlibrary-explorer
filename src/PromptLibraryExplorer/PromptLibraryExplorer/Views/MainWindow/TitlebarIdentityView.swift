@@ -11,11 +11,11 @@ struct TitlebarIdentityView: View {
                 .accessibilityHidden(true)
 
             Text(appName)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.appTitle)
                 .foregroundStyle(Color.appPrimaryText)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, AppSpacing.md)
     }
 
     private var appName: String {

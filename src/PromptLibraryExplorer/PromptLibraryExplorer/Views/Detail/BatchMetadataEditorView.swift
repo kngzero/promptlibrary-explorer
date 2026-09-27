@@ -27,30 +27,30 @@ struct BatchMetadataEditorView: View {
                     .font(.appCaption)
                     .foregroundStyle(Color.appMuted)
             }
-            .padding(16)
+            .padding(AppSpacing.xl)
             .background(Color.appSurface)
 
             Divider().background(Color.appBorder)
 
             // Form
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: AppSpacing.xl) {
                     // File list preview
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: AppSpacing.sm) {
                         Text("Target Files")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.appCaptionEmphasis)
                             .foregroundStyle(Color.appMuted)
 
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 6) {
+                            HStack(spacing: AppSpacing.sm) {
                                 ForEach(targetFiles) { file in
                                     Text(file.name)
-                                        .font(.system(size: 10))
+                                        .font(.appFootnote)
                                         .foregroundStyle(Color.appPrimaryText)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
+                                        .padding(.horizontal, AppSpacing.md)
+                                        .padding(.vertical, AppSpacing.xs)
                                         .background(Color.appSurface)
-                                        .cornerRadius(6)
+                                        .cornerRadius(AppRadius.sm)
                                 }
                             }
                         }
@@ -65,9 +65,9 @@ struct BatchMetadataEditorView: View {
                     fieldSection(title: "Negative Prompt", placeholder: "Enter negative prompt (optional)...", text: $negativePrompt, height: 60)
 
                     // Model
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: AppSpacing.xs) {
                         Text("Model")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.appCaptionEmphasis)
                             .foregroundStyle(Color.appMuted)
                         TextField("Model name (optional)", text: $model)
                             .textFieldStyle(.roundedBorder)
@@ -75,11 +75,11 @@ struct BatchMetadataEditorView: View {
                     }
 
                     Text("Only non-empty fields will be written. Existing metadata will be overwritten for specified fields.")
-                        .font(.system(size: 10))
+                        .font(.appFootnote)
                         .foregroundStyle(Color.appMuted)
-                        .padding(.top, 4)
+                        .padding(.top, AppSpacing.xs)
                 }
-                .padding(16)
+                .padding(AppSpacing.xl)
             }
 
             Divider().background(Color.appBorder)
@@ -102,12 +102,11 @@ struct BatchMetadataEditorView: View {
                 Button("Apply to All") {
                     Task { await applyMetadata() }
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Color.appAccent)
+                .buttonStyle(AppPrimaryButtonStyle(verticalPadding: AppSpacing.xs))
                 .disabled(prompt.isEmpty && negativePrompt.isEmpty && model.isEmpty)
                 .disabled(isProcessing)
             }
-            .padding(16)
+            .padding(AppSpacing.xl)
             .background(Color.appSurface)
         }
         .frame(width: 520, height: 520)
@@ -116,20 +115,20 @@ struct BatchMetadataEditorView: View {
 
     @ViewBuilder
     private func fieldSection(title: String, placeholder: String, text: Binding<String>, height: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: AppSpacing.xs) {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.appCaptionEmphasis)
                 .foregroundStyle(Color.appMuted)
             TextEditor(text: text)
                 .font(.appBody)
                 .foregroundStyle(Color.appPrimaryText)
                 .scrollContentBackground(.hidden)
-                .padding(8)
+                .padding(AppSpacing.md)
                 .frame(height: height)
                 .background(Color.appSurface)
-                .cornerRadius(8)
+                .cornerRadius(AppRadius.md)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: AppRadius.md)
                         .strokeBorder(Color.appBorder, lineWidth: 1)
                 )
                 .overlay(alignment: .topLeading) {
@@ -137,8 +136,8 @@ struct BatchMetadataEditorView: View {
                         Text(placeholder)
                             .font(.appBody)
                             .foregroundStyle(Color.appMuted.opacity(0.5))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 12)
+                            .padding(.horizontal, AppSpacing.lg)
+                            .padding(.vertical, AppSpacing.lg)
                             .allowsHitTesting(false)
                     }
                 }
@@ -149,31 +148,47 @@ struct BatchMetadataEditorView: View {
         isProcessing = true
         processedCount = 0
 
+        // Blank fields mean "keep what's there": each file's existing prompt, seed, steps
+        // and other parameters are merged with only the fields filled in here.
         let metadata = ImageMetadataWriter.PromptMetadata(
-            prompt: prompt,
-            negativePrompt: negativePrompt,
-            model: model,
+            prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+            negativePrompt: negativePrompt.trimmingCharacters(in: .whitespacesAndNewlines),
+            model: model.trimmingCharacters(in: .whitespacesAndNewlines),
             steps: "",
             sampler: "",
             cfgScale: "",
             seed: ""
         )
+        let urls = targetFiles.map(\.url)
 
-        for file in targetFiles {
-            do {
-                try ImageMetadataWriter.write(metadata, to: file.url)
-                processedCount += 1
-            } catch {
-                processedCount += 1
+        let failures = await Task.detached(priority: .userInitiated) { () -> [(name: String, message: String)] in
+            var failures: [(name: String, message: String)] = []
+            for url in urls {
+                do {
+                    try ImageMetadataWriter.write(metadata, to: url, mode: .mergeNonEmpty)
+                } catch {
+                    failures.append((url.lastPathComponent, error.localizedDescription))
+                }
+                await MainActor.run { processedCount += 1 }
             }
-        }
+            return failures
+        }.value
 
         // Refresh caches
         await ImageMetadataParser.shared.clearCache()
         ThumbnailService.shared.clearCache()
 
         isProcessing = false
-        vm.showToast("Metadata applied to \(processedCount) file(s)", type: .success)
+
+        let succeeded = urls.count - failures.count
+        if failures.isEmpty {
+            vm.showToast("Metadata applied to \(succeeded) file(s)", type: .success)
+        } else if let first = failures.first, failures.count == 1, succeeded == 0 {
+            vm.showToast("Couldn't update \(first.name): \(first.message)", type: .error)
+        } else {
+            let detail = failures.first.map { " First error (\($0.name)): \($0.message)" } ?? ""
+            vm.showToast("Metadata applied to \(succeeded) of \(urls.count) file(s); \(failures.count) failed.\(detail)", type: .error)
+        }
         dismiss()
     }
 }

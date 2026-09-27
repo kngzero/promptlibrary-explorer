@@ -22,7 +22,7 @@ struct AoeComparisonView: View {
                 Button("Close") { dismiss() }
                     .keyboardShortcut(.escape)
             }
-            .padding(12)
+            .padding(AppSpacing.lg)
             .background(Color.appSurface)
 
             // Content
@@ -43,16 +43,16 @@ struct AoeComparisonView: View {
     @ViewBuilder
     private func promptStack(entry: PromptEntry, label: String, side: String) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: AppSpacing.lg) {
                 // Header with image
-                HStack(spacing: 12) {
+                HStack(spacing: AppSpacing.lg) {
                     if let img = entry.images.first {
                         Image(nsImage: img)
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                             .frame(width: 60, height: 60)
                             .clipped()
-                            .cornerRadius(6)
+                            .cornerRadius(AppRadius.sm)
                     }
 
                     VStack(alignment: .leading) {
@@ -78,7 +78,7 @@ struct AoeComparisonView: View {
                     }
                 }
             }
-            .padding(12)
+            .padding(AppSpacing.lg)
         }
     }
 
@@ -92,10 +92,10 @@ struct AoeComparisonView: View {
     ) -> some View {
         let isSelected = selectedSegments[key] == side
 
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: AppSpacing.xs) {
             HStack {
                 Text(label)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.appIcon(11, weight: .medium))
                     .foregroundStyle(Color.appAccent)
                 Spacer()
                 if isSelected {
@@ -114,13 +114,13 @@ struct AoeComparisonView: View {
                     .textSelection(.enabled)
             }
         }
-        .padding(8)
+        .padding(AppSpacing.md)
         .background(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: AppRadius.sm)
                 .fill(isSelected ? Color.appAccent.opacity(0.1) : Color.appSurface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: AppRadius.sm)
                 .strokeBorder(isSelected ? Color.appAccent : Color.clear, lineWidth: 1)
         )
         .contentShape(Rectangle())

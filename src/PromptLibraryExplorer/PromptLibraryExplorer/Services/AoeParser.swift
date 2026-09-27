@@ -5,11 +5,17 @@ import Foundation
 actor AoeParser {
     static let shared = AoeParser()
 
-    private var cache: [String: PromptEntry] = [:]
+    /// Bounded: entries hold decoded images plus raw base64, so an unbounded map grows with
+    /// every file visited.
+    private var cache = LRUCache<ParsedFileCacheEntry<PromptEntry>>(capacity: 64)
 
     func parse(at url: URL) async -> PromptEntry? {
         let path = url.path
-        if let cached = cache[path] { return cached }
+        let signature = ParsedFileCacheEntry<PromptEntry>.signature(of: url)
+        if let cached = cache.value(forKey: path) {
+            if cached.matches(signature) { return cached.value }
+            cache.removeValue(forKey: path)
+        }
 
         do {
             let data = try Data(contentsOf: url)
@@ -59,7 +65,10 @@ actor AoeParser {
                 analysis: file.analysis
             )
 
-            cache[path] = entry
+            cache.setValue(
+                ParsedFileCacheEntry(value: entry, modificationDate: signature.0, fileSize: signature.1),
+                forKey: path
+            )
             return entry
         } catch {
             return nil
@@ -68,6 +77,17 @@ actor AoeParser {
 
     func clearCache() {
         cache.removeAll()
+    }
+
+    /// Drops the cached parse for a single file (e.g. after it was edited, moved or deleted).
+    func invalidate(path: String) {
+        cache.removeValue(forKey: path)
+        cache.removeValue(forKey: URL(fileURLWithPath: path).standardizedFileURL.path)
+    }
+
+    /// Number of parsed files currently held in memory.
+    var cachedCount: Int {
+        cache.count
     }
 
     // MARK: - Private
@@ -80,15 +100,26 @@ actor AoeParser {
     private func normalizeImage(_ block: AoeImageBlock?) -> NormalizedImage? {
         guard let block else { return nil }
 
-        let mimeType = block.mimeType?.trimmingCharacters(in: .whitespaces) ?? "image/jpeg"
-
-        // Try previewUrl first (could be a file path or URL)
+        // Try previewUrl first. Only local sources are accepted: an absolute path, a file:// URL,
+        // or a data: URI. Remote http(s) URLs are ignored so parsing never blocks on the network.
         if let previewUrl = block.previewUrl?.trimmingCharacters(in: .whitespaces), !previewUrl.isEmpty {
             if FileHelpers.isLikelyAbsolutePath(previewUrl), let img = NSImage(contentsOfFile: previewUrl) {
                 return NormalizedImage(image: img, raw: block.base64 ?? previewUrl)
             }
-            if let url = URL(string: previewUrl), let img = NSImage(contentsOf: url) {
-                return NormalizedImage(image: img, raw: block.base64 ?? previewUrl)
+            if let url = URL(string: previewUrl) {
+                if url.isFileURL, let img = NSImage(contentsOf: url) {
+                    return NormalizedImage(image: img, raw: block.base64 ?? previewUrl)
+                }
+                if url.scheme?.lowercased() == "data",
+                   let commaIndex = previewUrl.firstIndex(of: ","),
+                   let data = Data(
+                       base64Encoded: String(previewUrl[previewUrl.index(after: commaIndex)...]),
+                       options: .ignoreUnknownCharacters
+                   ),
+                   let img = NSImage(data: data)
+                {
+                    return NormalizedImage(image: img, raw: block.base64 ?? previewUrl)
+                }
             }
         }
 

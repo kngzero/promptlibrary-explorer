@@ -4,8 +4,19 @@ struct FolderStatistic: Identifiable {
     let id = UUID()
     let label: String
     let count: Int
+    /// Decorative colour for the proportion bar.
     let color: Color
+    /// Text-safe colour for the row glyph.
+    var textColor: Color? = nil
     let icon: String
+
+    init(label: String, count: Int, color: Color, textColor: Color? = nil, icon: String) {
+        self.label = label
+        self.count = count
+        self.color = color
+        self.textColor = textColor
+        self.icon = icon
+    }
 }
 
 struct FolderStatisticsView: View {
@@ -49,21 +60,21 @@ struct FolderStatisticsView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 14) {
             ZStack {
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: AppRadius.lg)
                     .fill(Color.appElevatedSurface)
                 Image(systemName: "chart.bar.fill")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.appLargeTitle)
                     .foregroundStyle(Color.appAccent)
             }
             .frame(width: 48, height: 48)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
                 Text("Folder Statistics")
-                    .font(.system(size: 24, weight: .bold))
+                    .font(.appIcon(24, weight: .bold))
                     .foregroundStyle(Color.appPrimaryText)
 
                 Text(vm.selectedFolderPath?.lastPathComponent ?? "No folder selected")
-                    .font(.system(size: 14))
+                    .font(.appIcon(14))
                     .foregroundStyle(Color.appMuted)
                     .lineLimit(1)
             }
@@ -83,12 +94,12 @@ struct FolderStatisticsView: View {
         let files = vm.folderContents.filter { !$0.isDirectory }.count
         let folders = vm.folderContents.filter { $0.isDirectory }.count
 
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: AppSpacing.lg) {
             Label("Overview", systemImage: "info.circle")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.appHeadline)
                 .foregroundStyle(Color.appAccent)
 
-            HStack(spacing: 16) {
+            HStack(spacing: AppSpacing.xl) {
                 statBox(label: "Total Items", value: "\(totalItems)", icon: "doc.on.doc")
                 statBox(label: "Files", value: "\(files)", icon: "doc")
                 statBox(label: "Folders", value: "\(folders)", icon: "folder")
@@ -98,31 +109,31 @@ struct FolderStatisticsView: View {
                 Image(systemName: "internaldrive")
                     .foregroundStyle(Color.appMuted)
                 Text("Total Size: \(totalSize)")
-                    .font(.system(size: 13))
+                    .font(.appBody)
                     .foregroundStyle(Color.appPrimaryText)
             }
         }
-        .padding(16)
+        .padding(AppSpacing.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .fill(Color.appSurface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .strokeBorder(Color.appBorder, lineWidth: 1)
         )
     }
 
     private var fileTypesCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: AppSpacing.lg) {
             Label("File Types", systemImage: "square.grid.2x2")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.appHeadline)
                 .foregroundStyle(Color.appAccent)
 
             if statistics.isEmpty {
                 Text("No files in this folder")
-                    .font(.system(size: 13))
+                    .font(.appBody)
                     .foregroundStyle(Color.appMuted)
             } else {
                 let totalFiles = statistics.reduce(0) { $0 + $1.count }
@@ -130,20 +141,20 @@ struct FolderStatisticsView: View {
                 ForEach(statistics) { stat in
                     HStack(spacing: 10) {
                         Image(systemName: stat.icon)
-                            .foregroundStyle(stat.color)
+                            .foregroundStyle(stat.textColor ?? stat.color)
                             .frame(width: 18)
 
                         Text(stat.label)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.appIcon(13, weight: .medium))
                             .foregroundStyle(Color.appPrimaryText)
                             .frame(width: 120, alignment: .leading)
 
                         GeometryReader { geometry in
                             let fraction = totalFiles > 0 ? CGFloat(stat.count) / CGFloat(totalFiles) : 0
                             ZStack(alignment: .leading) {
-                                RoundedRectangle(cornerRadius: 4)
+                                RoundedRectangle(cornerRadius: AppRadius.xs)
                                     .fill(Color.appElevatedSurface)
-                                RoundedRectangle(cornerRadius: 4)
+                                RoundedRectangle(cornerRadius: AppRadius.xs)
                                     .fill(stat.color.opacity(0.7))
                                     .frame(width: max(2, geometry.size.width * fraction))
                             }
@@ -158,22 +169,22 @@ struct FolderStatisticsView: View {
                 }
             }
         }
-        .padding(16)
+        .padding(AppSpacing.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .fill(Color.appSurface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .strokeBorder(Color.appBorder, lineWidth: 1)
         )
     }
 
     private var dateDistributionCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: AppSpacing.lg) {
             Label("Activity by Month", systemImage: "calendar")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.appHeadline)
                 .foregroundStyle(Color.appAccent)
 
             let maxCount = dateDistribution.map(\.1).max() ?? 1
@@ -181,16 +192,16 @@ struct FolderStatisticsView: View {
             ForEach(dateDistribution, id: \.0) { month, count in
                 HStack(spacing: 10) {
                     Text(month)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(.appMono)
                         .foregroundStyle(Color.appMuted)
                         .frame(width: 70, alignment: .leading)
 
                     GeometryReader { geometry in
                         let fraction = CGFloat(count) / CGFloat(max(maxCount, 1))
                         ZStack(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 4)
+                            RoundedRectangle(cornerRadius: AppRadius.xs)
                                 .fill(Color.appElevatedSurface)
-                            RoundedRectangle(cornerRadius: 4)
+                            RoundedRectangle(cornerRadius: AppRadius.xs)
                                 .fill(Color.appAccent.opacity(0.6))
                                 .frame(width: max(2, geometry.size.width * fraction))
                         }
@@ -204,34 +215,34 @@ struct FolderStatisticsView: View {
                 }
             }
         }
-        .padding(16)
+        .padding(AppSpacing.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .fill(Color.appSurface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .strokeBorder(Color.appBorder, lineWidth: 1)
         )
     }
 
     private func statBox(label: String, value: String, icon: String) -> some View {
-        VStack(spacing: 6) {
+        VStack(spacing: AppSpacing.sm) {
             Image(systemName: icon)
-                .font(.system(size: 18))
+                .font(.appIcon(18))
                 .foregroundStyle(Color.appAccent)
             Text(value)
                 .font(.system(size: 20, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.appPrimaryText)
             Text(label)
-                .font(.system(size: 11))
+                .font(.appCaption)
                 .foregroundStyle(Color.appMuted)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
+        .padding(.vertical, AppSpacing.lg)
         .background(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: AppRadius.lg)
                 .fill(Color.appElevatedSurface)
         )
     }
@@ -243,7 +254,7 @@ struct FolderStatisticsView: View {
                 .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.vertical, AppSpacing.xl)
         .background(Color.appBackground)
         .overlay(alignment: .top) {
             Rectangle().fill(Color.appBorder).frame(height: 1)
@@ -282,12 +293,12 @@ struct FolderStatisticsView: View {
 
         var stats: [FolderStatistic] = []
         if plibCount > 0 { stats.append(FolderStatistic(label: ".plib Files", count: plibCount, color: Color.appAccent, icon: "doc.text")) }
-        if aoeCount > 0 { stats.append(FolderStatistic(label: ".aoe Files", count: aoeCount, color: Color.segmentStyle, icon: "doc.richtext")) }
-        if pngCount > 0 { stats.append(FolderStatistic(label: "PNG Images", count: pngCount, color: Color.segmentBrief, icon: "photo")) }
-        if jpgCount > 0 { stats.append(FolderStatistic(label: "JPEG Images", count: jpgCount, color: Color.segmentSubject, icon: "photo")) }
-        if webpCount > 0 { stats.append(FolderStatistic(label: "WebP Images", count: webpCount, color: Color.segmentCamera, icon: "photo")) }
-        if gifCount > 0 { stats.append(FolderStatistic(label: "GIF Images", count: gifCount, color: Color.segmentLighting, icon: "photo")) }
-        if otherImageCount > 0 { stats.append(FolderStatistic(label: "Other Images", count: otherImageCount, color: Color.segmentPalette, icon: "photo")) }
+        if aoeCount > 0 { stats.append(FolderStatistic(label: ".aoe Files", count: aoeCount, color: Color.segmentStyle, textColor: Color.segmentStyleText, icon: "doc.richtext")) }
+        if pngCount > 0 { stats.append(FolderStatistic(label: "PNG Images", count: pngCount, color: Color.segmentBrief, textColor: Color.segmentBriefText, icon: "photo")) }
+        if jpgCount > 0 { stats.append(FolderStatistic(label: "JPEG Images", count: jpgCount, color: Color.segmentSubject, textColor: Color.segmentSubjectText, icon: "photo")) }
+        if webpCount > 0 { stats.append(FolderStatistic(label: "WebP Images", count: webpCount, color: Color.segmentCamera, textColor: Color.segmentCameraText, icon: "photo")) }
+        if gifCount > 0 { stats.append(FolderStatistic(label: "GIF Images", count: gifCount, color: Color.segmentLighting, textColor: Color.segmentLightingText, icon: "photo")) }
+        if otherImageCount > 0 { stats.append(FolderStatistic(label: "Other Images", count: otherImageCount, color: Color.segmentPalette, textColor: Color.segmentPaletteText, icon: "photo")) }
         if otherCount > 0 { stats.append(FolderStatistic(label: "Other Files", count: otherCount, color: Color.appMuted, icon: "doc")) }
 
         stats.sort { $0.count > $1.count }

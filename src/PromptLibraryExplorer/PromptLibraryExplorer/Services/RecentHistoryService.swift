@@ -33,6 +33,10 @@ final class RecentHistoryService {
         save(items)
     }
 
+    func removeRecentFolder(path: String) {
+        save(loadRecentFolders().filter { $0.path != path })
+    }
+
     func clearRecentFolders() {
         save([])
     }

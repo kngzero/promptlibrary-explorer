@@ -6,8 +6,11 @@ struct ContentBrowserView: View {
     @State private var inlineRenamePath: String?
     @State private var inlineRenameValue = ""
     @State private var reorderIndicator: ExplorerReorderIndicator?
-    private let gridSpacing: CGFloat = 4
-    private let gridPadding: CGFloat = 8
+    @State private var collapsedGroups: Set<String> = []
+    @State private var isShowingNewCollectionPrompt = false
+    @State private var newCollectionName = ""
+    private let gridSpacing: CGFloat = AppSpacing.xs
+    private let gridPadding: CGFloat = AppSpacing.md
 
     private var itemSize: CGFloat {
         let base: CGFloat = 80
@@ -20,8 +23,6 @@ struct ContentBrowserView: View {
     }
 
     var body: some View {
-        @Bindable var vm = vm
-
         VStack(spacing: 0) {
             HeaderBarView()
 
@@ -29,105 +30,34 @@ struct ContentBrowserView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if vm.processedFolderContents.isEmpty {
-                EmptyContentStateView(isFocused: vm.activePane == .content)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                GeometryReader { geometry in
-                    let availableGridWidth = gridContentWidth(for: geometry.size.width)
-                    let columnCount = fittedColumnCount(for: availableGridWidth)
-                    let cellWidth = fittedCellWidth(for: availableGridWidth, columnCount: columnCount)
-                    let fittedItemSize = max(80, cellWidth - 8)
-                    let columns = Array(
-                        repeating: GridItem(.flexible(minimum: cellWidth, maximum: cellWidth), spacing: gridSpacing),
-                        count: columnCount
-                    )
-
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVGrid(columns: columns, spacing: gridSpacing) {
-                                ForEach(Array(vm.processedFolderContents.enumerated()), id: \.element.id) { index, item in
-                                    ExplorerItemView(
-                                        item: item,
-                                        index: index,
-                                        size: fittedItemSize,
-                                        cellWidth: cellWidth,
-                                        reorderIndicator: $reorderIndicator,
-                                        inlineRenamePath: $inlineRenamePath,
-                                        inlineRenameValue: $inlineRenameValue,
-                                        onRenameCommit: { commitInlineRename(for: item) },
-                                        onRenameCancel: cancelInlineRename
-                                    )
-                                        .id(item.id)
-                                        .onTapGesture {
-                                            let modifiers = EventModifiers(rawValue:
-                                                (NSEvent.modifierFlags.contains(.shift) ? EventModifiers.shift.rawValue : 0) |
-                                                (NSEvent.modifierFlags.contains(.command) ? EventModifiers.command.rawValue : 0)
-                                            )
-                                            vm.selectItem(at: index, modifiers: modifiers)
-                                        }
-                                        .simultaneousGesture(
-                                            TapGesture(count: 2).onEnded {
-                                                handleDoubleClick(item: item, index: index)
-                                            }
-                                        )
-                                        .contextMenu {
-                                            contextMenuItems(for: item)
-                                        }
-                                        .onDrag {
-                                            // Support dragging files out to Finder and other apps
-                                            NSItemProvider(object: item.url as NSURL)
-                                        } preview: {
-                                            Label(item.name, systemImage: item.isDirectory ? "folder" : "doc")
-                                        }
-                                }
-                            }
-                            .frame(width: availableGridWidth, alignment: .leading)
-                            .overlayPreferenceValue(ExplorerItemBoundsPreferenceKey.self) { anchors in
-                                GeometryReader { proxy in
-                                    if let reorderIndicator,
-                                       let anchor = anchors[reorderIndicator.itemPath]
-                                    {
-                                        ExplorerReorderIndicatorView(
-                                            position: reorderIndicator.position,
-                                            itemRect: proxy[anchor]
-                                        )
-                                    }
-                                }
-                            }
-                            .padding(gridPadding)
-                        }
-                        .background {
-                            Color.clear
-                                .task(id: "\(Int(geometry.size.width.rounded())):\(columnCount)") {
-                                    updateGridColumnCount(columnCount)
-                                }
-                        }
-                        .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil) { providers in
-                            Task {
-                                let urls = await URLDropLoader.loadURLs(from: providers)
-                                await vm.importExternalFiles(urls)
-                            }
-                            return true
-                        }
-                        .onChange(of: vm.selectedItemIndex) { _, newIndex in
-                            if let inlineRenamePath {
-                                let selectedPath =
-                                    newIndex >= 0 && newIndex < vm.processedFolderContents.count
-                                    ? vm.processedFolderContents[newIndex].path
-                                    : nil
-                                if selectedPath != inlineRenamePath {
-                                    cancelInlineRename()
-                                }
-                            }
-
-                            if newIndex >= 0, newIndex < vm.processedFolderContents.count {
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    proxy.scrollTo(vm.processedFolderContents[newIndex].id, anchor: .center)
-                                }
-                            }
-                        }
+                emptyState
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .contextMenu {
+                        backgroundContextMenu
                     }
+                    .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil, perform: handleBackgroundDrop)
+            } else if vm.viewMode == .list {
+                FileListView(
+                    groups: vm.contentGroups,
+                    collapsedGroups: $collapsedGroups,
+                    inlineRenamePath: $inlineRenamePath,
+                    inlineRenameValue: $inlineRenameValue,
+                    onRenameCommit: commitInlineRename(for:),
+                    onRenameCancel: cancelInlineRename,
+                    onRenameStart: startInlineRename(for:),
+                    onNewCollection: promptForNewCollection
+                )
+                .background {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .contextMenu {
+                            backgroundContextMenu
+                        }
                 }
+                .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil, perform: handleBackgroundDrop)
+            } else {
+                gridView
             }
 
             if vm.showStatusBar {
@@ -138,101 +68,331 @@ struct ContentBrowserView: View {
         .onChange(of: vm.selectedFolderPath?.standardizedFileURL.path) { _, _ in
             cancelInlineRename()
         }
+        .onChange(of: vm.groupBy) { _, _ in
+            collapsedGroups = []
+        }
+        .onChange(of: vm.selectedItemIndex) { _, newIndex in
+            let items = vm.processedFolderContents
+            let selectedPath = newIndex >= 0 && newIndex < items.count ? items[newIndex].path : nil
+            if let inlineRenamePath, selectedPath != inlineRenamePath {
+                cancelInlineRename()
+            }
+            expandGroupContaining(newIndex)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .beginRenameSelection)) { _ in
+            beginRenameOfSelection()
+        }
+        .alert("New Collection", isPresented: $isShowingNewCollectionPrompt) {
+            TextField("Collection name", text: $newCollectionName)
+            Button("Create") {
+                let name = newCollectionName.trimmingCharacters(in: .whitespacesAndNewlines)
+                vm.createCollection(named: name.isEmpty ? defaultCollectionName : name, withSelection: true)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            let count = vm.selectedFileItems.count
+            Text("The \(count == 1 ? "selected file" : "\(count) selected files") will be added to the new collection.")
+        }
     }
 
-    func handleDoubleClick(item: FileEntry, index: Int) {
-        if item.isDirectory {
-            Task { await vm.selectFolder(item.url) }
-        } else if FileHelpers.isPreviewable(item) {
-            vm.lightboxIndex = index
-            vm.lightboxOpen = true
+    // MARK: Grid
+
+    private var gridView: some View {
+        GeometryReader { geometry in
+            let availableGridWidth = gridContentWidth(for: geometry.size.width)
+            let columnCount = fittedColumnCount(for: availableGridWidth)
+            let cellWidth = fittedCellWidth(for: availableGridWidth, columnCount: columnCount)
+            let fittedItemSize = max(80, cellWidth - 8)
+            let columns = Array(
+                repeating: GridItem(.flexible(minimum: cellWidth, maximum: cellWidth), spacing: gridSpacing),
+                count: columnCount
+            )
+            let items = vm.processedFolderContents
+            let groups = vm.contentGroups
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: gridSpacing, pinnedViews: [.sectionHeaders]) {
+                        if groups.isEmpty {
+                            gridCells(
+                                items.indices.map { IndexedEntry(index: $0, item: items[$0]) },
+                                size: fittedItemSize,
+                                cellWidth: cellWidth
+                            )
+                        } else {
+                            ForEach(groups) { group in
+                                let entries = group.indices
+                                    .filter { $0 >= 0 && $0 < items.count }
+                                    .map { IndexedEntry(index: $0, item: items[$0]) }
+                                Section {
+                                    if !collapsedGroups.contains(group.id) {
+                                        gridCells(entries, size: fittedItemSize, cellWidth: cellWidth)
+                                    }
+                                } header: {
+                                    ContentGroupHeader(
+                                        title: group.title,
+                                        count: entries.count,
+                                        isCollapsed: collapsedGroups.contains(group.id),
+                                        onToggle: { toggleGroup(group.id) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    .frame(width: availableGridWidth, alignment: .leading)
+                    .overlayPreferenceValue(ExplorerItemBoundsPreferenceKey.self) { anchors in
+                        GeometryReader { proxy in
+                            if let reorderIndicator,
+                               let anchor = anchors[reorderIndicator.itemPath]
+                            {
+                                ExplorerReorderIndicatorView(
+                                    position: reorderIndicator.position,
+                                    itemRect: proxy[anchor]
+                                )
+                            }
+                        }
+                    }
+                    .padding(gridPadding)
+                    .background {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .contextMenu {
+                                backgroundContextMenu
+                            }
+                    }
+                }
+                .background {
+                    Color.clear
+                        .task(id: "\(Int(geometry.size.width.rounded())):\(columnCount)") {
+                            updateGridColumnCount(columnCount)
+                        }
+                }
+                .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil, perform: handleBackgroundDrop)
+                .onChange(of: vm.selectedItemIndex) { _, newIndex in
+                    let items = vm.processedFolderContents
+                    if newIndex >= 0, newIndex < items.count {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            proxy.scrollTo(items[newIndex].id, anchor: .center)
+                        }
+                    }
+                }
+            }
         }
     }
 
     @ViewBuilder
-    private func contextMenuItems(for item: FileEntry) -> some View {
-        Button("Reveal in Finder") {
-            FileSystemService.revealInFinder(url: item.url)
+    private func gridCells(_ entries: [IndexedEntry], size: CGFloat, cellWidth: CGFloat) -> some View {
+        ForEach(entries) { entry in
+            ExplorerItemView(
+                item: entry.item,
+                index: entry.index,
+                size: size,
+                cellWidth: cellWidth,
+                reorderIndicator: $reorderIndicator,
+                inlineRenamePath: $inlineRenamePath,
+                inlineRenameValue: $inlineRenameValue,
+                onRenameCommit: { commitInlineRename(for: entry.item) },
+                onRenameCancel: cancelInlineRename
+            )
+            .id(entry.item.id)
+            .contextMenu {
+                ContentItemContextMenu(
+                    item: entry.item,
+                    index: entry.index,
+                    onRename: { startInlineRename(for: entry.item) },
+                    onNewCollection: promptForNewCollection
+                )
+            }
         }
+    }
 
-        Menu("Rate") {
-            ForEach(1...5, id: \.self) { stars in
-                Button {
-                    vm.setRating(stars, for: item.path)
-                } label: {
-                    HStack {
-                        Text(String(repeating: "\u{2605}", count: stars))
-                        if vm.rating(for: item.path) == stars {
-                            Image(systemName: "checkmark")
-                        }
+    // MARK: Empty states
+
+    @ViewBuilder
+    private var emptyState: some View {
+        let isFocused = vm.activePane == .content
+        if vm.isCollectionMode && vm.listingSourceContents.isEmpty {
+            EmptyContentStateView(
+                systemImage: "rectangle.stack",
+                title: "\(vm.activeCollection?.name ?? "This collection") is empty",
+                message: "Right-click files in any folder and choose Add to Collection, or use File ▸ Add to Collection.",
+                isFocused: isFocused
+            ) {
+                Button("Back to Folder") {
+                    vm.openCollection(nil)
+                }
+                .buttonStyle(AppLabeledButtonStyle())
+            }
+        } else if vm.hiddenItemCount > 0 && hasClearableFilters {
+            let hidden = vm.hiddenItemCount
+            EmptyContentStateView(
+                systemImage: "line.3.horizontal.decrease.circle",
+                title: hidden == 1 ? "1 item hidden by filters" : "\(hidden) items hidden by filters",
+                message: filterSummary,
+                isFocused: isFocused
+            ) {
+                Button("Clear Filters", action: clearFilters)
+                    .buttonStyle(AppPrimaryButtonStyle(font: .appCalloutEmphasis))
+            }
+        } else if vm.selectedFolderPath == nil && !vm.isCollectionMode {
+            EmptyContentStateView(
+                systemImage: "folder.badge.questionmark",
+                title: "No folder open",
+                message: "Choose a folder in the sidebar to browse its prompts and images.",
+                isFocused: isFocused
+            ) { EmptyView() }
+        } else {
+            EmptyContentStateView(
+                systemImage: "folder",
+                title: vm.hiddenItemCount > 0 ? "No supported files" : "This folder is empty",
+                message: vm.hiddenItemCount > 0
+                    ? "\(vm.hiddenItemCount) unsupported file\(vm.hiddenItemCount == 1 ? " is" : "s are") hidden. Show them from the Filter menu."
+                    : "Drop files here to copy them into the folder.",
+                isFocused: isFocused
+            ) {
+                if vm.canCreateFolder {
+                    Button("New Folder") {
+                        vm.isShowingNewFolderPrompt = true
                     }
+                    .buttonStyle(AppLabeledButtonStyle())
                 }
             }
+        }
+    }
+
+    private var filterSummary: String {
+        var parts: [String] = []
+        if !vm.searchQuery.isEmpty { parts.append("search \u{201C}\(vm.searchQuery)\u{201D}") }
+        if vm.filterConfig != FilterConfig() { parts.append("file type or rating filters") }
+        if vm.filterByTagID != nil { parts.append("a tag filter") }
+        if let smart = vm.activeSmartFolder { parts.append("smart folder \u{201C}\(smart.name)\u{201D}") }
+        guard !parts.isEmpty else { return "Nothing here matches the current filters." }
+        return "Nothing matches " + ListFormatter.localizedString(byJoining: parts) + "."
+    }
+
+    /// Search / type / rating / tag / smart-folder narrowing (not the collection itself).
+    private var hasClearableFilters: Bool {
+        !vm.searchQuery.isEmpty || vm.filterConfig != FilterConfig()
+            || vm.filterByTagID != nil || vm.activeSmartFolder != nil
+    }
+
+    /// Clears search / type / tag / smart-folder filters. In a collection this
+    /// keeps the collection open (`clearAllFilters()` would also leave it).
+    private func clearFilters() {
+        guard vm.isCollectionMode else {
+            vm.clearAllFilters()
+            return
+        }
+        if !vm.searchQuery.isEmpty { vm.searchQuery = "" }
+        vm.updateContentSearch()
+        if vm.filterConfig != FilterConfig() {
+            vm.filterConfig = FilterConfig()
+            vm.persistFilterConfig()
+        }
+        if vm.filterByTagID != nil { vm.filterByTagID = nil }
+        if vm.activeSmartFolder != nil { vm.activeSmartFolder = nil }
+    }
+
+    @ViewBuilder
+    private var backgroundContextMenu: some View {
+        if vm.canCreateFolder {
+            Button("Create Folder") {
+                vm.isShowingNewFolderPrompt = true
+            }
+
             Divider()
-            Button("Clear Rating") {
-                vm.setRating(0, for: item.path)
-            }
-            .disabled(vm.rating(for: item.path) == 0)
         }
 
-        if !item.isDirectory, (FileHelpers.isImageFile(item.name) || FileHelpers.isVideoFile(item.name)) {
-            let apps = FileSystemService.applicationsForFile(url: item.url)
-            if !apps.isEmpty {
-                Menu("Open In...") {
-                    ForEach(apps, id: \.self) { appURL in
-                        Button(appURL.deletingPathExtension().lastPathComponent) {
-                            FileSystemService.openFile(url: item.url, withApplication: appURL)
-                        }
-                    }
-                }
+        Menu("View As") {
+            ForEach(BrowserViewMode.allCases) { mode in
+                Toggle(mode.title, isOn: Binding(
+                    get: { vm.viewMode == mode },
+                    set: { if $0 { vm.viewMode = mode } }
+                ))
             }
+        }
+
+        Menu("Group By") {
+            ForEach(GroupByField.allCases) { field in
+                Toggle(field.title, isOn: Binding(
+                    get: { vm.groupBy == field },
+                    set: { if $0 { vm.groupBy = field } }
+                ))
+            }
+        }
+
+        if hasClearableFilters {
+            Button("Clear Filters", action: clearFilters)
         }
 
         Divider()
 
-        // Favorite / Pin
-        Button(vm.isFavorite(path: item.path) ? "Unpin" : "Pin") {
-            vm.toggleFavorite(path: item.path)
+        Button("Refresh") {
+            Task { await vm.refreshFolder() }
         }
+    }
 
-        // Tags submenu
-        Menu("Tags") {
-            TagAssignmentMenu(paths: contextMenuTargetItems(for: item).map(\.path))
+    private func handleBackgroundDrop(_ providers: [NSItemProvider]) -> Bool {
+        Task {
+            let urls = await URLDropLoader.loadURLs(from: providers)
+            await vm.importExternalFiles(urls)
         }
+        return true
+    }
 
-        // Compare prompts (when 2 selected)
-        if vm.selectedIndices.count == 2 {
-            Button("Compare Prompts") {
-                vm.openPromptDiff()
-            }
+    // MARK: Groups
+
+    private func toggleGroup(_ id: String) {
+        if collapsedGroups.contains(id) {
+            collapsedGroups.remove(id)
+        } else {
+            collapsedGroups.insert(id)
         }
+    }
 
-        // Batch metadata
-        if contextMenuTargetItems(for: item).contains(where: { vm.isEmbeddableImageFile($0.name) }) && vm.selectedIndices.count > 1 {
-            Button("Batch Edit Metadata") {
-                vm.openBatchMetadataEditor()
-            }
+    /// Keyboard navigation can land in a collapsed section; open it so the
+    /// selection stays visible.
+    private func expandGroupContaining(_ index: Int) {
+        guard index >= 0, !collapsedGroups.isEmpty else { return }
+        if let group = vm.contentGroups.first(where: { $0.indices.contains(index) }),
+           collapsedGroups.contains(group.id)
+        {
+            collapsedGroups.remove(group.id)
         }
+    }
 
-        Divider()
+    // MARK: Collections
 
-        Button("Rename") {
-            startInlineRename(for: item)
+    private var defaultCollectionName: String {
+        let existing = Set(vm.collections.map(\.name))
+        var name = "New Collection"
+        var counter = 2
+        while existing.contains(name) {
+            name = "New Collection \(counter)"
+            counter += 1
         }
+        return name
+    }
 
-        Button("Move") {
-            let urls = contextMenuTargetItems(for: item).map(\.url)
-            Task { await vm.moveItemsUsingFolderPicker(urls) }
+    private func promptForNewCollection() {
+        guard !vm.selectedFileItems.isEmpty else {
+            vm.showToast("Select files to add to the collection", type: .info)
+            return
         }
+        newCollectionName = defaultCollectionName
+        isShowingNewCollectionPrompt = true
+    }
 
-        Button("Move to Trash") {
-            let urls = contextMenuTargetItems(for: item).map(\.url)
-            Task { await vm.trashItems(at: urls) }
-        }
+    // MARK: Inline rename
 
-        Button("Delete Permanently") {
-            vm.requestPermanentDelete(for: contextMenuTargetItems(for: item))
-        }
+    /// File ▸ Rename (posted as `.beginRenameSelection`).
+    private func beginRenameOfSelection() {
+        guard !vm.isAnyModalOpen, vm.selectedIndices.count == 1 else { return }
+        let items = vm.processedFolderContents
+        let index = vm.selectedItemIndex >= 0 ? vm.selectedItemIndex : (vm.selectedIndices.first ?? -1)
+        guard index >= 0, index < items.count else { return }
+        expandGroupContaining(index)
+        startInlineRename(for: items[index])
     }
 
     private func startInlineRename(for item: FileEntry) {
@@ -271,12 +431,7 @@ struct ContentBrowserView: View {
         }
     }
 
-    private func contextMenuTargetItems(for item: FileEntry) -> [FileEntry] {
-        if vm.selectedPaths.contains(item.path), !vm.selectedItems.isEmpty {
-            return vm.selectedItems
-        }
-        return [item]
-    }
+    // MARK: Grid metrics
 
     private func updateGridColumnCount(_ count: Int) {
         if vm.gridColumnCount != count {
@@ -298,31 +453,49 @@ struct ContentBrowserView: View {
     }
 }
 
-// MARK: - Explorer Item Cell
+// MARK: - Empty state
 
-struct EmptyContentStateView: View {
+struct EmptyContentStateView<Actions: View>: View {
+    let systemImage: String
+    let title: String
+    let message: String
     let isFocused: Bool
+    @ViewBuilder let actions: () -> Actions
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "folder")
-                .font(.system(size: 40))
+        VStack(spacing: AppSpacing.lg) {
+            Image(systemName: systemImage)
+                .font(.appIcon(40))
                 .foregroundStyle(isFocused ? Color.appAccent.opacity(0.85) : Color.appMuted)
+                .accessibilityHidden(true)
 
-            Text("No items to display")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(isFocused ? Color.appPrimaryText : Color.appMuted)
+            VStack(spacing: AppSpacing.xs) {
+                Text(title)
+                    .font(.appHeadline)
+                    .foregroundStyle(isFocused ? Color.appPrimaryText : Color.appMuted)
+                    .multilineTextAlignment(.center)
+
+                Text(message)
+                    .font(.appCallout)
+                    .foregroundStyle(Color.appMuted)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            actions()
         }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 24)
+        .frame(maxWidth: 340)
+        .padding(.horizontal, AppSpacing.xxl)
+        .padding(.vertical, AppSpacing.xxl)
         .background(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .fill(Color.appSurface.opacity(0.9))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .strokeBorder(isFocused ? Color.appAccent : Color.appBorder, lineWidth: isFocused ? 1.5 : 1)
         )
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -333,6 +506,8 @@ struct ContentStatusBarView: View {
     @State private var stats = FolderStats()
 
     var body: some View {
+        @Bindable var vm = vm
+
         HStack(spacing: 10) {
             Text(itemCountLabel)
                 .font(.appCaption)
@@ -341,22 +516,22 @@ struct ContentStatusBarView: View {
             Divider().frame(height: 10)
 
             if stats.promptCount > 0 {
-                statusBadge(icon: "text.quote", value: "\(stats.promptCount)", color: .badgePlib)
+                statusBadge(icon: "text.quote", value: "\(stats.promptCount)", color: .badgePlibText)
                 Divider().frame(height: 10)
             }
 
             if stats.imageCount > 0 {
-                statusBadge(icon: "photo", value: "\(stats.imageCount)", color: .badgeImage)
+                statusBadge(icon: "photo", value: "\(stats.imageCount)", color: .badgeImageText)
                 Divider().frame(height: 10)
             }
 
             if stats.videoCount > 0 {
-                statusBadge(icon: "film", value: "\(stats.videoCount)", color: .badgeVideo)
+                statusBadge(icon: "film", value: "\(stats.videoCount)", color: .badgeVideoText)
                 Divider().frame(height: 10)
             }
 
             if stats.audioCount > 0 {
-                statusBadge(icon: "waveform", value: "\(stats.audioCount)", color: .badgeAudio)
+                statusBadge(icon: "waveform", value: "\(stats.audioCount)", color: .badgeAudioText)
                 Divider().frame(height: 10)
             }
 
@@ -374,33 +549,79 @@ struct ContentStatusBarView: View {
             // Active tag filter indicator
             if let tagID = vm.filterByTagID,
                let tag = vm.allTags.first(where: { $0.id == tagID }) {
-                HStack(spacing: 4) {
+                HStack(spacing: AppSpacing.xs) {
                     Circle().fill(tag.color).frame(width: 6, height: 6)
                     Text(tag.name)
-                        .font(.system(size: 9))
+                        .font(.appIcon(9))
                         .foregroundStyle(Color.appMuted)
                     Button {
                         vm.filterByTagID = nil
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 9))
-                            .foregroundStyle(Color.appMuted)
+                            .font(.appIcon(9))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(AppIconButtonStyle(width: 16, height: 16, cornerRadius: AppRadius.md, showsRestingChrome: false))
+                    .help("Clear Tag Filter")
+                    .accessibilityLabel("Clear \(tag.name) tag filter")
                 }
             }
 
             if vm.searchMode != .filename {
                 Text("Search: \(vm.searchMode.displayName)")
-                    .font(.system(size: 9, weight: .medium))
+                    .font(.appIcon(9, weight: .medium))
                     .foregroundStyle(Color.appAccent)
                     .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
+                    .padding(.vertical, AppSpacing.xxs)
                     .background(Color.appAccent.opacity(0.12))
-                    .cornerRadius(4)
+                    .cornerRadius(AppRadius.xs)
+            }
+
+            Divider().frame(height: 10)
+
+            Button {
+                vm.thumbnailsOnly.toggle()
+                vm.persistThumbnailsOnly()
+            } label: {
+                Image(systemName: vm.thumbnailsOnly ? "text.below.photo.fill" : "text.below.photo")
+                    .font(.appIcon(11, weight: .medium))
+            }
+            .buttonStyle(
+                AppIconButtonStyle(
+                    width: 26,
+                    height: 22,
+                    cornerRadius: AppRadius.sm,
+                    showsRestingChrome: false,
+                    restingForeground: vm.thumbnailsOnly ? Color.appAccent : Color.appMuted
+                )
+            )
+            .help(vm.thumbnailsOnly ? "Show file names" : "Thumbnails only")
+            .accessibilityLabel(vm.thumbnailsOnly ? "Show file names" : "Thumbnails only")
+
+            Button {
+                vm.statisticsOpen = true
+            } label: {
+                Image(systemName: "chart.bar")
+                    .font(.appIcon(11, weight: .medium))
+            }
+            .buttonStyle(AppIconButtonStyle(width: 26, height: 22, cornerRadius: AppRadius.sm, showsRestingChrome: false))
+            .help("Folder Statistics")
+            .accessibilityLabel("Folder Statistics")
+
+            Divider().frame(height: 10)
+
+            // Thumbnail Size
+            HStack(spacing: AppSpacing.xs) {
+                Image(systemName: "square.grid.3x3")
+                    .font(.caption)
+                    .foregroundStyle(Color.appMuted)
+                Slider(value: $vm.thumbnailSize, in: 1...10, step: 1)
+                    .frame(width: 80)
+                    .onChange(of: vm.thumbnailSize) { _, _ in
+                        vm.persistThumbnailSize()
+                    }
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, AppSpacing.lg)
         .frame(height: LayoutMetrics.panelHeaderHeight)
         .background(Color.appBackground)
         .overlay(alignment: .top) {
@@ -408,10 +629,24 @@ struct ContentStatusBarView: View {
                 .fill(Color.appBorder)
                 .frame(height: 1)
         }
-        .onChange(of: vm.folderContents.count) { _, _ in
+        .onChange(of: statsKey) { _, _ in
             recomputeStats()
         }
         .onAppear { recomputeStats() }
+    }
+
+    /// Changes whenever the folder or its contents change — not just the item count,
+    /// which can be equal across two different folders.
+    private var statsKey: StatsKey {
+        StatsKey(
+            folderPath: vm.selectedFolderPath?.standardizedFileURL.path,
+            contentIDs: vm.folderContents.map(\.id)
+        )
+    }
+
+    private struct StatsKey: Equatable {
+        let folderPath: String?
+        let contentIDs: [String]
     }
 
     private func recomputeStats() {
@@ -445,12 +680,12 @@ struct ContentStatusBarView: View {
 
     @ViewBuilder
     private func statusBadge(icon: String, value: String, color: Color) -> some View {
-        HStack(spacing: 3) {
+        HStack(spacing: AppSpacing.xxs) {
             Image(systemName: icon)
-                .font(.system(size: 9))
+                .font(.appIcon(9))
                 .foregroundStyle(color)
             Text(value)
-                .font(.system(size: 10, weight: .medium))
+                .font(.appIcon(10, weight: .medium))
                 .foregroundStyle(Color.appMuted)
         }
     }
@@ -462,6 +697,23 @@ private struct FolderStats {
     var videoCount = 0
     var audioCount = 0
     var folderCount = 0
+}
+
+private struct StatusBarIconButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous)
+                    .fill(Color.appSurface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous)
+                    .strokeBorder(Color.appBorder, lineWidth: 1)
+            )
+            .opacity(isEnabled ? (configuration.isPressed ? 0.82 : 1) : 0.42)
+    }
 }
 
 private struct ExplorerItemView: View {
@@ -541,7 +793,7 @@ private struct ExplorerItemView: View {
                 .aspectRatio(contentMode: .fill)
                 .frame(width: size, height: size)
                 .clipped()
-                .cornerRadius(6)
+                .cornerRadius(AppRadius.sm)
         } else if item.isDirectory {
             Image(systemName: "folder.fill")
                 .font(.system(size: size * 0.35))
@@ -562,21 +814,27 @@ private struct ExplorerItemView: View {
                     .font(.appCaption)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(Color.appPrimaryText)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, AppSpacing.md)
+                    .padding(.vertical, AppSpacing.sm)
                     .frame(width: cellWidth - 8, alignment: .top)
                     .frame(minHeight: 38, alignment: .top)
                     .background(
-                        RoundedRectangle(cornerRadius: 6)
+                        RoundedRectangle(cornerRadius: AppRadius.sm)
                             .fill(Color.appSurface)
                     )
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6)
+                        RoundedRectangle(cornerRadius: AppRadius.sm)
                             .strokeBorder(renameFieldFocused ? Color.appAccent : Color.appBorder, lineWidth: 1)
                     )
                     .focused($renameFieldFocused)
                     .onSubmit(onRenameCommit)
                     .onExitCommand(perform: onRenameCancel)
+                    // onExitCommand is not always delivered to a focused TextField on
+                    // macOS; handle Escape directly as well.
+                    .onKeyPress(.escape) {
+                        onRenameCancel()
+                        return .handled
+                    }
                     .task(id: isRenaming) {
                         renameFieldFocused = isRenaming
                     }
@@ -590,8 +848,8 @@ private struct ExplorerItemView: View {
                     .lineSpacing(2)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(isSelected ? Color.appPrimaryText : Color.appMuted)
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 4)
+                    .padding(.horizontal, AppSpacing.md)
+                    .padding(.bottom, AppSpacing.xs)
                     .frame(width: cellWidth, alignment: .top)
                     .frame(minHeight: 38, alignment: .top)
             }
@@ -599,16 +857,16 @@ private struct ExplorerItemView: View {
     }
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: AppSpacing.sm) {
             ZStack(alignment: .bottomTrailing) {
                 ZStack {
                     thumbnailView
                 }
                 .frame(width: size, height: size)
                 .background(Color.appSurface)
-                .cornerRadius(8)
+                .cornerRadius(AppRadius.md)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: AppRadius.md)
                         .strokeBorder(tileStrokeColor, lineWidth: 2)
                 )
                 .overlay(alignment: .topLeading) {
@@ -618,7 +876,7 @@ private struct ExplorerItemView: View {
                 }
                 .overlay(alignment: .topLeading) {
                     // Pin badge — only shown when pinned (uses lightweight check)
-                    FavoritePinBadge(path: item.path)
+                    FavoritePinBadge(isPinned: vm.isFavorite(path: item.path))
                         .offset(x: 4, y: -6)
                         .allowsHitTesting(false)
                 }
@@ -635,7 +893,7 @@ private struct ExplorerItemView: View {
         .frame(width: cellWidth)
         .contentShape(Rectangle())
         .background(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: AppRadius.md)
                 .fill(
                     isSelected
                         ? Color.appSelected
@@ -643,9 +901,38 @@ private struct ExplorerItemView: View {
                 )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: AppRadius.md)
                 .strokeBorder(isDropTarget ? Color.appAccent.opacity(0.5) : Color.clear, lineWidth: 1)
         )
+        .overlay {
+            if !isRenaming {
+                FileDragSource(
+                    dragURLs: dragURLs,
+                    isSelected: { isSelected },
+                    onSelect: { modifiers in vm.selectItem(at: index, modifiers: modifiers) },
+                    onDoubleClick: handleDoubleClick,
+                    externalOperation: { vm.externalDragOperation },
+                    onDragEnded: { operation in
+                        // A receiving app that took the original leaves a stale grid.
+                        if operation.contains(.move) {
+                            Task { await vm.refreshFolder() }
+                        }
+                    }
+                )
+            }
+        }
+        // One VoiceOver element per tile. Accessibility modifiers don't affect hit
+        // testing, so FileDragSource's click/drag handling is unchanged. While renaming,
+        // keep children separate so the text field stays reachable.
+        .accessibilityElement(children: isRenaming ? .contain : .combine)
+        .accessibilityLabel(item.name)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .accessibilityAction(named: item.isDirectory ? "Open Folder" : "Open") {
+            handleDoubleClick()
+        }
+        .accessibilityAction {
+            handleDoubleClick()
+        }
         .anchorPreference(key: ExplorerItemBoundsPreferenceKey.self, value: .bounds) {
             [item.path: $0]
         }
@@ -669,7 +956,6 @@ private struct ExplorerItemView: View {
                 cellWidth: cellWidth,
                 isDropTarget: $isDropTarget,
                 reorderIndicator: $reorderIndicator,
-                prepareForReorder: { vm.ensureCustomSortForCurrentFolder() },
                 dropHandler: { urls, intent in
                     handleDrop(urls, intent: intent)
                 }
@@ -677,27 +963,20 @@ private struct ExplorerItemView: View {
         )
     }
 
+    /// Every selected file when this item is part of a multi-selection,
+    /// otherwise just this item.
+    private func dragURLs() -> [URL] {
+        ContentItemActions.dragURLs(for: item, at: index, vm: vm)
+    }
+
+    private func handleDoubleClick() {
+        ContentItemActions.open(item, at: index, vm: vm)
+    }
+
     private func loadThumbnail() async {
         guard !item.isDirectory else { return }
         let expectedID = item.id
-
-        let loaded: NSImage?
-        if FileHelpers.isImageFile(item.name) {
-            loaded = await ThumbnailService.shared.thumbnail(for: item.url, size: size * 2)
-        } else if FileHelpers.isVideoFile(item.name) {
-            loaded = await ThumbnailService.shared.thumbnail(for: item.url, size: size * 2)
-        } else if FileHelpers.isPlibFile(item.name) {
-            if let entry = await PlibParser.shared.parse(at: item.url) {
-                loaded = entry.images.first
-            } else { loaded = nil }
-        } else if FileHelpers.isAoeFile(item.name) {
-            if let entry = await AoeParser.shared.parse(at: item.url) {
-                loaded = entry.images.first
-            } else { loaded = nil }
-        } else {
-            loaded = nil
-        }
-
+        let loaded = await ContentThumbnailLoader.load(for: item, maxPixelSize: size * 2)
         guard !Task.isCancelled, item.id == expectedID else { return }
         thumbnail = loaded
     }
@@ -719,6 +998,13 @@ private struct ExplorerItemView: View {
 
         if item.isDirectory, !isInternalDrag {
             Task { await vm.importExternalFiles(standardizedURLs, to: item.url) }
+            return true
+        }
+
+        // Files from Finder dropped onto a non-folder tile: import into the current
+        // folder, the same as dropping on the grid background.
+        if !isInternalDrag {
+            Task { await vm.importExternalFiles(standardizedURLs) }
             return true
         }
 
@@ -749,23 +1035,66 @@ private struct ExplorerItemView: View {
     }
 }
 
-/// Lightweight favorite pin badge that reads directly from the service,
-/// avoiding per-item @Observable tracking on the view model.
+/// Favorite pin badge. `isPinned` is derived from the view model's observable
+/// `favoritePaths`, so Pin/Unpin updates the tile immediately.
 private struct FavoritePinBadge: View {
-    let path: String
-    @State private var isPinned = false
+    let isPinned: Bool
 
     var body: some View {
-        Group {
-            if isPinned {
-                Image(systemName: "pin.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.favoriteGold)
-            }
+        if isPinned {
+            Image(systemName: "pin.fill")
+                .font(.appFootnote)
+                .foregroundStyle(Color.favoriteGoldText)
+                .accessibilityLabel("Pinned")
         }
-        .onAppear {
-            isPinned = FavoritesService.shared.isFavorite(path: path)
-        }
+    }
+}
+
+/// Small in-memory cache of downsampled .plib/.aoe tile thumbnails, keyed by
+/// path + modification date + pixel size.
+enum SnapshotThumbnailCache {
+    static let shared: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 400
+        return cache
+    }()
+
+    static func key(for url: URL, maxPixelSize: CGFloat) -> NSString {
+        let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate?.timeIntervalSince1970 ?? 0
+        return "\(url.standardizedFileURL.path)|\(modified)|\(Int(maxPixelSize.rounded()))" as NSString
+    }
+
+    /// Redraws `image` so its longest side is at most `maxPixelSize` pixels.
+    /// Returns nil when the image is already small enough or can't be rasterized.
+    static func downsample(_ image: NSImage, maxPixelSize: CGFloat) -> NSImage? {
+        guard maxPixelSize > 0,
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else { return nil }
+
+        let width = CGFloat(cgImage.width)
+        let height = CGFloat(cgImage.height)
+        let longest = max(width, height)
+        guard longest > maxPixelSize else { return nil }
+
+        let scale = maxPixelSize / longest
+        let targetWidth = max(Int((width * scale).rounded()), 1)
+        let targetHeight = max(Int((height * scale).rounded()), 1)
+
+        guard let context = CGContext(
+            data: nil,
+            width: targetWidth,
+            height: targetHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        context.interpolationQuality = .high
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight))
+        guard let scaled = context.makeImage() else { return nil }
+        return NSImage(cgImage: scaled, size: NSSize(width: targetWidth, height: targetHeight))
     }
 }
 
@@ -949,23 +1278,19 @@ private struct ExplorerItemDropDelegate: DropDelegate {
     let cellWidth: CGFloat
     @Binding var isDropTarget: Bool
     @Binding var reorderIndicator: ExplorerReorderIndicator?
-    let prepareForReorder: () -> Void
+    // Note: switching the folder to Custom sort happens only when an internal reorder
+    // is actually performed (`vm.reorderItems` calls `ensureCustomSortForCurrentFolder`),
+    // never while a drag merely hovers — Finder drags and cancelled drags must not
+    // change the folder's sort.
     let dropHandler: ([URL], ExplorerDropIntent?) -> Bool
 
     func dropEntered(info: DropInfo) {
-        let intent = resolvedIntent(for: info.location.x)
-        updatePreview(for: intent)
-        if case .reorder? = intent {
-            prepareForReorder()
-        }
+        updatePreview(for: resolvedIntent(for: info.location.x))
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
         let intent = resolvedIntent(for: info.location.x)
         updatePreview(for: intent)
-        if case .reorder? = intent {
-            prepareForReorder()
-        }
         switch intent {
         case .moveIntoFolder:
             return DropProposal(operation: .copy)

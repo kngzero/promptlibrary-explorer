@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct HeaderBarView: View {
     @Environment(ExplorerViewModel.self) private var vm
@@ -6,19 +7,64 @@ struct HeaderBarView: View {
     var body: some View {
         @Bindable var vm = vm
 
-        HStack(spacing: 12) {
-            // Breadcrumbs
+        HStack(spacing: AppSpacing.lg) {
+            // Back + Forward pill
+            HStack(spacing: 0) {
+                Button {
+                    Task { await vm.navigateBack() }
+                } label: {
+                    Image(systemName: "chevron.backward")
+                        .font(.appCalloutEmphasis)
+                }
+                .buttonStyle(AppSegmentButtonStyle())
+                .disabled(!vm.canNavigateBack)
+                .help("\(vm.backNavigationTitle) (⌘[)")
+                .accessibilityLabel("Back")
+
+                Divider()
+                    .frame(height: 14)
+
+                Button {
+                    Task { await vm.navigateForward() }
+                } label: {
+                    Image(systemName: "chevron.forward")
+                        .font(.appCalloutEmphasis)
+                }
+                .buttonStyle(AppSegmentButtonStyle())
+                .disabled(!vm.canNavigateForward)
+                .help("\(vm.forwardNavigationTitle) (⌘])")
+                .accessibilityLabel("Forward")
+            }
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.appSurface)
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(Color.appBorder, lineWidth: 1)
+            )
+
+            // Breadcrumbs (fills the free space so the whole strip is a drop target)
             BreadcrumbBar()
 
-            Spacer()
+            if vm.isLibraryIndexing {
+                LibraryIndexingIndicator(progress: vm.libraryIndexProgress)
+            }
 
-            // Search — uses NSSearchField for reliable text input
-            HStack(spacing: 4) {
+            ViewModeToggle()
+
+            // Search + Search Mode + Sort + Filter bar
+            HStack(spacing: 0) {
+                // Search field
                 SearchFieldView(text: $vm.searchQuery)
-                    .frame(width: 180, height: 24)
+                    .frame(width: 180, height: 28)
+                    .padding(.horizontal, 10)
                     .onChange(of: vm.searchQuery) { _, _ in
                         vm.updateContentSearch()
                     }
+
+                Divider()
+                    .frame(height: 14)
 
                 // Search mode picker
                 Menu {
@@ -39,146 +85,212 @@ struct HeaderBarView: View {
                     }
                 } label: {
                     Image(systemName: vm.searchMode.icon)
-                        .font(.system(size: 11))
+                        .font(.appCaption)
                         .foregroundStyle(vm.searchMode == .filename ? Color.appMuted : Color.appAccent)
+                        .frame(width: 28, height: 28)
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .help("Search mode: \(vm.searchMode.displayName)")
-            }
+                .accessibilityLabel("Search Mode")
+                .accessibilityValue(vm.searchMode.displayName)
 
-            // Sort Menu
-            Menu {
-                Button("Sort by Type (A-Z)") {
-                    vm.sortConfig = SortConfig(field: .type, direction: .asc)
-                    vm.persistSortConfig()
-                }
-                Button("Sort by Type (Z-A)") {
-                    vm.sortConfig = SortConfig(field: .type, direction: .desc)
-                    vm.persistSortConfig()
-                }
                 Divider()
-                Button("Sort by Name (A-Z)") {
-                    vm.sortConfig = SortConfig(field: .name, direction: .asc)
-                    vm.persistSortConfig()
-                }
-                Button("Sort by Name (Z-A)") {
-                    vm.sortConfig = SortConfig(field: .name, direction: .desc)
-                    vm.persistSortConfig()
-                }
-                Divider()
-                Button("Sort by Rating (High-Low)") {
-                    vm.sortConfig = SortConfig(field: .rating, direction: .asc)
-                    vm.persistSortConfig()
-                }
-                Button("Sort by Rating (Low-High)") {
-                    vm.sortConfig = SortConfig(field: .rating, direction: .desc)
-                    vm.persistSortConfig()
-                }
-                Divider()
-                Button("Custom Order") {
-                    vm.sortConfig = SortConfig(field: .custom, direction: .asc)
-                    vm.persistSortConfig()
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: currentSortModeIcon)
-                        .foregroundStyle(Color.appAccent)
+                    .frame(height: 14)
 
-                    Image(systemName: "arrow.up.arrow.down")
-                        .foregroundStyle(Color.appMuted)
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help(currentSortModeHelpText)
-
-            // Filter Menu
-            Menu {
-                Toggle("Hide JPG", isOn: Binding(
-                    get: { vm.filterConfig.hideJpg },
-                    set: { vm.filterConfig.hideJpg = $0; vm.persistFilterConfig() }
-                ))
-                Toggle("Hide PNG", isOn: Binding(
-                    get: { vm.filterConfig.hidePng },
-                    set: { vm.filterConfig.hidePng = $0; vm.persistFilterConfig() }
-                ))
-                Toggle("Hide Other Files", isOn: Binding(
-                    get: { vm.filterConfig.hideOther },
-                    set: { vm.filterConfig.hideOther = $0; vm.persistFilterConfig() }
-                ))
-                Divider()
-                Menu("Minimum Rating") {
-                    Button("Show All") {
-                        vm.filterConfig.filterMinRating = 0
-                        vm.persistFilterConfig()
-                    }
-                    ForEach(1...5, id: \.self) { stars in
-                        Button("\(stars)+ Stars") {
-                            vm.filterConfig.filterMinRating = stars
-                            vm.persistFilterConfig()
+                // Sort
+                Menu {
+                    ForEach(Array(Self.sortMenuFields.enumerated()), id: \.element) { index, field in
+                        if index > 0 {
+                            Divider()
+                        }
+                        if field.supportsDirection {
+                            ForEach([SortDirection.asc, SortDirection.desc], id: \.self) { direction in
+                                Button("Sort by \(field.title) (\(Self.directionLabel(field, direction)))") {
+                                    vm.sortConfig = SortConfig(field: field, direction: direction)
+                                    vm.persistSortConfig()
+                                }
+                            }
+                        } else {
+                            Button(field.title) {
+                                vm.sortConfig = SortConfig(field: field, direction: .asc)
+                                vm.persistSortConfig()
+                            }
                         }
                     }
-                }
-            } label: {
-                HStack(spacing: 2) {
-                    Image(systemName: "line.3.horizontal.decrease")
-                        .foregroundStyle(Color.appMuted)
-                    if vm.filterConfig.activeCount > 0 {
-                        Text("\(vm.filterConfig.activeCount)")
-                            .font(.caption2)
-                            .foregroundStyle(Color.white)
-                            .padding(.horizontal, 4)
-                            .background(Color.appAccent, in: Capsule())
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: currentSortModeIcon)
+                            .foregroundStyle(Color.appAccent)
+                        Image(systemName: "arrow.up.arrow.down")
+                            .foregroundStyle(Color.appMuted)
                     }
+                    .padding(.horizontal, AppSpacing.sm)
+                    .padding(.vertical, AppSpacing.sm)
                 }
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help(currentSortModeHelpText)
+                .accessibilityLabel("Sort")
+                .accessibilityValue(currentSortModeHelpText.replacingOccurrences(of: "Sort mode: ", with: ""))
 
-            // Thumbnails Only toggle
-            Button {
-                vm.thumbnailsOnly.toggle()
-            } label: {
-                Image(systemName: vm.thumbnailsOnly ? "text.below.photo.fill" : "text.below.photo")
-                    .foregroundStyle(vm.thumbnailsOnly ? Color.appAccent : Color.appMuted)
-            }
-            .buttonStyle(.plain)
-            .help(vm.thumbnailsOnly ? "Show file names" : "Thumbnails only")
+                Divider()
+                    .frame(height: 14)
 
-            // Thumbnail Size
-            HStack(spacing: 4) {
-                Image(systemName: "square.grid.3x3")
-                    .font(.caption)
-                    .foregroundStyle(Color.appMuted)
-                Slider(value: $vm.thumbnailSize, in: 1...10, step: 1)
-                    .frame(width: 80)
-                    .onChange(of: vm.thumbnailSize) { _, _ in
-                        vm.persistThumbnailSize()
+                // Group by
+                Menu {
+                    ForEach(GroupByField.allCases) { field in
+                        Button {
+                            vm.groupBy = field
+                        } label: {
+                            HStack {
+                                Text(field.title)
+                                if vm.groupBy == field {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                        if field == .none {
+                            Divider()
+                        }
                     }
-            }
+                } label: {
+                    Image(systemName: "rectangle.3.group")
+                        .foregroundStyle(vm.groupBy == .none ? Color.appMuted : Color.appAccent)
+                        .padding(.horizontal, AppSpacing.sm)
+                        .padding(.vertical, AppSpacing.sm)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help(vm.groupBy == .none ? "Group By" : "Grouped by \(vm.groupBy.title)")
+                .accessibilityLabel("Group By")
+                .accessibilityValue(vm.groupBy.title)
 
-            Button {
-                Task { await vm.undoLastFolderAction() }
-            } label: {
-                Image(systemName: "arrow.uturn.backward")
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(HeaderIconButtonStyle())
-            .disabled(!vm.canUndoFolderAction)
-            .help(vm.undoMenuTitle)
+                Divider()
+                    .frame(height: 14)
 
-            Button {
-                Task { await vm.redoLastFolderAction() }
-            } label: {
-                Image(systemName: "arrow.uturn.forward")
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 28, height: 28)
+                // Filter
+                Menu {
+                    Button("Show All File Types") {
+                        vm.filterConfig.hiddenFileTypes.removeAll()
+                        vm.persistFilterConfig()
+                    }
+                    .disabled(vm.filterConfig.hiddenFileTypes.isEmpty)
+
+                    Divider()
+
+                    Toggle(FileTypeFilter.plib.displayName, isOn: filterBinding(for: .plib))
+                    Toggle(FileTypeFilter.aoe.displayName, isOn: filterBinding(for: .aoe))
+
+                    Divider()
+
+                    Toggle(FileTypeFilter.png.displayName, isOn: filterBinding(for: .png))
+                    Toggle(FileTypeFilter.jpg.displayName, isOn: filterBinding(for: .jpg))
+                    Toggle(FileTypeFilter.webp.displayName, isOn: filterBinding(for: .webp))
+                    Toggle(FileTypeFilter.gif.displayName, isOn: filterBinding(for: .gif))
+                    Toggle(FileTypeFilter.otherImages.displayName, isOn: filterBinding(for: .otherImages))
+
+                    Divider()
+
+                    Toggle(FileTypeFilter.video.displayName, isOn: filterBinding(for: .video))
+                    Toggle(FileTypeFilter.audio.displayName, isOn: filterBinding(for: .audio))
+
+                    Divider()
+
+                    Toggle(FileTypeFilter.unsupported.displayName, isOn: filterBinding(for: .unsupported))
+
+                    Divider()
+                    Menu("Minimum Rating") {
+                        Button("Show All") {
+                            vm.filterConfig.filterMinRating = 0
+                            vm.persistFilterConfig()
+                        }
+                        ForEach(1...5, id: \.self) { stars in
+                            Button("\(stars)+ Stars") {
+                                vm.filterConfig.filterMinRating = stars
+                                vm.persistFilterConfig()
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: AppSpacing.xxs) {
+                        Image(systemName: "line.3.horizontal.decrease")
+                            .foregroundStyle(Color.appMuted)
+                        if vm.filterConfig.activeCount > 0 {
+                            Text("\(vm.filterConfig.activeCount)")
+                                .font(.appFootnote.weight(.semibold))
+                                .foregroundStyle(Color.appOnAccent)
+                                .padding(.horizontal, AppSpacing.xs)
+                                .background(Color.appAccent, in: Capsule())
+                        }
+                    }
+                    .padding(.horizontal, AppSpacing.sm)
+                    .padding(.vertical, AppSpacing.sm)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help(vm.filterConfig.activeCount > 0 ? "Filter (\(vm.filterConfig.activeCount) active)" : "Filter")
+                .accessibilityLabel("Filter")
+                .accessibilityValue(vm.filterConfig.activeCount > 0 ? "\(vm.filterConfig.activeCount) active" : "None active")
             }
-            .buttonStyle(HeaderIconButtonStyle())
-            .disabled(!vm.canRedoFolderAction)
-            .help(vm.redoMenuTitle)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.appSurface)
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(Color.appBorder, lineWidth: 1)
+            )
+            .clipShape(Capsule(style: .continuous))
+
+            // Undo + Redo pill
+            HStack(spacing: 0) {
+                Button {
+                    Task { await vm.undoLastFolderAction() }
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.appCalloutEmphasis)
+                }
+                .buttonStyle(AppSegmentButtonStyle())
+                .disabled(!vm.canUndoFolderAction)
+                .help(vm.undoMenuTitle)
+                .accessibilityLabel(vm.undoMenuTitle)
+
+                Divider()
+                    .frame(height: 14)
+
+                Button {
+                    Task { await vm.redoLastFolderAction() }
+                } label: {
+                    Image(systemName: "arrow.uturn.forward")
+                        .font(.appCalloutEmphasis)
+                }
+                .buttonStyle(AppSegmentButtonStyle())
+                .disabled(!vm.canRedoFolderAction)
+                .help(vm.redoMenuTitle)
+                .accessibilityLabel(vm.redoMenuTitle)
+            }
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.appSurface)
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(Color.appBorder, lineWidth: 1)
+            )
+
+            // New Folder
+            if vm.canCreateFolder {
+                Button {
+                    vm.isShowingNewFolderPrompt = true
+                } label: {
+                    Image(systemName: "plus.rectangle.on.folder")
+                        .font(.appHeadline)
+                }
+                .buttonStyle(AppIconButtonStyle())
+                .help("New Folder (⇧⌘N)")
+                .accessibilityLabel("New Folder")
+            }
 
             // Refresh
             Button {
@@ -187,28 +299,23 @@ struct HeaderBarView: View {
                 Label("Refresh", systemImage: "arrow.clockwise")
                     .font(.appBody)
             }
-            .buttonStyle(HeaderLabeledButtonStyle())
+            .buttonStyle(AppLabeledButtonStyle())
+            // Natural width: the labeled style fills its proposal, which let Refresh
+            // take half the free space and squeezed/centred the breadcrumbs.
+            .fixedSize()
             .help("Refresh")
 
             Button {
-                vm.statisticsOpen = true
-            } label: {
-                Image(systemName: "chart.bar")
-                    .foregroundStyle(Color.appMuted)
-            }
-            .buttonStyle(.plain)
-            .help("Folder Statistics")
-
-            Button {
-                vm.settingsOpen = true
+                vm.openSettings()
             } label: {
                 Image(systemName: "gearshape")
-                    .foregroundStyle(Color.appMuted)
+                    .font(.appHeadline)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(AppIconButtonStyle(showsRestingChrome: false))
             .help("Settings")
+            .accessibilityLabel("Settings")
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, AppSpacing.lg)
         .frame(height: LayoutMetrics.panelHeaderHeight)
         .background(Color.appBackground)
         .overlay(alignment: .bottom) {
@@ -216,68 +323,49 @@ struct HeaderBarView: View {
         }
     }
 
+    private func filterBinding(for fileType: FileTypeFilter) -> Binding<Bool> {
+        Binding(
+            get: { vm.filterConfig.hides(fileType) },
+            set: {
+                vm.filterConfig.setHidden($0, for: fileType)
+                vm.persistFilterConfig()
+            }
+        )
+    }
+
     private var currentSortModeIcon: String {
-        switch vm.sortConfig.field {
-        case .type:
-            return "square.grid.2x2"
-        case .name:
-            return vm.sortConfig.direction == .asc ? "textformat.abc" : "textformat.abc.dottedunderline"
-        case .custom:
-            return "line.3.horizontal.decrease.circle"
-        case .rating:
-            return "star.fill"
+        let field = vm.sortConfig.field
+        if field == .name && vm.sortConfig.direction == .desc {
+            return "textformat.abc.dottedunderline"
         }
+        return field.systemImage
     }
 
     private var currentSortModeHelpText: String {
-        switch vm.sortConfig.field {
-        case .type:
-            return vm.sortConfig.direction == .asc ? "Sort mode: Type (A-Z)" : "Sort mode: Type (Z-A)"
-        case .name:
-            return vm.sortConfig.direction == .asc ? "Sort mode: Name (A-Z)" : "Sort mode: Name (Z-A)"
-        case .custom:
-            return "Sort mode: Custom order"
+        let field = vm.sortConfig.field
+        guard field.supportsDirection else { return "Sort mode: \(field.title)" }
+        return "Sort mode: \(field.title) (\(Self.directionLabel(field, vm.sortConfig.direction)))"
+    }
+
+    /// Every sort field, with Custom Order kept at the bottom of the menu.
+    private static var sortMenuFields: [SortField] {
+        SortField.allCases.filter { $0 != .custom } + [.custom]
+    }
+
+    /// Menu/help wording for a sort direction. Rating's `.asc` has always meant
+    /// high-to-low in this app, so it keeps that wording.
+    private static func directionLabel(_ field: SortField, _ direction: SortDirection) -> String {
+        let asc = direction == .asc
+        switch field {
         case .rating:
-            return vm.sortConfig.direction == .asc ? "Sort mode: Rating (High-Low)" : "Sort mode: Rating (Low-High)"
+            return asc ? "High-Low" : "Low-High"
+        case .dateModified, .dateCreated:
+            return asc ? "Oldest First" : "Newest First"
+        case .size:
+            return asc ? "Smallest First" : "Largest First"
+        default:
+            return asc ? "A-Z" : "Z-A"
         }
-    }
-}
-
-private struct HeaderIconButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(configuration.isPressed ? Color.appAccentHover : Color.appMuted)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.appSurface)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(Color.appBorder, lineWidth: 1)
-            )
-            .opacity(isEnabled ? (configuration.isPressed ? 0.86 : 1) : 0.42)
-    }
-}
-
-private struct HeaderLabeledButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(configuration.isPressed ? Color.appAccentHover : Color.appMuted)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.appSurface)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(Color.appBorder, lineWidth: 1)
-            )
-            .opacity(isEnabled ? (configuration.isPressed ? 0.86 : 1) : 0.42)
     }
 }
 
@@ -290,8 +378,15 @@ struct SearchFieldView: NSViewRepresentable {
         let field = NSSearchField()
         field.placeholderString = "Search..."
         field.delegate = context.coordinator
-        field.bezelStyle = .roundedBezel
+        field.isBordered = false
+        field.drawsBackground = false
         field.focusRingType = .none
+        field.font = .systemFont(ofSize: 13)
+        field.maximumRecents = 0
+        field.sendsSearchStringImmediately = true
+
+        // Remove the magnifying glass to prevent it overlapping text when focused
+        (field.cell as? NSSearchFieldCell)?.searchButtonCell = nil
 
         // Listen for Cmd+F to focus
         NotificationCenter.default.addObserver(
@@ -387,9 +482,45 @@ struct SearchFieldView: NSViewRepresentable {
 
 struct BreadcrumbBar: View {
     @Environment(ExplorerViewModel.self) private var vm
+    @State private var isDropTarget = false
 
     var body: some View {
-        HStack(spacing: 2) {
+        // Crumbs keep their natural width first; the spacer soaks up the free
+        // space so the drop target still spans it (same layout as crumbs + Spacer).
+        HStack(spacing: 0) {
+            if let collection = vm.activeCollection {
+                CollectionCrumb(collection: collection)
+            } else {
+                folderCrumbs
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, AppSpacing.xxs)
+        .frame(minHeight: 26)
+        .background(
+            RoundedRectangle(cornerRadius: AppRadius.sm)
+                .fill(isDropTarget ? Color.appAccent.opacity(0.12) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: AppRadius.sm)
+                .strokeBorder(isDropTarget ? Color.appAccent : Color.clear, lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        // Quick navigation: drop a folder to open it, or a file to open its folder
+        // with the file selected. Navigation only — nothing is moved or copied.
+        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTarget) { providers in
+            Task {
+                let urls = await URLDropLoader.loadURLs(from: providers)
+                guard let url = urls.first else { return }
+                await vm.navigate(toDropped: url)
+            }
+            return true
+        }
+        .help("Drop a file or folder here to go to it")
+    }
+
+    private var folderCrumbs: some View {
+        HStack(spacing: AppSpacing.xxs) {
             // Up button
             if vm.selectedFolderPath != vm.explorerRootPath {
                 Button {
@@ -398,30 +529,161 @@ struct BreadcrumbBar: View {
                         Task { await vm.selectFolder(parent) }
                     }
                 } label: {
-                    Image(systemName: "chevron.left")
+                    Image(systemName: "chevron.up")
                         .font(.caption)
-                        .foregroundStyle(Color.appMuted)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AppSegmentButtonStyle(width: 22, height: 22))
+                .help("Enclosing Folder")
+                .accessibilityLabel("Enclosing Folder")
             }
 
             ForEach(Array(vm.breadcrumbs.enumerated()), id: \.offset) { idx, crumb in
                 if idx > 0 {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 9))
+                        .font(.appIcon(9))
                         .foregroundStyle(Color.appMuted.opacity(0.5))
+                        .accessibilityHidden(true)
                 }
 
-                Button(crumb.name) {
+                Button {
                     Task { await vm.selectFolder(crumb.url) }
+                } label: {
+                    Text(crumb.name)
+                        .font(.appCaption)
+                        .lineLimit(1)
                 }
-                .buttonStyle(.plain)
-                .font(.appCaption)
-                .foregroundStyle(
-                    crumb.url == vm.selectedFolderPath ? Color.appPrimaryText : Color.appMuted
+                .buttonStyle(
+                    AppLabeledButtonStyle(
+                        height: 22,
+                        horizontalPadding: 6,
+                        cornerRadius: AppRadius.sm,
+                        showsRestingChrome: false,
+                        restingForeground: crumb.url == vm.selectedFolderPath
+                            ? Color.appPrimaryText
+                            : Color.appMuted
+                    )
                 )
-                .lineLimit(1)
             }
         }
+    }
+}
+
+/// Stands in for the breadcrumbs while a collection is the listing.
+private struct CollectionCrumb: View {
+    @Environment(ExplorerViewModel.self) private var vm
+    let collection: FileCollection
+
+    var body: some View {
+        HStack(spacing: AppSpacing.sm) {
+            Image(systemName: "rectangle.stack.fill")
+                .font(.appIcon(11, weight: .medium))
+                .foregroundStyle(Color.appAccent)
+                .accessibilityHidden(true)
+            ForEach(vm.collectionSetAncestors(ofParent: collection.parentID)) { set in
+                Text(set.name)
+                    .font(.appCallout)
+                    .foregroundStyle(Color.appMuted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: "chevron.right")
+                    .font(.appIcon(8, weight: .semibold))
+                    .foregroundStyle(Color.appMuted)
+                    .accessibilityHidden(true)
+            }
+            Text(collection.name)
+                .font(.appCalloutEmphasis)
+                .foregroundStyle(Color.appPrimaryText)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text("\(collection.paths.count)")
+                .font(.appMicro)
+                .foregroundStyle(Color.appMuted)
+                .padding(.horizontal, AppSpacing.xs)
+                .padding(.vertical, AppSpacing.xxs)
+                .background(Capsule().fill(Color.appElevatedSurface))
+                .accessibilityLabel("\(collection.paths.count) items")
+            Button {
+                vm.openCollection(nil)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.appIcon(9, weight: .semibold))
+            }
+            .buttonStyle(AppSegmentButtonStyle(width: 20, height: 20))
+            .help("Close Collection")
+            .accessibilityLabel("Close Collection \(collection.name)")
+        }
+        .padding(.leading, AppSpacing.sm)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Collection \(collection.name)")
+    }
+}
+
+// MARK: - View mode toggle
+
+/// Grid / List segmented pill.
+private struct ViewModeToggle: View {
+    @Environment(ExplorerViewModel.self) private var vm
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(BrowserViewMode.allCases.enumerated()), id: \.element) { offset, mode in
+                if offset > 0 {
+                    Divider().frame(height: 14)
+                }
+                let isActive = vm.viewMode == mode
+                Button {
+                    vm.viewMode = mode
+                } label: {
+                    Image(systemName: mode.systemImage)
+                        .font(.appCalloutEmphasis)
+                }
+                .buttonStyle(AppSegmentButtonStyle(restingForeground: isActive ? Color.appAccent : Color.appMuted))
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(isActive ? Color.appSelected : Color.clear)
+                )
+                .help("View as \(mode.title)")
+                .accessibilityLabel("View as \(mode.title)")
+                .accessibilityAddTraits(isActive ? [.isSelected] : [])
+            }
+        }
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.appSurface)
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(Color.appBorder, lineWidth: 1)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("View Mode")
+    }
+}
+
+// MARK: - Library indexing indicator
+
+private struct LibraryIndexingIndicator: View {
+    let progress: (done: Int, total: Int)?
+
+    private var helpText: String {
+        guard let progress, progress.total > 0 else { return "Indexing library…" }
+        return "Indexing \(progress.done)/\(progress.total)"
+    }
+
+    var body: some View {
+        Group {
+            if let progress, progress.total > 0 {
+                ProgressView(value: Double(min(progress.done, progress.total)), total: Double(progress.total))
+            } else {
+                ProgressView()
+            }
+        }
+        .progressViewStyle(.circular)
+        .controlSize(.small)
+        .tint(Color.appAccent)
+        .frame(width: 18, height: 18)
+        .help(helpText)
+        .accessibilityLabel("Library indexing")
+        .accessibilityValue(helpText)
     }
 }

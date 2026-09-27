@@ -17,7 +17,7 @@ struct MetadataPanelView: View {
                 VStack(spacing: 0) {
                     HStack {
                         Text("Details")
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.appIcon(16, weight: .semibold))
                             .foregroundStyle(Color.appPrimaryText)
                         Spacer()
 
@@ -26,13 +26,13 @@ struct MetadataPanelView: View {
                             vm.togglePreviewPane()
                         } label: {
                             Image(systemName: vm.previewPaneCollapsed ? "eye.slash" : "eye")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Color.appMuted)
+                                .font(.appCallout)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(AppIconButtonStyle(width: 24, height: 24, cornerRadius: AppRadius.sm, showsRestingChrome: false))
                         .help(vm.previewPaneCollapsed ? "Show Preview" : "Hide Preview")
+                        .accessibilityLabel(vm.previewPaneCollapsed ? "Show Preview" : "Hide Preview")
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, AppSpacing.xl)
                     .frame(height: LayoutMetrics.panelHeaderHeight)
                     .background(Color.appBackground)
                     .overlay(alignment: .bottom) {
@@ -45,9 +45,9 @@ struct MetadataPanelView: View {
                     }
                 }
             } else {
-                VStack(spacing: 8) {
+                VStack(spacing: AppSpacing.md) {
                     Image(systemName: "sidebar.right")
-                        .font(.system(size: 32))
+                        .font(.appIcon(32))
                         .foregroundStyle(Color.appMuted.opacity(0.5))
                     Text("Select an item to view details")
                         .font(.appCaption)
@@ -57,13 +57,26 @@ struct MetadataPanelView: View {
             }
         }
         .background(Color.appSidebarBackground)
+        // The lightbox has its own player; keep the preview player from playing
+        // underneath it (which would double the audio).
+        .onChange(of: vm.lightboxOpen) { _, isOpen in
+            if isOpen {
+                previewVideoPlayer.pause()
+            }
+        }
+        .onChange(of: vm.selectedPromptEntry?.sourcePath) { _, _ in
+            previewVideoPlayer.pause()
+        }
+        .onDisappear {
+            clearPreviewVideoPlayer()
+        }
         .sheet(isPresented: Binding(
             get: { vm.metadataEditorPath != nil },
             set: { if !$0 { vm.metadataEditorPath = nil } }
         )) {
             if let path = vm.metadataEditorPath {
                 MetadataEditorView(
-                    imagePath: path,
+                    filePath: path,
                     existingEntry: vm.selectedPromptEntry
                 )
                 .environment(vm)
@@ -97,10 +110,10 @@ struct MetadataPanelView: View {
     private func previewPane(entry: PromptEntry) -> some View {
         VStack(spacing: 0) {
             ZStack {
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: AppRadius.lg)
                     .fill(Color.appSurface.opacity(0.55))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12)
+                        RoundedRectangle(cornerRadius: AppRadius.lg)
                             .strokeBorder(Color.appBorder, lineWidth: 1)
                     )
 
@@ -109,8 +122,8 @@ struct MetadataPanelView: View {
                         player: previewVideoPlayer,
                         allowsPictureInPicturePlayback: false
                     )
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .padding(12)
+                        .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg))
+                        .padding(AppSpacing.lg)
                         .task(id: videoURL.standardizedFileURL.path) {
                             preparePreviewVideoPlayer(for: videoURL)
                         }
@@ -124,7 +137,7 @@ struct MetadataPanelView: View {
                     )
                         .frame(maxWidth: 420)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(12)
+                        .padding(AppSpacing.lg)
                         .task(id: audioURL.standardizedFileURL.path) {
                             preparePreviewVideoPlayer(for: audioURL)
                         }
@@ -136,12 +149,12 @@ struct MetadataPanelView: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .padding(12)
+                        .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg))
+                        .padding(AppSpacing.lg)
                 } else {
                     VStack(spacing: 10) {
                         Image(systemName: "photo")
-                            .font(.system(size: 28))
+                            .font(.appIcon(28))
                             .foregroundStyle(Color.appMuted.opacity(0.7))
                         Text("No preview available")
                             .font(.appCaption)
@@ -150,77 +163,94 @@ struct MetadataPanelView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, AppSpacing.xl)
+            .padding(.vertical, AppSpacing.lg)
         }
     }
 
-    /// Whether this entry is an image file that supports metadata embedding (PNG/JPEG).
-    private func isEmbeddableImage(_ entry: PromptEntry) -> Bool {
+    /// Whether this entry is a supported media file for metadata embedding.
+    private func isEmbeddableMetadataFile(_ entry: PromptEntry) -> Bool {
         guard let path = entry.sourcePath else { return false }
-        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
-        return ext == "png" || ext == "jpg" || ext == "jpeg"
+        return vm.isEmbeddableMetadataFile(path)
     }
 
     @ViewBuilder
     private func metadataPane(entry: PromptEntry) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: AppSpacing.lg) {
                 if !entry.prompt.isEmpty {
                     detailCard(title: nil) {
-                        HStack(alignment: .top, spacing: 6) {
+                        HStack(alignment: .top, spacing: AppSpacing.sm) {
                             Image(systemName: "text.quote")
-                                .font(.system(size: 12))
+                                .font(.appCallout)
                                 .foregroundStyle(Color.appAccent)
                             Text("Prompt")
-                                .font(.system(size: 13, weight: .semibold))
+                                .font(.appHeadline)
                                 .foregroundStyle(Color.appPrimaryText)
                             Spacer()
-                            PromptExportMenu(entry: entry) { formatName in
+                            PromptExportMenu(entry: entry, title: "Copy As") { formatName in
                                 vm.showToast("Copied as \(formatName)", type: .success)
                             }
+                            Button {
+                                saveSnippet(text: entry.prompt, category: "Prompts")
+                            } label: {
+                                Image(systemName: "text.badge.star")
+                                    .font(.appCaption)
+                            }
+                            .buttonStyle(AppIconButtonStyle(width: 22, height: 22, cornerRadius: AppRadius.sm, showsRestingChrome: false))
+                            .help("Save as Snippet")
+                            .accessibilityLabel("Save as Snippet")
                             Button {
                                 ClipboardService.copyString(entry.prompt)
                                 vm.showToast("Prompt copied", type: .success)
                             } label: {
                                 Image(systemName: "doc.on.doc")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(Color.appMuted)
+                                    .font(.appCaption)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(AppIconButtonStyle(width: 22, height: 22, cornerRadius: AppRadius.sm, showsRestingChrome: false))
+                            .help("Copy Prompt")
+                            .accessibilityLabel("Copy Prompt")
                         }
                         Text(entry.prompt)
                             .font(.appBody)
                             .foregroundStyle(Color.appPrimaryText.opacity(0.9))
                             .textSelection(.enabled)
-                            .padding(.top, 4)
+                            .padding(.top, AppSpacing.xs)
                     }
                 }
 
-                // Add / Edit Metadata button for embeddable images
-                if isEmbeddableImage(entry), let path = entry.sourcePath {
-                    let hasPrompt = !entry.prompt.isEmpty
+                if isEmbeddableMetadataFile(entry), let path = entry.sourcePath {
+                    let hasMetadata = !entry.prompt.isEmpty
+                        || !entry.embeddedMetadata.isEmpty
+                        || entry.generationInfo.model != "N/A"
+                    let actionTitle = metadataActionTitle(for: path, hasMetadata: hasMetadata)
                     Button {
                         vm.openMetadataEditor(for: path)
                     } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: hasPrompt ? "pencil.line" : "plus.square")
-                                .font(.system(size: 12))
-                            Text(hasPrompt ? "Edit Metadata" : "Add Metadata")
-                                .font(.system(size: 12, weight: .medium))
+                        HStack(spacing: AppSpacing.sm) {
+                            Image(systemName: hasMetadata ? "pencil.line" : "plus.square")
+                                .font(.appCallout)
+                            Text(actionTitle)
+                                .font(.appIcon(12, weight: .medium))
                         }
                         .foregroundStyle(Color.appAccent)
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, AppSpacing.lg)
                         .padding(.vertical, 7)
                         .frame(maxWidth: .infinity)
                         .background(Color.appAccent.opacity(0.12))
-                        .cornerRadius(8)
+                        .cornerRadius(AppRadius.md)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 8)
+                            RoundedRectangle(cornerRadius: AppRadius.md)
                                 .strokeBorder(Color.appAccent.opacity(0.25), lineWidth: 1)
                         )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(AppAdaptiveButtonStyle())
+                }
+
+                if entry.comfyWorkflowJSON != nil || entry.comfyPromptJSON != nil {
+                    detailCard(title: "ComfyUI Workflow") {
+                        ComfyWorkflowSection(entry: entry)
+                    }
                 }
 
                 if entry.generationInfo.model != "N/A" {
@@ -241,7 +271,7 @@ struct MetadataPanelView: View {
                     if let path = entry.sourcePath {
                         HStack {
                             Text("Rating")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.appCalloutEmphasis)
                                 .foregroundStyle(Color.appMuted)
                             Spacer()
 
@@ -250,25 +280,33 @@ struct MetadataPanelView: View {
                                 vm.toggleFavorite(path: path)
                             } label: {
                                 Image(systemName: vm.isFavorite(path: path) ? "pin.fill" : "pin")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(vm.isFavorite(path: path) ? Color.favoriteGold : Color.appMuted)
+                                    .font(.appCallout)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(
+                                AppIconButtonStyle(
+                                    width: 24,
+                                    height: 24,
+                                    cornerRadius: AppRadius.sm,
+                                    showsRestingChrome: false,
+                                    restingForeground: vm.isFavorite(path: path) ? Color.favoriteGoldText : Color.appMuted
+                                )
+                            )
                             .help(vm.isFavorite(path: path) ? "Unpin" : "Pin")
+                            .accessibilityLabel(vm.isFavorite(path: path) ? "Unpin" : "Pin")
 
                             StarRatingView(rating: vm.rating(for: path), size: 16) { newRating in
                                 vm.setRating(newRating, for: path)
                             }
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
+                        .padding(.horizontal, AppSpacing.xl)
+                        .padding(.vertical, AppSpacing.md)
 
                         // Tags
                         let fileTags = vm.tagsForFile(at: path)
                         if !fileTags.isEmpty || !vm.allTags.isEmpty {
-                            HStack(spacing: 6) {
+                            HStack(spacing: AppSpacing.sm) {
                                 Text("Tags")
-                                    .font(.system(size: 12, weight: .semibold))
+                                    .font(.appCalloutEmphasis)
                                     .foregroundStyle(Color.appMuted)
 
                                 TagPillsView(tags: fileTags)
@@ -279,14 +317,16 @@ struct MetadataPanelView: View {
                                     TagAssignmentMenu(paths: [path])
                                 } label: {
                                     Image(systemName: "plus.circle")
-                                        .font(.system(size: 11))
+                                        .font(.appCaption)
                                         .foregroundStyle(Color.appMuted)
                                 }
                                 .menuStyle(.borderlessButton)
                                 .fixedSize()
+                                .help("Assign Tags")
+                                .accessibilityLabel("Assign Tags")
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 4)
+                            .padding(.horizontal, AppSpacing.xl)
+                            .padding(.vertical, AppSpacing.xs)
                         }
                     }
 
@@ -299,7 +339,7 @@ struct MetadataPanelView: View {
 
                 if !entry.referenceImages.isEmpty {
                     detailCard(title: "Reference Images") {
-                        HStack(spacing: 8) {
+                        HStack(spacing: AppSpacing.md) {
                             ForEach(Array(entry.referenceImages.enumerated()), id: \.offset) { index, img in
                                 referenceImageThumbnail(
                                     img,
@@ -318,14 +358,17 @@ struct MetadataPanelView: View {
                             AnalysisCard(
                                 label: seg.label,
                                 key: seg.key,
-                                value: seg.value
+                                value: seg.value,
+                                onSaveSnippet: {
+                                    saveSnippet(text: seg.value, category: seg.label, title: seg.label)
+                                }
                             )
                         }
                     }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, AppSpacing.xl)
+            .padding(.vertical, AppSpacing.lg)
         }
     }
 
@@ -377,23 +420,39 @@ struct MetadataPanelView: View {
         return minimumPreview...maximumPreview
     }
 
+    /// Saves `text` to the snippet library and confirms with a toast.
+    private func saveSnippet(text: String, category: String, title: String = "") {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let snippet = SnippetService.shared.add(title: title, text: trimmed, category: category)
+        vm.showToast("Saved snippet \"\(snippet.title)\"", type: .success)
+    }
+
+    private func metadataActionTitle(for path: String, hasMetadata: Bool) -> String {
+        if vm.isEmbeddableAudioFile(path) {
+            return hasMetadata ? "Edit Audio Tags" : "Add Audio Tags"
+        }
+
+        return hasMetadata ? "Edit Metadata" : "Add Metadata"
+    }
+
     // MARK: - Card wrapper (shared with Lightbox style)
 
     @ViewBuilder
     private func detailCard(title: String?, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: AppSpacing.sm) {
             if let title {
                 Text(title)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.appIcon(11, weight: .medium))
                     .foregroundStyle(Color.appMuted)
             }
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: AppSpacing.sm) {
                 content()
             }
-            .padding(12)
+            .padding(AppSpacing.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.appSurface.opacity(0.6))
-            .cornerRadius(10)
+            .cornerRadius(AppRadius.lg)
         }
     }
 
@@ -401,7 +460,7 @@ struct MetadataPanelView: View {
 
     @ViewBuilder
     private func genInfoGrid(_ info: GenerationInfo) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: AppSpacing.md) {
             genInfoCell(title: "Model", value: info.model)
             genInfoCell(title: "Aspect Ratio", value: info.aspectRatio.rawValue)
         }
@@ -412,19 +471,19 @@ struct MetadataPanelView: View {
 
     @ViewBuilder
     private func genInfoCell(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: AppSpacing.xxs) {
             Text(title)
-                .font(.system(size: 10))
+                .font(.appFootnote)
                 .foregroundStyle(Color.appMuted)
             Text(value)
-                .font(.system(size: 13, weight: .medium))
+                .font(.appIcon(13, weight: .medium))
                 .foregroundStyle(Color.appPrimaryText)
                 .lineLimit(2)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.appSurface)
-        .cornerRadius(8)
+        .cornerRadius(AppRadius.md)
     }
 
     // MARK: - File Info Card
@@ -432,7 +491,7 @@ struct MetadataPanelView: View {
     @ViewBuilder
     private func fileInfoCard(_ meta: FileMetadata) -> some View {
         detailCard(title: "File Info") {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
                 fileInfoRow(label: "Type", value: meta.fileType)
             if let w = meta.width, let h = meta.height {
                 fileInfoRow(label: "Dimensions", value: "\(w) x \(h)")
@@ -455,10 +514,10 @@ struct MetadataPanelView: View {
         detailCard(title: "Embedded Metadata") {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(fields.enumerated()), id: \.offset) { index, field in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(alignment: .top, spacing: 8) {
+                    VStack(alignment: .leading, spacing: AppSpacing.xs) {
+                        HStack(alignment: .top, spacing: AppSpacing.md) {
                             Text(field.label)
-                                .font(.system(size: 11, weight: .medium))
+                                .font(.appIcon(11, weight: .medium))
                                 .foregroundStyle(Color.appMuted)
                             Spacer()
                             Button {
@@ -466,14 +525,15 @@ struct MetadataPanelView: View {
                                 vm.showToast("\(field.label) copied", type: .success)
                             } label: {
                                 Image(systemName: "doc.on.doc")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(Color.appMuted)
+                                    .font(.appCaption)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(AppIconButtonStyle(width: 22, height: 22, cornerRadius: AppRadius.sm, showsRestingChrome: false))
+                            .help("Copy \(field.label)")
+                            .accessibilityLabel("Copy \(field.label)")
                         }
 
                         Text(field.value)
-                            .font(.system(size: 11))
+                            .font(.appCaption)
                             .foregroundStyle(Color.appPrimaryText)
                             .textSelection(.enabled)
                     }
@@ -488,13 +548,13 @@ struct MetadataPanelView: View {
 
     @ViewBuilder
     private func fileInfoRow(label: String, value: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: AppSpacing.md) {
             Text(label)
-                .font(.system(size: 11))
+                .font(.appCaption)
                 .foregroundStyle(Color.appMuted)
                 .frame(width: 70, alignment: .leading)
             Text(value)
-                .font(.system(size: 11))
+                .font(.appCaption)
                 .foregroundStyle(Color.appPrimaryText)
                 .textSelection(.enabled)
         }
@@ -507,7 +567,7 @@ struct MetadataPanelView: View {
             .aspectRatio(contentMode: .fill)
             .frame(width: 60, height: 60)
             .clipped()
-            .cornerRadius(6)
+            .cornerRadius(AppRadius.sm)
             .contextMenu {
                 Button("Copy Reference Image") {
                     ClipboardService.copyImage(image)
@@ -603,23 +663,18 @@ struct AnalysisCard: View {
     let label: String
     let key: String
     let value: String
+    var onSaveSnippet: (() -> Void)?
 
     @State private var isExpanded = false
 
+    /// Decorative tint for the card fill and stroke.
     private var accentColor: Color {
-        switch key {
-        case "fullPrompt": return .segmentFullPrompt
-        case "shortDescription": return .segmentBrief
-        case "subject": return .segmentSubject
-        case "subjectPose": return .segmentAction
-        case "composition": return .segmentPlace
-        case "artStyle": return .segmentStyle
-        case "cameraSettings": return .segmentCamera
-        case "lighting": return .segmentLighting
-        case "colorPalette": return .segmentPalette
-        case "mood": return .segmentMood
-        default: return .appMuted
-        }
+        Color.segment(forAnalysisKey: key) ?? .appMuted
+    }
+
+    /// Text-safe variant for the heading label and glyph.
+    private var labelColor: Color {
+        Color.segmentText(forAnalysisKey: key) ?? .appMuted
     }
 
     private var iconName: String {
@@ -639,23 +694,33 @@ struct AnalysisCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: AppSpacing.sm) {
+            HStack(spacing: AppSpacing.sm) {
                 Image(systemName: iconName)
-                    .font(.system(size: 11))
-                    .foregroundStyle(accentColor)
+                    .font(.appCaption)
+                    .foregroundStyle(labelColor)
                 Text(label)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(accentColor)
+                    .font(.appHeadline)
+                    .foregroundStyle(labelColor)
                 Spacer()
+                if let onSaveSnippet {
+                    Button(action: onSaveSnippet) {
+                        Image(systemName: "text.badge.star")
+                            .font(.appCaption)
+                    }
+                    .buttonStyle(AppIconButtonStyle(width: 22, height: 22, cornerRadius: AppRadius.sm, showsRestingChrome: false))
+                    .help("Save Segment as Snippet")
+                    .accessibilityLabel("Save \(label) as Snippet")
+                }
                 Button {
                     ClipboardService.copyString(value)
                 } label: {
                     Image(systemName: "doc.on.doc")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.appMuted)
+                        .font(.appCaption)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AppIconButtonStyle(width: 22, height: 22, cornerRadius: AppRadius.sm, showsRestingChrome: false))
+                .help("Copy \(label)")
+                .accessibilityLabel("Copy \(label)")
             }
             Text(value)
                 .font(.appBody)
@@ -664,20 +729,141 @@ struct AnalysisCard: View {
                 .textSelection(.enabled)
                 .onTapGesture { isExpanded.toggle() }
         }
-        .padding(12)
+        .padding(AppSpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: AppRadius.lg)
                 .fill(Color.appSurface)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: AppRadius.lg)
                         .fill(accentColor.opacity(0.14))
                 }
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: AppRadius.lg)
                 .strokeBorder(accentColor.opacity(0.22), lineWidth: 1)
         )
+    }
+}
+
+// MARK: - ComfyUI Workflow
+
+/// Copy / save actions for the raw ComfyUI graphs embedded in a PNG, plus a
+/// node-count summary parsed once per file.
+private struct ComfyWorkflowSection: View {
+    @Environment(ExplorerViewModel.self) private var vm
+    let entry: PromptEntry
+
+    @State private var summary: String?
+
+    /// The UI workflow loads straight into ComfyUI; the API graph is the fallback.
+    private var primaryJSON: String? { entry.comfyWorkflowJSON ?? entry.comfyPromptJSON }
+    private var primaryKind: String { entry.comfyWorkflowJSON != nil ? "Workflow" : "API Prompt" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AppSpacing.md) {
+            HStack(spacing: AppSpacing.sm) {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.appCallout)
+                    .foregroundStyle(Color.appAccent)
+                Text(summary ?? "Embedded ComfyUI graph")
+                    .font(.appCallout)
+                    .foregroundStyle(Color.appPrimaryText)
+                    .lineLimit(2)
+            }
+
+            HStack(spacing: AppSpacing.sm) {
+                Button {
+                    copy(primaryJSON, label: primaryKind)
+                } label: {
+                    Label("Copy \(primaryKind) JSON", systemImage: "doc.on.doc")
+                        .font(.appCaption)
+                }
+                .buttonStyle(AppLabeledButtonStyle(height: 24, horizontalPadding: AppSpacing.md))
+
+                Menu {
+                    if let workflow = entry.comfyWorkflowJSON {
+                        Button("Save Workflow as .json…") { save(workflow, suffix: "workflow") }
+                    }
+                    if let prompt = entry.comfyPromptJSON {
+                        Button("Save API Prompt as .json…") { save(prompt, suffix: "api") }
+                    }
+                    if entry.comfyWorkflowJSON != nil, entry.comfyPromptJSON != nil {
+                        Divider()
+                        Button("Copy API Prompt JSON") { copy(entry.comfyPromptJSON, label: "API Prompt") }
+                    }
+                } label: {
+                    Label("Save as .json…", systemImage: "square.and.arrow.down")
+                        .font(.appCaption)
+                } primaryAction: {
+                    if let primaryJSON {
+                        save(primaryJSON, suffix: entry.comfyWorkflowJSON != nil ? "workflow" : "api")
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .foregroundStyle(Color.appMuted)
+            }
+        }
+        .task(id: entry.sourcePath) {
+            let workflow = entry.comfyWorkflowJSON
+            let prompt = entry.comfyPromptJSON
+            summary = await Task.detached(priority: .utility) {
+                Self.summarize(workflowJSON: workflow, promptJSON: prompt)
+            }.value
+        }
+    }
+
+    private func copy(_ json: String?, label: String) {
+        guard let json else { return }
+        ClipboardService.copyString(json)
+        vm.showToast("ComfyUI \(label) JSON copied", type: .success)
+    }
+
+    private func save(_ json: String, suffix: String) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        let base = ((entry.fileMetadata?.fileName ?? entry.sourcePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "comfyui") as NSString)
+            .deletingPathExtension
+        panel.nameFieldStringValue = "\(base)-\(suffix).json"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try Data(Self.prettyPrinted(json).utf8).write(to: url, options: .atomic)
+            vm.showToast("Saved \(url.lastPathComponent)", type: .success)
+        } catch {
+            vm.showToast("Couldn't save JSON: \(error.localizedDescription)", type: .error)
+        }
+    }
+
+    nonisolated private static func prettyPrinted(_ json: String) -> String {
+        guard let data = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .withoutEscapingSlashes]),
+              let string = String(data: pretty, encoding: .utf8)
+        else { return json }
+        return string
+    }
+
+    /// "12 nodes · KSampler, CheckpointLoaderSimple, …" from either graph shape.
+    nonisolated private static func summarize(workflowJSON: String?, promptJSON: String?) -> String? {
+        var classTypes: [String] = []
+        if let workflowJSON, let data = workflowJSON.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let nodes = object["nodes"] as? [[String: Any]] {
+            classTypes = nodes.compactMap { $0["type"] as? String }
+        } else if let promptJSON, let data = promptJSON.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            classTypes = object.values.compactMap { ($0 as? [String: Any])?["class_type"] as? String }
+        }
+        guard !classTypes.isEmpty else { return nil }
+
+        let samplers = classTypes.filter { $0.localizedCaseInsensitiveContains("sampler") }.count
+        let loras = classTypes.filter { $0.localizedCaseInsensitiveContains("lora") }.count
+        var parts = ["\(classTypes.count) node\(classTypes.count == 1 ? "" : "s")"]
+        if samplers > 0 { parts.append("\(samplers) sampler\(samplers == 1 ? "" : "s")") }
+        if loras > 0 { parts.append("\(loras) LoRA loader\(loras == 1 ? "" : "s")") }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -688,7 +874,7 @@ struct SectionHeader: View {
 
     var body: some View {
         Text(title)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.appCaptionEmphasis)
             .foregroundStyle(Color.appMuted)
             .textCase(.uppercase)
     }
@@ -699,7 +885,7 @@ struct LabeledRow: View {
     let value: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: AppSpacing.md) {
             Text(label)
                 .font(.appCaption)
                 .foregroundStyle(Color.appMuted)

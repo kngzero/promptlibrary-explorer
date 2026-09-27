@@ -24,7 +24,7 @@ struct PromptDiffView: View {
                 Button("Close") { dismiss() }
                     .keyboardShortcut(.escape)
             }
-            .padding(12)
+            .padding(AppSpacing.lg)
             .background(Color.appSurface)
 
             Divider().background(Color.appBorder)
@@ -36,7 +36,7 @@ struct PromptDiffView: View {
                     label: session.nameA,
                     words: wordsA,
                     uniqueWords: uniqueToA,
-                    accentColor: .segmentSubject
+                    accentColor: .segmentSubjectText
                 )
 
                 Rectangle()
@@ -48,14 +48,14 @@ struct PromptDiffView: View {
                     label: session.nameB,
                     words: wordsB,
                     uniqueWords: uniqueToB,
-                    accentColor: .segmentStyle
+                    accentColor: .segmentStyleText
                 )
             }
 
             Divider().background(Color.appBorder)
 
             // Stats bar
-            HStack(spacing: 16) {
+            HStack(spacing: AppSpacing.xl) {
                 statLabel("Words A", value: "\(wordsA.count)")
                 statLabel("Words B", value: "\(wordsB.count)")
                 statLabel("Shared", value: "\(Set(wordsA).intersection(Set(wordsB)).count)")
@@ -63,8 +63,8 @@ struct PromptDiffView: View {
                 statLabel("Unique to B", value: "\(uniqueToB.count)")
                 Spacer()
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .padding(.horizontal, AppSpacing.xl)
+            .padding(.vertical, AppSpacing.md)
             .background(Color.appSurface)
         }
         .background(Color.appBackground)
@@ -80,7 +80,7 @@ struct PromptDiffView: View {
         accentColor: Color
     ) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: AppSpacing.lg) {
                 // Header
                 HStack(spacing: 10) {
                     if let img = entry.images.first {
@@ -89,10 +89,10 @@ struct PromptDiffView: View {
                             .aspectRatio(contentMode: .fill)
                             .frame(width: 48, height: 48)
                             .clipped()
-                            .cornerRadius(6)
+                            .cornerRadius(AppRadius.sm)
                     }
 
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: AppSpacing.xxs) {
                         Text(label)
                             .font(.appTitle)
                             .foregroundStyle(Color.appPrimaryText)
@@ -121,9 +121,9 @@ struct PromptDiffView: View {
                         Divider().background(Color.appBorder)
 
                         ForEach(segments, id: \.key) { seg in
-                            VStack(alignment: .leading, spacing: 4) {
+                            VStack(alignment: .leading, spacing: AppSpacing.xs) {
                                 Text(seg.label)
-                                    .font(.system(size: 11, weight: .semibold))
+                                    .font(.appCaptionEmphasis)
                                     .foregroundStyle(accentColor)
                                 Text(seg.value)
                                     .font(.appBody)
@@ -134,7 +134,7 @@ struct PromptDiffView: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(AppSpacing.xl)
         }
         .frame(maxWidth: .infinity)
     }
@@ -157,12 +157,12 @@ struct PromptDiffView: View {
 
     @ViewBuilder
     private func statLabel(_ title: String, value: String) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: AppSpacing.xs) {
             Text(title)
-                .font(.system(size: 10, weight: .medium))
+                .font(.appIcon(10, weight: .medium))
                 .foregroundStyle(Color.appMuted)
             Text(value)
-                .font(.system(size: 10, weight: .semibold))
+                .font(.appIcon(10, weight: .semibold))
                 .foregroundStyle(Color.appPrimaryText)
         }
     }

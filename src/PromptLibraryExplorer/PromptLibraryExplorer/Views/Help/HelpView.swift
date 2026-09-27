@@ -40,7 +40,7 @@ struct HelpView: View {
                         title: "Developer",
                         description: "Art Official builds PromptLibrary Explorer and the connected creative workflow tools around it.",
                         icon: "globe",
-                        accent: Color.segmentPlace
+                        accent: Color.segmentPlaceText
                     ) {
                         developerCard
                     }
@@ -57,21 +57,21 @@ struct HelpView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 14) {
             ZStack {
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: AppRadius.lg)
                     .fill(Color.appElevatedSurface)
                 Image(systemName: "questionmark.circle.fill")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.appLargeTitle)
                     .foregroundStyle(Color.appAccent)
             }
             .frame(width: 48, height: 48)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
                 Text("Help")
-                    .font(.system(size: 24, weight: .bold))
+                    .font(.appIcon(24, weight: .bold))
                     .foregroundStyle(Color.appPrimaryText)
 
                 Text("Reference for file types, keyboard shortcuts, and developer resources.")
-                    .font(.system(size: 14))
+                    .font(.appIcon(14))
                     .foregroundStyle(Color.appMuted)
             }
 
@@ -94,24 +94,24 @@ struct HelpView: View {
         accent: Color,
         @ViewBuilder content: () -> some View
     ) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: AppSpacing.xl) {
             HStack(alignment: .top, spacing: 14) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: AppRadius.lg)
                         .fill(accent.opacity(0.14))
                     Image(systemName: icon)
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.appLargeTitle)
                         .foregroundStyle(accent)
                 }
                 .frame(width: 46, height: 46)
 
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: AppSpacing.sm) {
                     Text(title)
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(.appIcon(18, weight: .semibold))
                         .foregroundStyle(Color.appPrimaryText)
 
                     Text(description)
-                        .font(.system(size: 14))
+                        .font(.appIcon(14))
                         .foregroundStyle(Color.appMuted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -124,75 +124,75 @@ struct HelpView: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 18)
+            RoundedRectangle(cornerRadius: AppRadius.xxl)
                 .fill(Color.appSurface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 18)
+            RoundedRectangle(cornerRadius: AppRadius.xxl)
                 .strokeBorder(Color.appBorder, lineWidth: 1)
         )
     }
 
     private func fileTypeCard(_ fileType: HelpFileTypeDescription) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: AppSpacing.lg) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(fileType.extensionLabel)
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .foregroundStyle(Color.appAccent)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, AppSpacing.md)
+                    .padding(.vertical, AppSpacing.xs)
                     .background(
                         Capsule()
                             .fill(Color.appAccent.opacity(0.12))
                     )
 
                 Text(fileType.title)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.appIcon(17, weight: .semibold))
                     .foregroundStyle(Color.appPrimaryText)
             }
 
             Text(fileType.description)
-                .font(.system(size: 14))
+                .font(.appIcon(14))
                 .foregroundStyle(Color.appMuted)
                 .fixedSize(horizontal: false, vertical: true)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: AppSpacing.md) {
                 ForEach(fileType.highlights, id: \.self) { highlight in
-                    HStack(alignment: .top, spacing: 8) {
+                    HStack(alignment: .top, spacing: AppSpacing.md) {
                         Image(systemName: "circle.fill")
-                            .font(.system(size: 5))
+                            .font(.appIcon(5))
                             .foregroundStyle(Color.appAccent)
-                            .padding(.top, 6)
+                            .padding(.top, AppSpacing.sm)
 
                         Text(highlight)
-                            .font(.system(size: 13))
+                            .font(.appBody)
                             .foregroundStyle(Color.appPrimaryText.opacity(0.92))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
         }
-        .padding(16)
+        .padding(AppSpacing.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .fill(Color.appElevatedSurface.opacity(0.55))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .strokeBorder(Color.appBorder, lineWidth: 1)
         )
     }
 
     private func shortcutGroupCard(_ group: HelpShortcutGroup) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: AppSpacing.lg) {
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
                 Text(group.title)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.appIcon(17, weight: .semibold))
                     .foregroundStyle(Color.appPrimaryText)
 
                 Text(group.description)
-                    .font(.system(size: 13))
+                    .font(.appBody)
                     .foregroundStyle(Color.appMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -200,7 +200,7 @@ struct HelpView: View {
             VStack(spacing: 10) {
                 ForEach(group.items) { item in
                     HStack(alignment: .top, spacing: 14) {
-                        HStack(spacing: 6) {
+                        HStack(spacing: AppSpacing.sm) {
                             ForEach(item.keys, id: \.self) { key in
                                 shortcutKey(key)
                             }
@@ -208,7 +208,7 @@ struct HelpView: View {
                         .frame(minWidth: 168, alignment: .leading)
 
                         Text(item.description)
-                            .font(.system(size: 13))
+                            .font(.appBody)
                             .foregroundStyle(Color.appPrimaryText.opacity(0.92))
                             .fixedSize(horizontal: false, vertical: true)
 
@@ -217,14 +217,14 @@ struct HelpView: View {
                 }
             }
         }
-        .padding(16)
+        .padding(AppSpacing.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .fill(Color.appElevatedSurface.opacity(0.55))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .strokeBorder(Color.appBorder, lineWidth: 1)
         )
     }
@@ -233,14 +233,14 @@ struct HelpView: View {
         Text(key)
             .font(.system(size: 12, weight: .semibold, design: .monospaced))
             .foregroundStyle(Color.appPrimaryText)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, AppSpacing.md)
             .padding(.vertical, 5)
             .background(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: AppRadius.md)
                     .fill(Color.appBackground)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: AppRadius.md)
                     .strokeBorder(Color.appControlBorder, lineWidth: 1)
             )
     }
@@ -249,13 +249,13 @@ struct HelpView: View {
         let resource = HelpContent.developerResource
 
         return VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: AppSpacing.sm) {
                 Text(resource.title)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.appIcon(18, weight: .semibold))
                     .foregroundStyle(Color.appPrimaryText)
 
                 Text(resource.description)
-                    .font(.system(size: 14))
+                    .font(.appIcon(14))
                     .foregroundStyle(Color.appMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -263,34 +263,37 @@ struct HelpView: View {
             Button {
                 vm.openDeveloperWebsite()
             } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: AppSpacing.md) {
                     Image(systemName: "arrow.up.right.square")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.appHeadline)
                     Text(resource.buttonTitle)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.appTitle)
                 }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(Color.segmentPlace)
-                )
             }
-            .buttonStyle(.plain)
+            // White on the pale teal fill was ~2:1; the text-safe teal with the
+            // canvas colour as its label stays above 6:1 in both modes.
+            .buttonStyle(
+                AppPrimaryButtonStyle(
+                    tint: .segmentPlaceText,
+                    foreground: .appCanvasBackground,
+                    horizontalPadding: AppSpacing.xl,
+                    verticalPadding: 10,
+                    cornerRadius: AppRadius.lg
+                )
+            )
 
             Text(resource.urlString)
-                .font(.system(size: 12, design: .monospaced))
+                .font(.appMono)
                 .foregroundStyle(Color.appMuted)
         }
-        .padding(16)
+        .padding(AppSpacing.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .fill(Color.appElevatedSurface.opacity(0.55))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .strokeBorder(Color.appBorder, lineWidth: 1)
         )
     }
@@ -313,7 +316,7 @@ struct HelpView: View {
             .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 16)
+        .padding(.vertical, AppSpacing.xl)
         .background(Color.appBackground)
         .overlay(alignment: .top) {
             Rectangle()

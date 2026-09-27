@@ -67,6 +67,8 @@ struct LightboxView: View {
         .onGlobalKeyDown { event in
             // Only handle when lightbox is open
             guard vm.lightboxOpen else { return false }
+            // Save panels, sheets (Settings) and focused text fields own their keys.
+            guard !ModalKeyGuard.shouldIgnore(event) else { return false }
             if handleZoomShortcut(event) { return true }
             switch event.keyCode {
             case KeyCode.escape.rawValue:
@@ -93,6 +95,9 @@ struct LightboxView: View {
         }
         .onGlobalScrollWheel { event in
             handleViewportScroll(event)
+        }
+        .onChange(of: vm.processedFolderContents.map(\.id)) { _, _ in
+            reconcileLightboxIndexWithContents()
         }
         .onChange(of: vm.lightboxIndex) { _, _ in
             currentImageIndex = 0
@@ -162,26 +167,26 @@ struct LightboxView: View {
                 }
 
                 HStack {
-                    navArrow(systemName: "chevron.left") { navigateToPrevious() }
+                    navArrow(systemName: "chevron.left", label: "Previous Item") { navigateToPrevious() }
                     Spacer()
-                    navArrow(systemName: "chevron.right") { navigateToNext() }
+                    navArrow(systemName: "chevron.right", label: "Next Item") { navigateToNext() }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, AppSpacing.lg)
 
                 if let entry = currentEntry, entry.images.count > 1 {
                     VStack {
                         Spacer()
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 6) {
+                            HStack(spacing: AppSpacing.sm) {
                                 ForEach(Array(entry.images.enumerated()), id: \.offset) { idx, img in
                                     Image(nsImage: img)
                                         .resizable()
                                         .aspectRatio(contentMode: .fill)
                                         .frame(width: 48, height: 48)
                                         .clipped()
-                                        .cornerRadius(4)
+                                        .cornerRadius(AppRadius.xs)
                                         .overlay(
-                                            RoundedRectangle(cornerRadius: 4)
+                                            RoundedRectangle(cornerRadius: AppRadius.xs)
                                                 .strokeBorder(
                                                     idx == currentImageIndex ? Color.appAccent : Color.clear,
                                                     lineWidth: 2
@@ -190,8 +195,8 @@ struct LightboxView: View {
                                         .onTapGesture { currentImageIndex = idx }
                                 }
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
+                            .padding(.horizontal, AppSpacing.lg)
+                            .padding(.vertical, AppSpacing.md)
                         }
                         .background(Color.appOverlaySurface)
                     }
@@ -229,30 +234,32 @@ struct LightboxView: View {
             // Close button row
             HStack {
                 Text("Details")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.appIcon(16, weight: .semibold))
                     .foregroundStyle(Color.appPrimaryText)
                 Spacer()
                 Button { closeLightbox() } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.appIcon(14, weight: .medium))
                         .foregroundStyle(Color.appPrimaryText.opacity(0.9))
                         .frame(width: 30, height: 30)
-                        .background(Color.appElevatedSurface, in: RoundedRectangle(cornerRadius: 7))
+                        .background(Color.appElevatedSurface, in: RoundedRectangle(cornerRadius: AppRadius.md))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 7)
+                            RoundedRectangle(cornerRadius: AppRadius.md)
                                 .strokeBorder(Color.appControlBorder, lineWidth: 1)
                         )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AppAdaptiveButtonStyle())
+                .help("Close (Esc)")
+                .accessibilityLabel("Close Lightbox")
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, AppSpacing.xl)
+            .padding(.vertical, AppSpacing.lg)
 
             Divider().background(Color.appBorder)
 
             // Scrollable content
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: AppSpacing.lg) {
                     if let entry = vm.selectedPromptEntry {
                         // File Name card
                         if let item = currentItem {
@@ -279,12 +286,12 @@ struct LightboxView: View {
                         // Prompt card
                         if !entry.prompt.isEmpty {
                             cardSection(title: nil) {
-                                HStack(alignment: .top, spacing: 6) {
+                                HStack(alignment: .top, spacing: AppSpacing.sm) {
                                     Image(systemName: "text.quote")
-                                        .font(.system(size: 12))
+                                        .font(.appCallout)
                                         .foregroundStyle(Color.appAccent)
                                     Text("Prompt")
-                                        .font(.system(size: 13, weight: .semibold))
+                                        .font(.appHeadline)
                                         .foregroundStyle(Color.appPrimaryText)
                                     Spacer()
                                     copyButton(entry.prompt)
@@ -293,7 +300,7 @@ struct LightboxView: View {
                                     .font(.appBody)
                                     .foregroundStyle(Color.appPrimaryText.opacity(0.9))
                                     .textSelection(.enabled)
-                                    .padding(.top, 4)
+                                    .padding(.top, AppSpacing.xs)
                             }
                         }
 
@@ -307,7 +314,7 @@ struct LightboxView: View {
                         // Reference Images
                         if !entry.referenceImages.isEmpty {
                             cardSection(title: "Reference Images") {
-                                HStack(spacing: 8) {
+                                HStack(spacing: AppSpacing.md) {
                                     ForEach(Array(entry.referenceImages.enumerated()), id: \.offset) { index, img in
                                         referenceImageThumbnail(
                                             img,
@@ -327,22 +334,28 @@ struct LightboxView: View {
                                     LightboxAnalysisCard(
                                         label: seg.label,
                                         key: seg.key,
-                                        value: seg.value
+                                        value: seg.value,
+                                        onSaveSnippet: {
+                                            let text = seg.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                                            guard !text.isEmpty else { return }
+                                            SnippetService.shared.add(title: seg.label, text: text, category: seg.label)
+                                            vm.showToast("Saved \(seg.label) as a snippet", type: .success)
+                                        }
                                     )
                                 }
                             }
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+                .padding(.horizontal, AppSpacing.xl)
+                .padding(.vertical, AppSpacing.md)
             }
 
             Divider().background(Color.appBorder)
 
             // Bottom action buttons
             if let entry = vm.selectedPromptEntry {
-                VStack(spacing: 8) {
+                VStack(spacing: AppSpacing.md) {
                     if entry.videoURL != nil {
                         actionButton(icon: "arrow.down.circle", label: "Save Video") {
                             saveCurrentVideo(entry: entry)
@@ -362,8 +375,8 @@ struct LightboxView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.horizontal, AppSpacing.xl)
+                .padding(.vertical, AppSpacing.lg)
             }
         }
         .frame(width: detailsSidebarWidth)
@@ -380,19 +393,19 @@ struct LightboxView: View {
 
     @ViewBuilder
     private func cardSection(title: String?, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: AppSpacing.sm) {
             if let title {
                 Text(title)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.appIcon(11, weight: .medium))
                     .foregroundStyle(Color.appMuted)
             }
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: AppSpacing.sm) {
                 content()
             }
-            .padding(12)
+            .padding(AppSpacing.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.appSurface.opacity(0.6))
-            .cornerRadius(10)
+            .cornerRadius(AppRadius.lg)
         }
     }
 
@@ -400,7 +413,7 @@ struct LightboxView: View {
 
     @ViewBuilder
     private func genInfoGrid(_ info: GenerationInfo) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: AppSpacing.md) {
             genInfoCell(title: "Model", value: info.model)
             genInfoCell(title: "Aspect Ratio", value: info.aspectRatio.rawValue)
         }
@@ -411,24 +424,24 @@ struct LightboxView: View {
 
     @ViewBuilder
     private func genInfoCell(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: AppSpacing.xxs) {
             Text(title)
-                .font(.system(size: 10))
+                .font(.appFootnote)
                 .foregroundStyle(Color.appMuted)
             Text(value)
-                .font(.system(size: 13, weight: .medium))
+                .font(.appIcon(13, weight: .medium))
                 .foregroundStyle(Color.appPrimaryText)
                 .lineLimit(1)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.appSurface)
-        .cornerRadius(8)
+        .cornerRadius(AppRadius.md)
     }
 
     @ViewBuilder
     private func fileInfoRows(_ meta: FileMetadata) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: AppSpacing.xs) {
             fileInfoRow(label: "Type", value: meta.fileType)
             if let w = meta.width, let h = meta.height {
                 fileInfoRow(label: "Dimensions", value: "\(w) x \(h)")
@@ -447,13 +460,13 @@ struct LightboxView: View {
 
     @ViewBuilder
     private func fileInfoRow(label: String, value: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: AppSpacing.md) {
             Text(label)
-                .font(.system(size: 11))
+                .font(.appCaption)
                 .foregroundStyle(Color.appMuted)
                 .frame(width: 70, alignment: .leading)
             Text(value)
-                .font(.system(size: 11))
+                .font(.appCaption)
                 .foregroundStyle(Color.appPrimaryText)
                 .textSelection(.enabled)
         }
@@ -463,17 +476,17 @@ struct LightboxView: View {
     private func embeddedMetadataFields(_ fields: [PromptMetadataField]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(fields.enumerated()), id: \.offset) { index, field in
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: AppSpacing.xs) {
+                    HStack(alignment: .top, spacing: AppSpacing.md) {
                         Text(field.label)
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.appIcon(11, weight: .medium))
                             .foregroundStyle(Color.appMuted)
                         Spacer()
                         copyButton(field.value)
                     }
 
                     Text(field.value)
-                        .font(.system(size: 11))
+                        .font(.appCaption)
                         .foregroundStyle(Color.appPrimaryText)
                         .textSelection(.enabled)
                 }
@@ -492,7 +505,7 @@ struct LightboxView: View {
             .aspectRatio(contentMode: .fill)
             .frame(width: 60, height: 60)
             .clipped()
-            .cornerRadius(6)
+            .cornerRadius(AppRadius.sm)
             .contextMenu {
                 Button("Copy Reference Image") {
                     ClipboardService.copyImage(image)
@@ -508,15 +521,17 @@ struct LightboxView: View {
     // MARK: - Helpers
 
     @ViewBuilder
-    private func navArrow(systemName: String, action: @escaping () -> Void) -> some View {
+    private func navArrow(systemName: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 20, weight: .semibold))
+                .font(.appLargeTitle)
                 .foregroundStyle(Color.appPrimaryText)
                 .frame(width: 40, height: 40)
                 .background(Color.appOverlaySurface.opacity(0.75), in: Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AppAdaptiveButtonStyle())
+        .help(label)
+        .accessibilityLabel(label)
     }
 
     @ViewBuilder
@@ -526,38 +541,39 @@ struct LightboxView: View {
             vm.showToast("Copied", type: .success)
         } label: {
             Image(systemName: "doc.on.doc")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.appMuted)
+                .font(.appCaption)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AppIconButtonStyle(width: 22, height: 22, cornerRadius: AppRadius.sm, showsRestingChrome: false))
+        .help("Copy")
+        .accessibilityLabel("Copy")
     }
 
     @ViewBuilder
     private func actionButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: AppSpacing.md) {
                 Image(systemName: icon)
-                    .font(.system(size: 13))
+                    .font(.appBody)
                 Text(label)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.appIcon(13, weight: .medium))
             }
             .foregroundStyle(Color.appPrimaryText)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
             .background(Color.appElevatedSurface)
-            .cornerRadius(8)
+            .cornerRadius(AppRadius.md)
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: AppRadius.md)
                     .strokeBorder(Color.appControlBorder, lineWidth: 1)
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AppAdaptiveButtonStyle())
     }
 
     @ViewBuilder
     private func zoomToolbar(for image: NSImage, viewportSize: CGSize) -> some View {
         HStack(spacing: 10) {
-            zoomToolbarButton(systemName: "magnifyingglass.minus", isActive: false) {
+            zoomToolbarButton(systemName: "magnifyingglass.minus", label: "Zoom Out", isActive: false) {
                 adjustZoom(by: -zoomStep, for: image, viewportSize: viewportSize, animated: true)
             }
             .disabled(zoomScale <= minimumZoomScale + 0.001)
@@ -574,13 +590,15 @@ struct LightboxView: View {
             )
             .frame(width: 170)
             .tint(Color.appPrimaryText)
+            .accessibilityLabel("Zoom")
+            .accessibilityValue(zoomPercentLabel)
 
             Text(zoomPercentLabel)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.appCalloutEmphasis)
                 .foregroundStyle(Color.appPrimaryText)
                 .frame(minWidth: 42)
 
-            zoomToolbarButton(systemName: "magnifyingglass.plus", isActive: false) {
+            zoomToolbarButton(systemName: "magnifyingglass.plus", label: "Zoom In", isActive: false) {
                 adjustZoom(by: zoomStep, for: image, viewportSize: viewportSize, animated: true)
             }
             .disabled(zoomScale >= maximumControlZoomScale - 0.001)
@@ -589,7 +607,11 @@ struct LightboxView: View {
                 .fill(Color.appOverlayDivider)
                 .frame(width: 1, height: 18)
 
-            zoomToolbarButton(systemName: isHandToolEnabled ? "hand.draw.fill" : "hand.draw", isActive: isHandToolEnabled) {
+            zoomToolbarButton(
+                systemName: isHandToolEnabled ? "hand.draw.fill" : "hand.draw",
+                label: isHandToolEnabled ? "Disable Hand Tool" : "Enable Hand Tool",
+                isActive: isHandToolEnabled
+            ) {
                 isHandToolEnabled.toggle()
                 dragStartImageOffset = nil
             }
@@ -605,10 +627,10 @@ struct LightboxView: View {
     }
 
     @ViewBuilder
-    private func zoomToolbarButton(systemName: String, isActive: Bool, action: @escaping () -> Void) -> some View {
+    private func zoomToolbarButton(systemName: String, label: String, isActive: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.appHeadline)
                 .foregroundStyle(Color.appPrimaryText)
                 .frame(width: 28, height: 28)
                 .background(
@@ -616,7 +638,9 @@ struct LightboxView: View {
                         .fill(isActive ? Color.appOverlayActiveFill : Color.clear)
                 )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AppAdaptiveButtonStyle())
+        .help(label)
+        .accessibilityLabel(label)
     }
 
     private func formatTimestamp(_ ts: String) -> String {
@@ -746,7 +770,8 @@ struct LightboxView: View {
         }
         let items = vm.processedFolderContents
         guard !items.isEmpty else { return }
-        var idx = vm.lightboxIndex - 1
+        // Clamp: the contents may have shrunk while the lightbox was open.
+        var idx = min(vm.lightboxIndex, items.count) - 1
         while idx >= 0 {
             if FileHelpers.isPreviewable(items[idx]) {
                 vm.lightboxIndex = idx
@@ -764,7 +789,7 @@ struct LightboxView: View {
         }
         let items = vm.processedFolderContents
         guard !items.isEmpty else { return }
-        var idx = vm.lightboxIndex + 1
+        var idx = max(vm.lightboxIndex + 1, 0)
         while idx < items.count {
             if FileHelpers.isPreviewable(items[idx]) {
                 vm.lightboxIndex = idx
@@ -773,6 +798,27 @@ struct LightboxView: View {
             }
             idx += 1
         }
+    }
+
+    /// Keeps the lightbox pointing at a valid item after the folder contents change
+    /// underneath it (navigate back, undo, refresh). Closes it when nothing is left.
+    private func reconcileLightboxIndexWithContents() {
+        guard vm.lightboxOpen else { return }
+        let items = vm.processedFolderContents
+        guard !items.isEmpty else {
+            closeLightbox()
+            return
+        }
+        guard vm.lightboxIndex < 0 || vm.lightboxIndex >= items.count else { return }
+
+        let start = min(max(vm.lightboxIndex, 0), items.count - 1)
+        let candidates = Array((0...start).reversed()) + Array((start + 1)..<items.count)
+        guard let idx = candidates.first(where: { FileHelpers.isPreviewable(items[$0]) }) else {
+            closeLightbox()
+            return
+        }
+        vm.lightboxIndex = idx
+        vm.selectItem(at: idx)
     }
 
     private func dragGesture(for image: NSImage, viewportSize: CGSize) -> some Gesture {
@@ -945,14 +991,16 @@ struct LightboxView: View {
         panel.nameFieldStringValue = currentItem?.name ?? "image.png"
         panel.canCreateDirectories = true
 
-        if panel.runModal() == .OK, let url = panel.url {
-            if let tiffData = image.tiffRepresentation,
-               let bitmap = NSBitmapImageRep(data: tiffData),
-               let pngData = bitmap.representation(using: .png, properties: [:])
-            {
-                try? pngData.write(to: url)
-                vm.showToast("Image saved", type: .success)
-            }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let ext = url.pathExtension.lowercased()
+        let fileType: NSBitmapImageRep.FileType = (ext == "jpg" || ext == "jpeg") ? .jpeg : .png
+
+        do {
+            try writeImage(image, as: fileType, to: url)
+            vm.showToast("Image saved", type: .success)
+        } catch {
+            vm.showToast("Failed to save image: \(error.localizedDescription)", type: .error)
         }
     }
 
@@ -1000,9 +1048,23 @@ struct LightboxView: View {
         panel.nameFieldStringValue = item.name
         panel.canCreateDirectories = true
 
-        if panel.runModal() == .OK, let destURL = panel.url {
-            try? FileManager.default.copyItem(at: item.url, to: destURL)
+        guard panel.runModal() == .OK, let destURL = panel.url else { return }
+
+        // Saving over the source file itself is a no-op.
+        if destURL.standardizedFileURL.path == item.url.standardizedFileURL.path {
             vm.showToast(".plib saved", type: .success)
+            return
+        }
+
+        do {
+            // copyItem refuses to overwrite; the save panel already confirmed replacement.
+            if FileManager.default.fileExists(atPath: destURL.path) {
+                try FileManager.default.removeItem(at: destURL)
+            }
+            try FileManager.default.copyItem(at: item.url, to: destURL)
+            vm.showToast(".plib saved", type: .success)
+        } catch {
+            vm.showToast("Failed to save .plib: \(error.localizedDescription)", type: .error)
         }
     }
 
@@ -1014,14 +1076,20 @@ struct LightboxView: View {
     }
 
     private func writePNGImage(_ image: NSImage, to url: URL) throws {
+        try writeImage(image, as: .png, to: url)
+    }
+
+    private func writeImage(_ image: NSImage, as fileType: NSBitmapImageRep.FileType, to url: URL) throws {
+        let properties: [NSBitmapImageRep.PropertyKey: Any] =
+            fileType == .jpeg ? [.compressionFactor: 0.92] : [:]
         guard let tiffData = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiffData),
-              let pngData = bitmap.representation(using: .png, properties: [:])
+              let data = bitmap.representation(using: fileType, properties: properties)
         else {
             throw CocoaError(.fileWriteUnknown)
         }
 
-        try pngData.write(to: url)
+        try data.write(to: url, options: .atomic)
     }
 }
 
@@ -1031,21 +1099,16 @@ struct LightboxAnalysisCard: View {
     let label: String
     let key: String
     let value: String
+    var onSaveSnippet: (() -> Void)?
 
+    /// Decorative tint for the card fill and stroke.
     private var accentColor: Color {
-        switch key {
-        case "fullPrompt": return .segmentFullPrompt
-        case "shortDescription": return .segmentBrief
-        case "subject": return .segmentSubject
-        case "subjectPose": return .segmentAction
-        case "composition": return .segmentPlace
-        case "artStyle": return .segmentStyle
-        case "cameraSettings": return .segmentCamera
-        case "lighting": return .segmentLighting
-        case "colorPalette": return .segmentPalette
-        case "mood": return .segmentMood
-        default: return .appMuted
-        }
+        Color.segment(forAnalysisKey: key) ?? .appMuted
+    }
+
+    /// Text-safe variant for the heading label and glyph.
+    private var labelColor: Color {
+        Color.segmentText(forAnalysisKey: key) ?? .appMuted
     }
 
     private var iconName: String {
@@ -1065,41 +1128,51 @@ struct LightboxAnalysisCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: AppSpacing.sm) {
+            HStack(spacing: AppSpacing.sm) {
                 Image(systemName: iconName)
-                    .font(.system(size: 11))
-                    .foregroundStyle(accentColor)
+                    .font(.appCaption)
+                    .foregroundStyle(labelColor)
                 Text(label)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(accentColor)
+                    .font(.appHeadline)
+                    .foregroundStyle(labelColor)
                 Spacer()
+                if let onSaveSnippet {
+                    Button(action: onSaveSnippet) {
+                        Image(systemName: "text.badge.star")
+                            .font(.appCaption)
+                    }
+                    .buttonStyle(AppIconButtonStyle(width: 22, height: 22, cornerRadius: AppRadius.sm, showsRestingChrome: false))
+                    .help("Save Segment as Snippet")
+                    .accessibilityLabel("Save \(label) as Snippet")
+                }
                 Button {
                     ClipboardService.copyString(value)
                 } label: {
                     Image(systemName: "doc.on.doc")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.appMuted)
+                        .font(.appCaption)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AppIconButtonStyle(width: 22, height: 22, cornerRadius: AppRadius.sm, showsRestingChrome: false))
+                .help("Copy \(label)")
+                .accessibilityLabel("Copy \(label)")
             }
             Text(value)
                 .font(.appBody)
                 .foregroundStyle(Color.appPrimaryText.opacity(0.85))
                 .textSelection(.enabled)
         }
-        .padding(12)
+        .padding(AppSpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: AppRadius.lg)
                 .fill(Color.appSurface)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: AppRadius.lg)
                         .fill(accentColor.opacity(0.14))
                 }
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: AppRadius.lg)
                 .strokeBorder(accentColor.opacity(0.22), lineWidth: 1)
         )
     }

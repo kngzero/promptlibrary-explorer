@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import SwiftUI
 
 /// A styled audio player UI for the lightbox, showing waveform icon, playback controls,
@@ -14,27 +15,27 @@ struct AudioPlayerView: View {
     @State private var timeObserver: Any?
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: AppSpacing.xxl) {
             // Album art placeholder
             ZStack {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                RoundedRectangle(cornerRadius: AppRadius.xxl, style: .continuous)
                     .fill(Color.badgeAudio.opacity(0.15))
                     .frame(width: 180, height: 180)
 
                 Image(systemName: "waveform")
-                    .font(.system(size: 64, weight: .light))
-                    .foregroundStyle(Color.badgeAudio)
+                    .font(.appIcon(64, weight: .light))
+                    .foregroundStyle(Color.badgeAudioText)
             }
 
             // File name
             Text(fileName)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.appIcon(15, weight: .semibold))
                 .foregroundStyle(Color.appPrimaryText)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
 
             // Time + seek bar
-            VStack(spacing: 4) {
+            VStack(spacing: AppSpacing.xs) {
                 Slider(
                     value: Binding(
                         get: { duration > 0 ? currentTime / duration : 0 },
@@ -53,6 +54,8 @@ struct AudioPlayerView: View {
                     }
                 )
                 .tint(Color.badgeAudio)
+                .accessibilityLabel("Playback Position")
+                .accessibilityValue("\(formatTime(currentTime)) of \(formatTime(duration))")
 
                 HStack {
                     Text(formatTime(currentTime))
@@ -66,41 +69,47 @@ struct AudioPlayerView: View {
             }
 
             // Playback controls
-            HStack(spacing: 32) {
+            HStack(spacing: AppSpacing.xxxl) {
                 Button {
                     skipBackward()
                 } label: {
                     Image(systemName: "gobackward.10")
-                        .font(.system(size: 22))
+                        .font(.appIcon(22))
                         .foregroundStyle(Color.appPrimaryText)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AppAdaptiveButtonStyle())
+                .help("Skip Back 10 Seconds")
+                .accessibilityLabel("Skip Back 10 Seconds")
 
                 Button {
                     togglePlayback()
                 } label: {
                     Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 48))
-                        .foregroundStyle(Color.badgeAudio)
+                        .font(.appIcon(48))
+                        .foregroundStyle(Color.badgeAudioText)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AppAdaptiveButtonStyle())
+                .help(isPlaying ? "Pause" : "Play")
+                .accessibilityLabel(isPlaying ? "Pause" : "Play")
 
                 Button {
                     skipForward()
                 } label: {
                     Image(systemName: "goforward.10")
-                        .font(.system(size: 22))
+                        .font(.appIcon(22))
                         .foregroundStyle(Color.appPrimaryText)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AppAdaptiveButtonStyle())
+                .help("Skip Forward 10 Seconds")
+                .accessibilityLabel("Skip Forward 10 Seconds")
             }
         }
-        .padding(32)
+        .padding(AppSpacing.xxxl)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: AppRadius.xl, style: .continuous)
                 .fill(Color.appElevatedSurface)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    RoundedRectangle(cornerRadius: AppRadius.xl, style: .continuous)
                         .strokeBorder(Color.appControlBorder, lineWidth: 1)
                 )
         )
@@ -110,7 +119,10 @@ struct AudioPlayerView: View {
         .onDisappear {
             stopObserving()
         }
-        .onChange(of: player.currentItem) { _, _ in
+        // AVPlayer isn't observable by SwiftUI, so `onChange(of: player.currentItem)`
+        // never fires. KVO the current item instead.
+        .onReceive(player.publisher(for: \.currentItem)) { _ in
+            currentTime = 0
             updateDuration()
         }
     }
@@ -129,7 +141,11 @@ struct AudioPlayerView: View {
     }
 
     private func skipForward() {
-        let target = min(currentTime + 10, duration)
+        var target = currentTime + 10
+        // Only clamp once the duration is actually known; clamping to 0 would rewind.
+        if duration.isFinite, duration > 0 {
+            target = min(target, duration)
+        }
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
     }
 
@@ -142,6 +158,13 @@ struct AudioPlayerView: View {
                 currentTime = time.seconds.isNaN ? 0 : time.seconds
             }
             isPlaying = player.timeControlStatus == .playing
+            // Fallback in case the async duration load hasn't landed yet.
+            if duration <= 0,
+               let itemDuration = player.currentItem?.duration.seconds,
+               itemDuration.isFinite, itemDuration > 0
+            {
+                duration = itemDuration
+            }
         }
     }
 
@@ -158,12 +181,16 @@ struct AudioPlayerView: View {
             return
         }
 
+        duration = 0
         Task {
             if let dur = try? await item.asset.load(.duration) {
                 let seconds = dur.seconds
-                if !seconds.isNaN && seconds > 0 {
+                if seconds.isFinite && seconds > 0 {
                     await MainActor.run {
-                        duration = seconds
+                        // Ignore a late result for an item that has since been replaced.
+                        if player.currentItem === item {
+                            duration = seconds
+                        }
                     }
                 }
             }

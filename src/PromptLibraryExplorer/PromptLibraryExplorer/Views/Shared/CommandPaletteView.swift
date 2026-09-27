@@ -5,7 +5,37 @@ struct CommandPaletteView: View {
     @Environment(ExplorerViewModel.self) private var vm
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    @State private var fileHits: [LibrarySearchHit] = []
+    @State private var isSearchingFiles = false
+    @State private var highlightedIndex = 0
     @FocusState private var isFocused: Bool
+
+    private static let fileSearchDebounce: Duration = .milliseconds(150)
+
+    /// Every row in display order, grouped into titled sections. Keyboard
+    /// navigation walks the flattened list across sections.
+    private var sections: [(title: String, items: [CommandPaletteItem])] {
+        var byTitle: [(String, [CommandPaletteItem])] = []
+        var current: (String, [CommandPaletteItem])?
+        for item in results {
+            let title = item.sectionTitle
+            if current?.0 == title {
+                current?.1.append(item)
+            } else {
+                if let current { byTitle.append(current) }
+                current = (title, [item])
+            }
+        }
+        if let current { byTitle.append(current) }
+        if !fileHits.isEmpty {
+            byTitle.append(("Files", fileHits.map { CommandPaletteItem.file($0) }))
+        }
+        return byTitle.map { (title: $0.0, items: $0.1) }
+    }
+
+    private var flatItems: [CommandPaletteItem] {
+        sections.flatMap(\.items)
+    }
 
     private var results: [CommandPaletteItem] {
         let q = query.lowercased()
@@ -27,13 +57,22 @@ struct CommandPaletteView: View {
         }
 
         // Actions
-        let actions: [(String, String, () -> Void)] = [
+        var actions: [(String, String, () -> Void)] = []
+
+        if vm.canNavigateBack {
+            actions.append(("Back", "chevron.backward", { Task { await vm.navigateBack() } }))
+        }
+        if vm.canNavigateForward {
+            actions.append(("Forward", "chevron.forward", { Task { await vm.navigateForward() } }))
+        }
+
+        actions += [
             ("Open Folder...", "folder.badge.plus", { Task { await vm.openFolder() } }),
             ("Refresh", "arrow.clockwise", { Task { await vm.refreshFolder() } }),
             ("Toggle Status Bar", "rectangle.bottomthird.inset.filled", { vm.showStatusBar.toggle(); vm.persistStatusBarVisibility() }),
             ("Toggle Preview Pane", "sidebar.right", { vm.togglePreviewPane() }),
             ("New Smart Folder", "folder.badge.gearshape", { vm.editingSmartFolder = nil; vm.showSmartFolderEditor = true }),
-            ("Settings", "gearshape", { vm.settingsOpen = true }),
+            ("Settings", "gearshape", { vm.openSettings() }),
             ("Statistics", "chart.bar", { vm.statisticsOpen = true }),
         ]
 
@@ -64,49 +103,154 @@ struct CommandPaletteView: View {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(Color.appMuted)
-                TextField("Search folders, tags, actions...", text: $query)
+                TextField("Search folders, files, tags, actions…", text: $query)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 16))
+                    .font(.appIcon(16))
                     .foregroundStyle(Color.appPrimaryText)
                     .focused($isFocused)
+                    .onKeyPress(.escape) {
+                        closePalette()
+                        return .handled
+                    }
+                    .onSubmit(activateHighlighted)
+                    .accessibilityLabel("Command palette search")
+
+                if isSearchingFiles {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Searching files")
+                }
 
                 Text("esc")
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.appMuted)
                     .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
+                    .padding(.vertical, AppSpacing.xxs)
                     .background(Color.appSurface)
-                    .cornerRadius(4)
+                    .cornerRadius(AppRadius.xs)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, AppSpacing.xl)
             .padding(.vertical, 14)
             .background(Color.appSurface.opacity(0.8))
 
             Divider().background(Color.appBorder)
 
             // Results
-            ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(Array(results.enumerated()), id: \.offset) { _, item in
-                        CommandPaletteRow(item: item) {
-                            handleSelection(item)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: AppSpacing.xxs) {
+                        let flat = flatItems
+                        ForEach(Array(sections.enumerated()), id: \.offset) { sectionIndex, section in
+                            Text(section.title.uppercased())
+                                .font(.appMicro)
+                                .tracking(0.6)
+                                .foregroundStyle(Color.appMuted)
+                                .padding(.horizontal, 10)
+                                .padding(.top, sectionIndex == 0 ? AppSpacing.xxs : AppSpacing.md)
+                                .padding(.bottom, AppSpacing.xxs)
+                                .accessibilityAddTraits(.isHeader)
+
+                            let offset = sections[..<sectionIndex].reduce(0) { $0 + $1.items.count }
+                            ForEach(Array(section.items.enumerated()), id: \.offset) { itemIndex, item in
+                                let index = offset + itemIndex
+                                CommandPaletteRow(item: item, isHighlighted: index == highlightedIndex) {
+                                    handleSelection(item)
+                                }
+                                .id(index)
+                                .onHover { hovering in
+                                    if hovering { highlightedIndex = index }
+                                }
+                            }
+                        }
+                        if flat.isEmpty {
+                            Text(isSearchingFiles ? "Searching…" : "No matches")
+                                .font(.appCallout)
+                                .foregroundStyle(Color.appMuted)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.vertical, AppSpacing.xl)
                         }
                     }
+                    .padding(AppSpacing.md)
                 }
-                .padding(8)
+                .frame(maxHeight: 420)
+                .onChange(of: highlightedIndex) { _, index in
+                    proxy.scrollTo(index)
+                }
             }
-            .frame(maxHeight: 340)
         }
-        .frame(width: 480)
+        .frame(width: 560)
         .background(Color.appBackground.opacity(0.98))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.xl))
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: AppRadius.xl)
                 .strokeBorder(Color.appAccent.opacity(0.3), lineWidth: 1)
         )
         .shadow(color: Color.appShadowColor.opacity(0.8), radius: 24, y: 8)
+        .background {
+            // A real cancel-action button so Esc closes the palette even when the
+            // search field (not a SwiftUI view) is first responder.
+            Button("Close Command Palette", action: closePalette)
+                .keyboardShortcut(.cancelAction)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+        .background {
+            // Arrow keys move the highlight across every section. Real buttons
+            // take the key equivalent before the search field's editor does.
+            Group {
+                Button("Previous Result") { moveHighlight(by: -1) }
+                    .keyboardShortcut(.upArrow, modifiers: [])
+                Button("Next Result") { moveHighlight(by: 1) }
+                    .keyboardShortcut(.downArrow, modifiers: [])
+            }
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+        }
+        .onChange(of: query) { _, _ in highlightedIndex = 0 }
+        .task(id: query) { await searchFiles(for: query) }
         .onAppear { isFocused = true }
-        .onExitCommand { vm.commandPaletteOpen = false }
+        .onExitCommand(perform: closePalette)
+    }
+
+    private func moveHighlight(by delta: Int) {
+        let count = flatItems.count
+        guard count > 0 else { return }
+        highlightedIndex = min(max(highlightedIndex + delta, 0), count - 1)
+    }
+
+    private func activateHighlighted() {
+        let items = flatItems
+        guard items.indices.contains(highlightedIndex) else { return }
+        handleSelection(items[highlightedIndex])
+    }
+
+    /// Debounced; `.task(id:)` cancels the previous query's task, and a
+    /// cancelled task never writes its (stale) hits.
+    private func searchFiles(for text: String) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            fileHits = []
+            isSearchingFiles = false
+            return
+        }
+        isSearchingFiles = true
+        do {
+            try await Task.sleep(for: Self.fileSearchDebounce)
+        } catch {
+            return
+        }
+        let hits = await vm.paletteFileMatches(trimmed, limit: 20)
+        guard !Task.isCancelled else { return }
+        fileHits = hits
+        isSearchingFiles = false
+        let count = flatItems.count
+        if highlightedIndex >= count { highlightedIndex = max(0, count - 1) }
+    }
+
+    private func closePalette() {
+        vm.commandPaletteOpen = false
     }
 
     private func handleSelection(_ item: CommandPaletteItem) {
@@ -121,6 +265,8 @@ struct CommandPaletteView: View {
             vm.filterByTagID = vm.filterByTagID == tag.id ? nil : tag.id
         case .action(_, _, let action):
             action()
+        case .file(let hit):
+            vm.revealLibraryHit(hit)
         }
     }
 }
@@ -130,9 +276,21 @@ enum CommandPaletteItem {
     case smartFolder(SmartFolder)
     case tag(FileTag)
     case action(name: String, icon: String, action: () -> Void)
+    case file(LibrarySearchHit)
+
+    var sectionTitle: String {
+        switch self {
+        case .folder: return "Folders"
+        case .smartFolder: return "Smart Folders"
+        case .tag: return "Tags"
+        case .action: return "Actions"
+        case .file: return "Files"
+        }
+    }
 
     var displayName: String {
         switch self {
+        case .file(let hit): return hit.fileName
         case .folder(let f): return f.name
         case .smartFolder(let sf): return sf.name
         case .tag(let t): return t.name
@@ -143,31 +301,61 @@ enum CommandPaletteItem {
 
 private struct CommandPaletteRow: View {
     let item: CommandPaletteItem
+    let isHighlighted: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
                 icon
-                    .frame(width: 20)
 
-                Text(item.displayName)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.appPrimaryText)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.displayName)
+                        .font(.appBody)
+                        .foregroundStyle(Color.appPrimaryText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
 
-                Spacer()
+                    if case .file(let hit) = item {
+                        Text((hit.folderPath as NSString).abbreviatingWithTildeInPath)
+                            .font(.appFootnote)
+                            .foregroundStyle(Color.appMuted)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                        if !hit.snippet.isEmpty {
+                            Text(PaletteSnippet.attributed(hit.snippet))
+                                .font(.appCaption)
+                                .foregroundStyle(Color.appMuted)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+
+                Spacer(minLength: AppSpacing.md)
 
                 categoryLabel
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(Color.clear)
+            .background(
+                RoundedRectangle(cornerRadius: AppRadius.md)
+                    .fill(isHighlighted ? Color.appSelected : Color.clear)
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            // SwiftUI handles hover state
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityText)
+        .accessibilityAddTraits(isHighlighted ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private var accessibilityText: String {
+        switch item {
+        case .file(let hit):
+            let snippet = hit.snippet.replacingOccurrences(of: "«", with: "").replacingOccurrences(of: "»", with: "")
+            return "File \(hit.fileName), in \((hit.folderPath as NSString).lastPathComponent). \(snippet)"
+        default:
+            return "\(item.sectionTitle.dropLast()) \(item.displayName)"
         }
     }
 
@@ -176,20 +364,26 @@ private struct CommandPaletteRow: View {
         switch item {
         case .folder:
             Image(systemName: "folder.fill")
-                .font(.system(size: 13))
+                .font(.appBody)
                 .foregroundStyle(Color.appAccent)
+                .frame(width: 20)
         case .smartFolder:
             Image(systemName: "folder.badge.gearshape")
-                .font(.system(size: 13))
+                .font(.appBody)
                 .foregroundStyle(Color.appAccent)
+                .frame(width: 20)
         case .tag(let tag):
             Circle()
                 .fill(tag.color)
                 .frame(width: 12, height: 12)
+                .frame(width: 20)
         case .action(_, let iconName, _):
             Image(systemName: iconName)
-                .font(.system(size: 13))
+                .font(.appBody)
                 .foregroundStyle(Color.appMuted)
+                .frame(width: 20)
+        case .file(let hit):
+            PaletteThumbnail(path: hit.path)
         }
     }
 
@@ -201,15 +395,81 @@ private struct CommandPaletteRow: View {
             case .smartFolder: return "Smart Folder"
             case .tag: return "Tag"
             case .action: return "Action"
+            case .file: return "File"
             }
         }()
 
         Text(label)
-            .font(.system(size: 10, weight: .medium))
+            .font(.appIcon(10, weight: .medium))
             .foregroundStyle(Color.appMuted)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
+            .padding(.horizontal, AppSpacing.sm)
+            .padding(.vertical, AppSpacing.xxs)
             .background(Color.appSurface)
-            .cornerRadius(4)
+            .cornerRadius(AppRadius.xs)
+    }
+}
+
+/// Small async thumbnail for a file hit.
+private struct PaletteThumbnail: View {
+    let path: String
+    private let size: CGFloat = 36
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: AppRadius.sm)
+                .fill(Color.appSurface)
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Image(systemName: "doc.text.image")
+                    .font(.appIcon(14))
+                    .foregroundStyle(Color.appMuted)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppRadius.sm)
+                .strokeBorder(Color.appBorder, lineWidth: 1)
+        )
+        .accessibilityHidden(true)
+        .task(id: path) {
+            let url = URL(fileURLWithPath: path)
+            if let cached = ThumbnailService.shared.cachedThumbnail(for: url, size: size * 2) {
+                image = cached
+                return
+            }
+            let loaded = await ThumbnailService.shared.thumbnail(for: url, size: size * 2)
+            guard !Task.isCancelled else { return }
+            image = loaded
+        }
+    }
+}
+
+/// Turns a «»-marked snippet into styled text with the matches highlighted.
+enum PaletteSnippet {
+    static func attributed(_ snippet: String) -> AttributedString {
+        var result = AttributedString()
+        var remaining = Substring(snippet)
+        while let open = remaining.firstIndex(of: "«") {
+            result += AttributedString(String(remaining[..<open]))
+            let afterOpen = remaining.index(after: open)
+            guard let close = remaining[afterOpen...].firstIndex(of: "»") else {
+                remaining = remaining[afterOpen...]
+                break
+            }
+            var match = AttributedString(String(remaining[afterOpen..<close]))
+            match.foregroundColor = .appPrimaryText
+            match.backgroundColor = Color.appAccent.opacity(0.22)
+            match.inlinePresentationIntent = .stronglyEmphasized
+            result += match
+            remaining = remaining[remaining.index(after: close)...]
+        }
+        result += AttributedString(String(remaining))
+        return result
     }
 }

@@ -9,6 +9,17 @@ actor ImageMetadataParser {
         let model: String?
         let timestamp: String?
         let fields: [PromptMetadataField]
+        /// Raw ComfyUI API-graph JSON (`prompt` chunk), when present.
+        var comfyPromptJSON: String? = nil
+        /// Raw ComfyUI UI workflow JSON (`workflow` chunk), when present.
+        var comfyWorkflowJSON: String? = nil
+
+        /// Structured generation parameters (model, sampler, seed, steps, cfg, size).
+        var generationParameters: GenerationParameters {
+            var params = GenerationParameters(fields: fields)
+            if let model, !model.isEmpty { params.model = model }
+            return params
+        }
 
         static let empty = Metadata(
             prompt: "",
@@ -43,6 +54,17 @@ actor ImageMetadataParser {
 
     func clearCache() {
         cache.removeAll()
+    }
+
+    /// Number of parsed files currently held in memory.
+    var cachedCount: Int {
+        cache.count
+    }
+
+    /// Parses a file's embedded metadata without touching the actor's cache. Safe to call from
+    /// any thread; used by whole-library indexing.
+    static func readMetadataUncached(at url: URL) -> Metadata {
+        readMetadata(at: url)
     }
 
     private static func readMetadata(at url: URL) -> Metadata {
@@ -81,6 +103,8 @@ actor ImageMetadataParser {
         var timestamp: String?
         var displayFields: [PromptMetadataField] = []
         var consumedParameterBlock = false
+        var comfyPromptJSON: String?
+        var comfyWorkflowJSON: String?
 
         for field in dedupedFields {
             let canonical = canonicalKey(field.label)
@@ -103,6 +127,13 @@ actor ImageMetadataParser {
                 }
                 displayFields.append(contentsOf: parameterBlock.parameterFields)
                 continue
+            }
+
+            if canonical == "prompt", looksLikeJSON(field.value), comfyPromptJSON == nil {
+                comfyPromptJSON = field.value
+            }
+            if canonical == "workflow", looksLikeJSON(field.value), comfyWorkflowJSON == nil {
+                comfyWorkflowJSON = field.value
             }
 
             if prompt.isEmpty,
@@ -135,13 +166,34 @@ actor ImageMetadataParser {
             displayFields.append(field)
         }
 
-        return Metadata(
+        if !consumedParameterBlock, comfyPromptJSON != nil || comfyWorkflowJSON != nil {
+            let extraction = comfyPromptJSON.flatMap(ComfyUIGraphParser.extract(apiGraphJSON:))
+                ?? comfyWorkflowJSON.flatMap(ComfyUIGraphParser.extract(workflowJSON:))
+            if let extraction {
+                if prompt.isEmpty { prompt = extraction.prompt }
+                if negativePrompt == nil, let negative = extraction.negativePrompt, !negative.isEmpty {
+                    negativePrompt = negative
+                }
+                if model == nil { model = extraction.model }
+                var comfyFields: [PromptMetadataField] = []
+                if let negativePrompt, !negativePrompt.isEmpty {
+                    comfyFields.append(PromptMetadataField(label: "Negative Prompt", value: negativePrompt))
+                }
+                comfyFields.append(contentsOf: extraction.fields)
+                displayFields.insert(contentsOf: comfyFields, at: 0)
+            }
+        }
+
+        var metadata = Metadata(
             prompt: prompt,
             negativePrompt: negativePrompt,
             model: model,
             timestamp: timestamp,
             fields: deduplicatedFields(displayFields)
         )
+        metadata.comfyPromptJSON = comfyPromptJSON
+        metadata.comfyWorkflowJSON = comfyWorkflowJSON
+        return metadata
     }
 
     private static func appendImageIOFields(from properties: [CFString: Any], into fields: inout [PromptMetadataField]) {
@@ -639,33 +691,481 @@ actor ImageMetadataParser {
         }
     }
 
+    /// PNG zTXt/iTXt payloads are full zlib streams (2-byte header + DEFLATE + Adler-32),
+    /// which `MetadataZlib` decodes without capping the output size.
     private static func inflateZlib(_ data: Data) -> Data? {
-        guard !data.isEmpty else { return nil }
+        MetadataZlib.inflate(data)
+    }
+}
 
-        let outputCapacity = max(data.count * 32, 4096)
-        var output = Data(count: outputCapacity)
+// MARK: - ComfyUI
 
-        let decodedSize = output.withUnsafeMutableBytes { destinationBuffer in
-            data.withUnsafeBytes { sourceBuffer in
-                guard let destinationBase = destinationBuffer.bindMemory(to: UInt8.self).baseAddress,
-                      let sourceBase = sourceBuffer.bindMemory(to: UInt8.self).baseAddress
-                else {
-                    return 0
+/// Extracts prompts and sampler settings from ComfyUI's embedded graphs:
+/// the API graph (`prompt` chunk: `{ nodeId: { class_type, inputs } }`, links are `["id", slot]`)
+/// and, as a fallback, the UI workflow (`workflow` chunk: `{ nodes: [...], links: [...] }`).
+enum ComfyUIGraphParser {
+    struct Extraction {
+        var prompt: String
+        var negativePrompt: String?
+        var model: String?
+        var fields: [PromptMetadataField]
+    }
+
+    private typealias Node = [String: Any]
+
+    private static let samplerClasses: Set<String> = [
+        "KSampler", "KSamplerAdvanced", "SamplerCustom", "SamplerCustomAdvanced",
+        "KSampler (Efficient)", "KSampler Adv. (Efficient)", "KSamplerSDXLAdvanced",
+    ]
+    /// Inputs that never carry conditioning; not followed when walking a conditioning chain.
+    private static let nonConditioningInputs: Set<String> = [
+        "clip", "model", "vae", "image", "images", "pixels", "latent", "latent_image", "samples", "mask",
+        "control_net", "style_model", "clip_vision", "clip_vision_output", "upscale_model", "noise", "sigmas",
+        "sampler", "guider",
+    ]
+    private static let textKeys = ["text", "text_g", "text_l", "prompt", "positive", "string", "value", "text_positive", "Text", "STRING"]
+
+    // MARK: API graph
+
+    static func extract(apiGraphJSON json: String) -> Extraction? {
+        guard let data = json.data(using: .utf8),
+              var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return nil }
+        if let wrapped = root["prompt"] as? [String: Any], wrapped.values.contains(where: { ($0 as? Node)?["class_type"] != nil }) {
+            root = wrapped
+        }
+        var graph: [String: Node] = [:]
+        for (id, value) in root {
+            if let node = value as? Node, node["class_type"] != nil { graph[id] = node }
+        }
+        guard !graph.isEmpty else { return nil }
+        return GraphWalker(graph: graph).extraction()
+    }
+
+    private struct GraphWalker {
+        let graph: [String: Node]
+        let orderedIDs: [String]
+
+        init(graph: [String: Node]) {
+            self.graph = graph
+            orderedIDs = graph.keys.sorted { a, b in
+                switch (Int(a), Int(b)) {
+                case let (x?, y?): return x < y
+                case (_?, nil): return true
+                case (nil, _?): return false
+                default: return a < b
                 }
-
-                return compression_decode_buffer(
-                    destinationBase,
-                    destinationBuffer.count,
-                    sourceBase,
-                    sourceBuffer.count,
-                    nil,
-                    COMPRESSION_ZLIB
-                )
             }
         }
 
-        guard decodedSize > 0 else { return nil }
-        output.removeSubrange(decodedSize..<output.count)
-        return output
+        func classType(_ id: String) -> String { graph[id]?["class_type"] as? String ?? "" }
+        func inputs(_ id: String) -> [String: Any] { graph[id]?["inputs"] as? [String: Any] ?? [:] }
+
+        static func link(_ value: Any?) -> (id: String, slot: Int)? {
+            guard let array = value as? [Any], array.count == 2 else { return nil }
+            let id: String
+            if let s = array[0] as? String { id = s } else if let n = array[0] as? NSNumber { id = n.stringValue } else { return nil }
+            guard let slot = (array[1] as? NSNumber)?.intValue else { return nil }
+            return (id, slot)
+        }
+
+        static func scalarString(_ value: Any?) -> String? {
+            switch value {
+            case let s as String:
+                let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                return t.isEmpty ? nil : t
+            case let n as NSNumber:
+                if CFGetTypeID(n) == CFBooleanGetTypeID() { return nil }
+                let d = n.doubleValue
+                if d.rounded() == d, abs(d) < 1e18 { return String(Int64(d)) }
+                return String(format: "%g", d)
+            default:
+                return nil
+            }
+        }
+
+        // MARK: Text
+
+        func resolveText(_ value: Any?, depth: Int = 0) -> String? {
+            guard depth < 24 else { return nil }
+            if let s = value as? String {
+                let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                return t.isEmpty ? nil : t
+            }
+            guard let link = Self.link(value), graph[link.id] != nil else { return nil }
+            return textOfNode(link.id, depth: depth + 1)
+        }
+
+        func textOfNode(_ id: String, depth: Int) -> String? {
+            let inputs = inputs(id)
+            var parts: [String] = []
+            for key in textKeys {
+                if let text = resolveText(inputs[key], depth: depth), !parts.contains(text) { parts.append(text) }
+            }
+            if parts.isEmpty {
+                // Generic string nodes (concatenate, text multiline, etc.).
+                for key in inputs.keys.sorted() where key.lowercased().contains("text") || key.lowercased().contains("string") {
+                    if let text = resolveText(inputs[key], depth: depth), !parts.contains(text) { parts.append(text) }
+                }
+            }
+            if parts.isEmpty {
+                // Primitive-style nodes that expose their value in widgets.
+                if let text = Self.scalarString(graph[id]?["value"]) { parts.append(text) }
+            }
+            return parts.isEmpty ? nil : parts.joined(separator: "\n")
+        }
+
+        // MARK: Conditioning
+
+        func resolveConditioning(_ value: Any?, depth: Int = 0, visited: Set<String> = []) -> [String] {
+            guard depth < 32, let link = Self.link(value), graph[link.id] != nil, !visited.contains(link.id) else { return [] }
+            var visited = visited
+            visited.insert(link.id)
+            let cls = classType(link.id)
+            let inputs = inputs(link.id)
+
+            if cls.hasPrefix("CLIPTextEncode") || cls.contains("TextEncode") {
+                if let text = textOfNode(link.id, depth: depth) { return [text] }
+            }
+            // Nodes that pass both positive and negative through (ControlNetApplyAdvanced, InstructPix2Pix, ...).
+            if inputs["positive"] != nil, inputs["negative"] != nil, Self.link(inputs["positive"]) != nil {
+                let key = link.slot == 1 ? "negative" : "positive"
+                return resolveConditioning(inputs[key], depth: depth + 1, visited: visited)
+            }
+            var texts: [String] = []
+            for key in inputs.keys.sorted() where !nonConditioningInputs.contains(key) {
+                guard Self.link(inputs[key]) != nil else { continue }
+                for text in resolveConditioning(inputs[key], depth: depth + 1, visited: visited) where !texts.contains(text) {
+                    texts.append(text)
+                }
+            }
+            if texts.isEmpty, let text = textOfNode(link.id, depth: depth), cls.lowercased().contains("prompt") || cls.lowercased().contains("text") {
+                texts.append(text)
+            }
+            return texts
+        }
+
+        /// Walks a conditioning chain and returns the first value found for any of `keys` (e.g. FluxGuidance).
+        func findInConditioningChain(_ value: Any?, keys: [String], classContains: String, depth: Int = 0) -> String? {
+            guard depth < 32, let link = Self.link(value), graph[link.id] != nil else { return nil }
+            let inputs = inputs(link.id)
+            if classType(link.id).contains(classContains) {
+                for key in keys { if let v = Self.scalarString(inputs[key]) { return v } }
+            }
+            for key in inputs.keys.sorted() where !nonConditioningInputs.contains(key) {
+                if let v = findInConditioningChain(inputs[key], keys: keys, classContains: classContains, depth: depth + 1) { return v }
+            }
+            return nil
+        }
+
+        // MARK: Scalars
+
+        /// Value of the first matching key on `id`, following links into upstream nodes
+        /// (primitives, RandomNoise, KSamplerSelect, BasicScheduler, CFGGuider...).
+        func scalar(_ keys: [String], on id: String, via linkKeys: [String] = [], depth: Int = 0) -> String? {
+            guard depth < 8 else { return nil }
+            let inputs = inputs(id)
+            for key in keys {
+                guard let value = inputs[key] else { continue }
+                if let s = Self.scalarString(value) { return s }
+                if let link = Self.link(value), graph[link.id] != nil {
+                    if let s = scalar(keys + ["value", "seed", "int", "float", "number", "Value", "string"], on: link.id, depth: depth + 1) {
+                        return s
+                    }
+                }
+            }
+            for linkKey in linkKeys {
+                if let link = Self.link(inputs[linkKey]), graph[link.id] != nil,
+                   let s = scalar(keys, on: link.id, via: [], depth: depth + 1)
+                {
+                    return s
+                }
+            }
+            return nil
+        }
+
+        // MARK: Model / LoRA / size
+
+        func walkModelChain(from value: Any?) -> (model: String?, loras: [String]) {
+            var loras: [String] = []
+            var current = Self.link(value)
+            var visited = Set<String>()
+            while let link = current, graph[link.id] != nil, visited.insert(link.id).inserted, visited.count < 64 {
+                let inputs = inputs(link.id)
+                if let lora = loraDescription(link.id) { loras.append(lora) }
+                for key in ["ckpt_name", "unet_name", "model_name", "base_ckpt_name"] {
+                    if let name = Self.scalarString(inputs[key]) { return (name, loras) }
+                }
+                current = Self.link(inputs["model"]) ?? Self.link(inputs["base_model"])
+            }
+            return (nil, loras)
+        }
+
+        func loraDescription(_ id: String) -> String? {
+            let inputs = inputs(id)
+            guard let name = Self.scalarString(inputs["lora_name"]) else { return nil }
+            let strength = Self.scalarString(inputs["strength_model"]) ?? Self.scalarString(inputs["strength"])
+            let clip = Self.scalarString(inputs["strength_clip"])
+            var description = name
+            if let strength {
+                description += clip.map { $0 == strength ? " (\(strength))" : " (\(strength)/\($0))" } ?? " (\(strength))"
+            }
+            return description
+        }
+
+        func size(from latentValue: Any?) -> (String, String)? {
+            var current = Self.link(latentValue)
+            var visited = Set<String>()
+            while let link = current, graph[link.id] != nil, visited.insert(link.id).inserted, visited.count < 32 {
+                if let w = scalar(["width"], on: link.id), let h = scalar(["height"], on: link.id) { return (w, h) }
+                let inputs = inputs(link.id)
+                current = Self.link(inputs["samples"]) ?? Self.link(inputs["latent"]) ?? Self.link(inputs["latent_image"])
+            }
+            return nil
+        }
+
+        // MARK: Extraction
+
+        func samplerCandidates() -> [String] {
+            let known = orderedIDs.filter { samplerClasses.contains(classType($0)) }
+            let generic = orderedIDs.filter { id in
+                guard !known.contains(id) else { return false }
+                let inputs = inputs(id)
+                let cls = classType(id)
+                let hasCond = inputs["positive"] != nil || inputs["guider"] != nil
+                let samplerLike = inputs["seed"] != nil || inputs["noise_seed"] != nil || inputs["steps"] != nil
+                    || inputs["guider"] != nil || cls.lowercased().contains("sampler")
+                return hasCond && samplerLike
+            }
+            let guiders = orderedIDs.filter { id in
+                !known.contains(id) && !generic.contains(id) && classType(id).contains("Guider") && inputs(id)["model"] != nil
+            }
+            return known + generic + guiders
+        }
+
+        func extraction() -> Extraction? {
+            var chosen: (id: String, positive: String, negative: String?, guider: String?)?
+            for id in samplerCandidates() {
+                let inputs = inputs(id)
+                var positiveSource = inputs["positive"]
+                var negativeSource = inputs["negative"]
+                var guiderID: String?
+                if positiveSource == nil, let guider = Self.link(inputs["guider"]), graph[guider.id] != nil {
+                    guiderID = guider.id
+                    let g = self.inputs(guider.id)
+                    positiveSource = g["positive"] ?? g["conditioning"]
+                    negativeSource = g["negative"]
+                } else if classType(id).contains("Guider") {
+                    guiderID = id
+                    positiveSource = inputs["positive"] ?? inputs["conditioning"]
+                }
+                let positive = resolveConditioning(positiveSource).joined(separator: "\n")
+                guard !positive.isEmpty else { continue }
+                let negative = resolveConditioning(negativeSource).joined(separator: "\n")
+                chosen = (id, positive, negative.isEmpty ? nil : negative, guiderID)
+                break
+            }
+
+            if chosen == nil {
+                // No resolvable sampler: fall back to text encoders in node order.
+                let encoders = orderedIDs.filter { classType($0).hasPrefix("CLIPTextEncode") }
+                    .compactMap { textOfNode($0, depth: 0) }
+                guard let first = encoders.first else { return nil }
+                return Extraction(
+                    prompt: first,
+                    negativePrompt: encoders.dropFirst().first,
+                    model: fallbackModel(),
+                    fields: [PromptMetadataField(label: "Generator", value: "ComfyUI")]
+                )
+            }
+            guard let chosen else { return nil }
+
+            let samplerID = chosen.id
+            let samplerInputs = inputs(samplerID)
+            var fields: [PromptMetadataField] = []
+
+            let seed = scalar(["seed", "noise_seed"], on: samplerID, via: ["noise"])
+            let steps = scalar(["steps"], on: samplerID, via: ["sigmas"])
+            var cfg = scalar(["cfg"], on: samplerID, via: ["guider"])
+            let samplerName = scalar(["sampler_name"], on: samplerID, via: ["sampler"])
+            let scheduler = scalar(["scheduler"], on: samplerID, via: ["sigmas"])
+            let denoise = scalar(["denoise"], on: samplerID, via: ["sigmas"])
+            let guidance = findInConditioningChain(
+                chosen.guider.map { inputs($0)["conditioning"] ?? inputs($0)["positive"] as Any } ?? samplerInputs["positive"],
+                keys: ["guidance"],
+                classContains: "Guidance"
+            )
+            if cfg == nil, let guider = chosen.guider { cfg = Self.scalarString(inputs(guider)["cfg"]) }
+
+            let modelSource = samplerInputs["model"] ?? chosen.guider.flatMap { inputs($0)["model"] }
+            var (model, loras) = walkModelChain(from: modelSource)
+            if model == nil { model = fallbackModel() }
+            if loras.isEmpty {
+                loras = orderedIDs.filter { classType($0).hasPrefix("LoraLoader") || classType($0).contains("Lora") }
+                    .compactMap { loraDescription($0) }
+            }
+            let size = size(from: samplerInputs["latent_image"]) ?? fallbackSize()
+
+            if let steps { fields.append(.init(label: "Steps", value: steps)) }
+            if let samplerName { fields.append(.init(label: "Sampler", value: samplerName)) }
+            if let scheduler { fields.append(.init(label: "Scheduler", value: scheduler)) }
+            if let cfg { fields.append(.init(label: "CFG scale", value: cfg)) }
+            if let guidance { fields.append(.init(label: "Guidance", value: guidance)) }
+            if let seed { fields.append(.init(label: "Seed", value: seed)) }
+            if let size { fields.append(.init(label: "Size", value: "\(size.0)x\(size.1)")) }
+            if let model { fields.append(.init(label: "Model", value: model)) }
+            if let denoise, denoise != "1" { fields.append(.init(label: "Denoising strength", value: denoise)) }
+            if !loras.isEmpty { fields.append(.init(label: "LoRAs", value: loras.joined(separator: ", "))) }
+            fields.append(.init(label: "Generator", value: "ComfyUI"))
+
+            return Extraction(prompt: chosen.positive, negativePrompt: chosen.negative, model: model, fields: fields)
+        }
+
+        func fallbackModel() -> String? {
+            for id in orderedIDs {
+                let inputs = inputs(id)
+                for key in ["ckpt_name", "unet_name"] {
+                    if let name = Self.scalarString(inputs[key]) { return name }
+                }
+            }
+            return nil
+        }
+
+        func fallbackSize() -> (String, String)? {
+            for id in orderedIDs where classType(id).contains("EmptyLatent") || classType(id).contains("EmptySD3Latent") {
+                if let w = scalar(["width"], on: id), let h = scalar(["height"], on: id) { return (w, h) }
+            }
+            return nil
+        }
+    }
+
+    // MARK: UI workflow (best effort)
+
+    static func extract(workflowJSON json: String) -> Extraction? {
+        guard let data = json.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let nodeList = root["nodes"] as? [[String: Any]]
+        else { return nil }
+
+        var nodes: [Int: [String: Any]] = [:]
+        for node in nodeList {
+            if let id = (node["id"] as? NSNumber)?.intValue { nodes[id] = node }
+        }
+        // link id -> origin node id
+        var linkOrigin: [Int: (node: Int, slot: Int)] = [:]
+        for case let link as [Any] in (root["links"] as? [Any] ?? []) where link.count >= 3 {
+            if let linkID = (link[0] as? NSNumber)?.intValue,
+               let from = (link[1] as? NSNumber)?.intValue,
+               let slot = (link[2] as? NSNumber)?.intValue
+            {
+                linkOrigin[linkID] = (from, slot)
+            }
+        }
+        for case let link as [String: Any] in (root["links"] as? [Any] ?? []) {
+            if let linkID = (link["id"] as? NSNumber)?.intValue,
+               let from = (link["origin_id"] as? NSNumber)?.intValue
+            {
+                linkOrigin[linkID] = (from, (link["origin_slot"] as? NSNumber)?.intValue ?? 0)
+            }
+        }
+
+        func type(_ id: Int) -> String { nodes[id]?["type"] as? String ?? "" }
+        func widgets(_ id: Int) -> [Any] { nodes[id]?["widgets_values"] as? [Any] ?? [] }
+        func inputLink(_ id: Int, named name: String) -> (node: Int, slot: Int)? {
+            guard let inputs = nodes[id]?["inputs"] as? [[String: Any]],
+                  let input = inputs.first(where: { ($0["name"] as? String) == name }),
+                  let linkID = (input["link"] as? NSNumber)?.intValue
+            else { return nil }
+            return linkOrigin[linkID]
+        }
+        func widgetString(_ id: Int, _ index: Int) -> String? {
+            let values = widgets(id)
+            guard index < values.count else { return nil }
+            return GraphWalker.scalarString(values[index])
+        }
+        func text(of id: Int, depth: Int = 0) -> String? {
+            guard depth < 24, nodes[id] != nil else { return nil }
+            let cls = type(id)
+            if cls.hasPrefix("CLIPTextEncode") || cls.contains("TextEncode") {
+                if let upstream = inputLink(id, named: "text"), let t = text(of: upstream.node, depth: depth + 1) { return t }
+                let strings = widgets(id).compactMap { $0 as? String }
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                var unique: [String] = []
+                for s in strings where !unique.contains(s) { unique.append(s) }
+                // CLIPTextEncodeSDXL widgets mix numbers and text_g/text_l; keep the text ones.
+                return unique.isEmpty ? nil : unique.joined(separator: "\n")
+            }
+            if cls.contains("Primitive") || cls.lowercased().contains("string") || cls.lowercased().contains("text") {
+                if let s = widgets(id).compactMap({ $0 as? String }).first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+                    return s.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+            // Pass-through conditioning node: follow its conditioning-typed inputs.
+            if let inputs = nodes[id]?["inputs"] as? [[String: Any]] {
+                for input in inputs where (input["type"] as? String) == "CONDITIONING" {
+                    if let linkID = (input["link"] as? NSNumber)?.intValue,
+                       let origin = linkOrigin[linkID],
+                       let t = text(of: origin.node, depth: depth + 1)
+                    {
+                        return t
+                    }
+                }
+            }
+            return nil
+        }
+
+        let orderedIDs = nodes.keys.sorted()
+        var fields: [PromptMetadataField] = []
+        var positive: String?
+        var negative: String?
+
+        let samplerID = orderedIDs.first { samplerClasses.contains(type($0)) }
+        if let samplerID {
+            if let origin = inputLink(samplerID, named: "positive") { positive = text(of: origin.node) }
+            if let origin = inputLink(samplerID, named: "negative") { negative = text(of: origin.node) }
+
+            // KSampler: [seed, control_after_generate, steps, cfg, sampler_name, scheduler, denoise]
+            // KSamplerAdvanced: [add_noise, noise_seed, control, steps, cfg, sampler_name, scheduler, start, end, return_noise]
+            let offset = type(samplerID) == "KSamplerAdvanced" ? 1 : 0
+            let values = widgets(samplerID)
+            if values.count >= 6 + offset {
+                if let seed = widgetString(samplerID, 0 + offset) { fields.append(.init(label: "Seed", value: seed)) }
+                // Older workflows omit control_after_generate; detect by type of index 1+offset.
+                let hasControl = values.count > 1 + offset && values[1 + offset] is String
+                let base = hasControl ? 2 + offset : 1 + offset
+                if let steps = widgetString(samplerID, base) { fields.append(.init(label: "Steps", value: steps)) }
+                if let cfg = widgetString(samplerID, base + 1) { fields.append(.init(label: "CFG scale", value: cfg)) }
+                if let sampler = widgetString(samplerID, base + 2) { fields.append(.init(label: "Sampler", value: sampler)) }
+                if let scheduler = widgetString(samplerID, base + 3) { fields.append(.init(label: "Scheduler", value: scheduler)) }
+                if offset == 0, let denoise = widgetString(samplerID, base + 4), denoise != "1" {
+                    fields.append(.init(label: "Denoising strength", value: denoise))
+                }
+            }
+        }
+
+        let encoders = orderedIDs.filter { type($0).hasPrefix("CLIPTextEncode") }
+        if positive == nil { positive = encoders.first.flatMap { text(of: $0) } }
+        if negative == nil, samplerID == nil { negative = encoders.dropFirst().first.flatMap { text(of: $0) } }
+        guard let positive, !positive.isEmpty else { return nil }
+
+        if let latent = orderedIDs.first(where: { type($0).contains("EmptyLatent") || type($0).contains("EmptySD3Latent") }),
+           let w = widgetString(latent, 0), let h = widgetString(latent, 1)
+        {
+            fields.append(.init(label: "Size", value: "\(w)x\(h)"))
+        }
+        let model = orderedIDs
+            .first { ["CheckpointLoaderSimple", "CheckpointLoader", "UNETLoader", "CheckpointLoader|pysssss"].contains(type($0)) || type($0).hasPrefix("CheckpointLoader") }
+            .flatMap { id in widgets(id).compactMap { $0 as? String }.first }
+        if let model { fields.append(.init(label: "Model", value: model)) }
+        let loras = orderedIDs.filter { type($0).hasPrefix("LoraLoader") }.compactMap { id -> String? in
+            guard let name = widgetString(id, 0) else { return nil }
+            if let strength = widgetString(id, 1) { return "\(name) (\(strength))" }
+            return name
+        }
+        if !loras.isEmpty { fields.append(.init(label: "LoRAs", value: loras.joined(separator: ", "))) }
+        fields.append(.init(label: "Generator", value: "ComfyUI"))
+
+        return Extraction(prompt: positive, negativePrompt: negative, model: model, fields: fields)
     }
 }

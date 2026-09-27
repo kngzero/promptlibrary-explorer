@@ -2,6 +2,8 @@ import AppKit
 import SwiftUI
 
 enum AppAppearanceMode: String, CaseIterable, Identifiable {
+    /// Follow the macOS system appearance.
+    case system
     case dark
     case light
 
@@ -9,15 +11,54 @@ enum AppAppearanceMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .system: return "System"
         case .dark: return "Dark"
         case .light: return "Light"
         }
     }
 
-    var colorScheme: ColorScheme {
+    /// The scheme to hand `.preferredColorScheme(_:)`. `nil` for `.system`, so
+    /// the window follows the OS appearance (every palette colour is a dynamic
+    /// `NSColor` keyed on the effective appearance, so it resolves itself).
+    var preferredColorScheme: ColorScheme? {
         switch self {
+        case .system: return nil
         case .dark: return .dark
         case .light: return .light
+        }
+    }
+
+    /// Kept for existing call sites (`.preferredColorScheme(mode.colorScheme)`).
+    /// Optional so `.system` stays `nil` and does not pin the window to a scheme.
+    var colorScheme: ColorScheme? { preferredColorScheme }
+
+    /// The scheme currently in effect, resolving `.system` against the app's
+    /// effective appearance.
+    @MainActor
+    var resolvedColorScheme: ColorScheme {
+        if let preferredColorScheme { return preferredColorScheme }
+        let match = NSApp?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+        return match == .darkAqua ? .dark : .light
+    }
+
+    /// AppKit appearance for this mode (`nil` = inherit from the system).
+    var nsAppearance: NSAppearance? {
+        switch self {
+        case .system: return nil
+        case .dark: return NSAppearance(named: .darkAqua)
+        case .light: return NSAppearance(named: .aqua)
+        }
+    }
+
+    /// Applies the mode at the AppKit level too. SwiftUI's
+    /// `.preferredColorScheme(nil)` does not always release a window that was
+    /// previously forced dark or light, so switching back to System clears the
+    /// explicit appearances here.
+    @MainActor
+    func applyToApp() {
+        NSApp?.appearance = nsAppearance
+        for window in NSApp?.windows ?? [] {
+            window.appearance = nsAppearance
         }
     }
 }
@@ -73,13 +114,13 @@ extension Color {
     static let appSurface = ThemePalette.color(dark: (0x10, 0x10, 0x10), light: (0xEF, 0xEF, 0xEF))
 
     /// Elevated button/background surface for controls on dark panels
-    static let appElevatedSurface = ThemePalette.color(dark: (0x26, 0x26, 0x30), light: (0xD9, 0xD9, 0xCF))
+    static let appElevatedSurface = ThemePalette.color(dark: (0x26, 0x26, 0x30), light: (0xD9, 0xD9, 0xDE))
 
-    /// Primary accent: fuchsia (#d946ef)
-    static let appAccent = ThemePalette.color(dark: (0xD9, 0x46, 0xEF), light: (0xD9, 0x46, 0xEF))
+    /// Primary accent: fuchsia on dark (#d946ef), deeper magenta on light (#a726bd)
+    static let appAccent = ThemePalette.color(dark: (0xD9, 0x46, 0xEF), light: (0xA7, 0x26, 0xBD))
 
-    /// Accent hover: light fuchsia (#f0abfc)
-    static let appAccentHover = ThemePalette.color(dark: (0xF0, 0xAB, 0xFC), light: (0xF0, 0xAB, 0xFC))
+    /// Accent hover: light fuchsia on dark (#f0abfc), darker magenta on light (#8e1f9f)
+    static let appAccentHover = ThemePalette.color(dark: (0xF0, 0xAB, 0xFC), light: (0x8E, 0x1F, 0x9F))
 
     /// Scrollbar thumb (#3f3f46)
     static let appThumb = ThemePalette.color(dark: (0x3F, 0x3F, 0x46), light: (0xC0, 0xC0, 0xB9))
@@ -119,6 +160,13 @@ extension Color {
 
     /// Sidebar backgrounds used by detail-heavy panels
     static let appSidebarBackground = ThemePalette.color(dark: (0x1E, 0x1E, 0x21), light: (0xE1, 0xE1, 0xDE))
+
+    /// Sidebar top-level section headers (Favorites, Recent, …). ~15:1 on the light sidebar.
+    static let appSidebarHeaderText = ThemePalette.color(dark: (0xA1, 0xA1, 0xAA), light: (0x1A, 0x1A, 0x1A))
+    /// Sidebar row labels when not selected. ~13:1 on the light sidebar.
+    static let appSidebarText = ThemePalette.color(dark: (0xA1, 0xA1, 0xAA), light: (0x26, 0x26, 0x24))
+    /// Sidebar counts, paths, hints and chevrons. ~7.5:1 on the light sidebar.
+    static let appSidebarSecondaryText = ThemePalette.color(dark: (0xA1, 0xA1, 0xAA), light: (0x4A, 0x4A, 0x44))
 
     /// Canvas background behind fullscreen/lightbox imagery
     static let appCanvasBackground = ThemePalette.color(dark: (0x00, 0x00, 0x00), light: (0xF7, 0xF7, 0xF7))
@@ -188,13 +236,131 @@ extension Color {
     static let segmentMood = Color(red: 0.65, green: 0.80, blue: 0.55)
 }
 
+// MARK: - Text-safe Colour Variants
+//
+// The decorative badge / segment / favourite colours above are tuned for fills
+// and dots. Used as text or thin glyphs they wash out on light surfaces, so
+// these variants keep the hue but meet ~4.5:1 on appCanvasBackground,
+// appSurface, appBackground and appSidebarBackground in both modes.
+
+extension Color {
+    static let favoriteGoldText = ThemePalette.color(dark: (0xFA, 0xCC, 0x15), light: (0x7A, 0x5A, 0x00))
+
+    static let segmentFullPromptText = ThemePalette.color(dark: (0x8F, 0xA3, 0xCC), light: (0x3D, 0x5A, 0x8C))
+    static let segmentBriefText = ThemePalette.color(dark: (0x99, 0xCC, 0x99), light: (0x2F, 0x6B, 0x2F))
+    static let segmentSubjectText = ThemePalette.color(dark: (0xD9, 0xA6, 0x73), light: (0x85, 0x50, 0x1F))
+    static let segmentActionText = ThemePalette.color(dark: (0xD9, 0x80, 0x80), light: (0xA3, 0x3A, 0x3A))
+    static let segmentPlaceText = ThemePalette.color(dark: (0x8C, 0xBF, 0xBF), light: (0x2B, 0x63, 0x63))
+    static let segmentStyleText = ThemePalette.color(dark: (0xBF, 0x8C, 0xCC), light: (0x7A, 0x3D, 0x8A))
+    static let segmentLightingText = ThemePalette.color(dark: (0xE6, 0xD9, 0x73), light: (0x6E, 0x5F, 0x00))
+    static let segmentCameraText = ThemePalette.color(dark: (0x80, 0xA6, 0xD9), light: (0x2F, 0x5A, 0x99))
+    static let segmentPaletteText = ThemePalette.color(dark: (0xCC, 0x8C, 0xA6), light: (0x8C, 0x3D, 0x5A))
+    static let segmentMoodText = ThemePalette.color(dark: (0xA6, 0xCC, 0x8C), light: (0x42, 0x6B, 0x2C))
+
+    static let badgePlibText = ThemePalette.color(dark: (0xE8, 0x60, 0xE8), light: (0xA0, 0x00, 0xA0))
+    static let badgeAoeText = ThemePalette.color(dark: (0xA3, 0x88, 0xF9), light: (0x6A, 0x3C, 0xD6))
+    static let badgePngText = ThemePalette.color(dark: (0x06, 0xB6, 0xD4), light: (0x0B, 0x6A, 0x7B))
+    static let badgeJpgText = ThemePalette.color(dark: (0xF9, 0x73, 0x16), light: (0xA8, 0x46, 0x00))
+    static let badgeWebpText = ThemePalette.color(dark: (0x22, 0xC5, 0x5E), light: (0x18, 0x73, 0x3A))
+    static let badgeGifText = ThemePalette.color(dark: (0xF0, 0x6A, 0xAA), light: (0xB0, 0x21, 0x5F))
+    static let badgeVideoText = ThemePalette.color(dark: (0xF0, 0x60, 0x60), light: (0xBD, 0x25, 0x25))
+    static let badgeAudioText = ThemePalette.color(dark: (0xB7, 0x7A, 0xF7), light: (0x7B, 0x32, 0xC2))
+    static let badgeImageText = ThemePalette.color(dark: (0x5B, 0x9A, 0xF8), light: (0x23, 0x56, 0xC2))
+    static let badgeFileText = ThemePalette.color(dark: (0x9C, 0xA3, 0xAF), light: (0x52, 0x58, 0x62))
+
+    /// Text drawn on a solid `appAccent` fill (small badges). Near-black on the
+    /// bright dark-mode fuchsia, white on the deeper light-mode magenta.
+    static let appOnAccent = ThemePalette.color(dark: (0x1A, 0x06, 0x20), light: (0xFF, 0xFF, 0xFF))
+
+    /// Label colour for a filled button in its disabled state (on appElevatedSurface).
+    static let appDisabledText = ThemePalette.color(dark: (0xA1, 0xA1, 0xAA), light: (0x5E, 0x5E, 0x55))
+}
+
+// MARK: - Analysis Segment Lookup
+
+extension Color {
+    /// Decorative segment colour for a prompt-analysis key (fills, strokes).
+    static func segment(forAnalysisKey key: String) -> Color? {
+        switch key {
+        case "fullPrompt": return .segmentFullPrompt
+        case "shortDescription": return .segmentBrief
+        case "subject": return .segmentSubject
+        case "subjectPose": return .segmentAction
+        case "composition": return .segmentPlace
+        case "artStyle": return .segmentStyle
+        case "cameraSettings": return .segmentCamera
+        case "lighting": return .segmentLighting
+        case "colorPalette": return .segmentPalette
+        case "mood": return .segmentMood
+        default: return nil
+        }
+    }
+
+    /// Text-safe segment colour for a prompt-analysis key (labels, glyphs).
+    static func segmentText(forAnalysisKey key: String) -> Color? {
+        switch key {
+        case "fullPrompt": return .segmentFullPromptText
+        case "shortDescription": return .segmentBriefText
+        case "subject": return .segmentSubjectText
+        case "subjectPose": return .segmentActionText
+        case "composition": return .segmentPlaceText
+        case "artStyle": return .segmentStyleText
+        case "cameraSettings": return .segmentCameraText
+        case "lighting": return .segmentLightingText
+        case "colorPalette": return .segmentPaletteText
+        case "mood": return .segmentMoodText
+        default: return nil
+        }
+    }
+}
+
 // MARK: - Font Helpers
 
 extension Font {
+    static let appLargeTitle = Font.system(size: 20, weight: .semibold)
     static let appTitle = Font.system(size: 14, weight: .semibold)
+    static let appHeadline = Font.system(size: 13, weight: .semibold)
     static let appBody = Font.system(size: 13)
+    static let appCallout = Font.system(size: 12)
+    static let appCalloutEmphasis = Font.system(size: 12, weight: .semibold)
     static let appCaption = Font.system(size: 11, weight: .regular)
+    static let appCaptionEmphasis = Font.system(size: 11, weight: .semibold)
+    static let appFootnote = Font.system(size: 10)
+    static let appMicro = Font.system(size: 9, weight: .semibold)
     static let appMono = Font.system(size: 12, design: .monospaced)
+
+    // Sidebar
+    static let appSidebarHeader = Font.system(size: 14, weight: .bold)
+    static let appSidebarItem = Font.system(size: 13)
+    static let appSidebarItemEmphasis = Font.system(size: 13, weight: .semibold)
+    static let appSidebarDetail = Font.system(size: 11)
+
+    /// Point-size sizing for SF Symbols and other glyphs.
+    static func appIcon(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        Font.system(size: size, weight: weight)
+    }
+}
+
+// MARK: - Radius & Spacing
+
+enum AppRadius {
+    static let xs: CGFloat = 4
+    static let sm: CGFloat = 6
+    static let md: CGFloat = 8
+    static let lg: CGFloat = 12
+    static let xl: CGFloat = 16
+    static let xxl: CGFloat = 20
+}
+
+enum AppSpacing {
+    static let xxs: CGFloat = 2
+    static let xs: CGFloat = 4
+    static let sm: CGFloat = 6
+    static let md: CGFloat = 8
+    static let lg: CGFloat = 12
+    static let xl: CGFloat = 16
+    static let xxl: CGFloat = 24
+    static let xxxl: CGFloat = 32
 }
 
 enum LayoutMetrics {
