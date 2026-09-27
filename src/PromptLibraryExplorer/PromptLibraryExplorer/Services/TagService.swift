@@ -30,14 +30,18 @@ struct FileTag: Codable, Identifiable, Hashable {
 final class TagService {
     static let shared = TagService()
 
-    private static let tagsKey = "promptlibrary.tags"
-    private static let assignmentsKey = "promptlibrary.tagAssignments"
+    static let tagsKey = "promptlibrary.tags"
+    static let assignmentsKey = "promptlibrary.tagAssignments"
 
     private let lock = NSLock()
+    private let defaults: UserDefaults
     private var tagsCache: [FileTag]?
     private var assignmentsCache: [String: [UUID]]?
 
-    private init() {}
+    /// `defaults` is injectable for tests; the app uses `shared`.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     // MARK: - Tag Definitions
 
@@ -167,7 +171,7 @@ final class TagService {
     private func cachedTags() -> [FileTag] {
         if let tagsCache { return tagsCache }
         let decoded: [FileTag]
-        if let data = UserDefaults.standard.data(forKey: Self.tagsKey),
+        if let data = defaults.data(forKey: Self.tagsKey),
            let value = try? JSONDecoder().decode([FileTag].self, from: data)
         {
             decoded = value
@@ -181,7 +185,7 @@ final class TagService {
     private func cachedAssignments() -> [String: [UUID]] {
         if let assignmentsCache { return assignmentsCache }
         let decoded: [String: [UUID]]
-        if let data = UserDefaults.standard.data(forKey: Self.assignmentsKey),
+        if let data = defaults.data(forKey: Self.assignmentsKey),
            let value = try? JSONDecoder().decode([String: [UUID]].self, from: data)
         {
             decoded = value
@@ -195,15 +199,17 @@ final class TagService {
     private func storeTags(_ tags: [FileTag]) {
         tagsCache = tags
         if let data = try? JSONEncoder().encode(tags) {
-            UserDefaults.standard.set(data, forKey: Self.tagsKey)
+            defaults.set(data, forKey: Self.tagsKey)
         }
+        CurationStoreEvents.post(.tags)
     }
 
     private func storeAssignments(_ assignments: [String: [UUID]]) {
         assignmentsCache = assignments
         if let data = try? JSONEncoder().encode(assignments) {
-            UserDefaults.standard.set(data, forKey: Self.assignmentsKey)
+            defaults.set(data, forKey: Self.assignmentsKey)
         }
+        CurationStoreEvents.post(.tagAssignments)
     }
 }
 

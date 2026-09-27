@@ -157,6 +157,8 @@ extension ExplorerViewModel {
             }
         }
         updateListedLabelNumbers(listed)
+        // XMP sidecars carry the label too.
+        CurationController.shared.labelsDidChange(paths: previous.map(\.url.path))
         return (previous, failed, firstError)
     }
 

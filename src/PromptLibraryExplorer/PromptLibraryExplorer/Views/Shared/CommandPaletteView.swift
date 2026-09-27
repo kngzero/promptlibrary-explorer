@@ -79,6 +79,15 @@ struct CommandPaletteView: View {
                 : ("Similar Images", "square.on.square", { vm.showSimilarImagesPage() }),
         ]
 
+        // Export suite (selection, else the listing).
+        if vm.canExport {
+            actions += [
+                ("Export…", "square.and.arrow.up", { vm.openExportSheet() }),
+                ("Export for Sharing (Strip AI Metadata)…", "lock.shield", { vm.openExportForSharing() }),
+                ("Export Contact Sheet…", "rectangle.grid.3x2", { vm.openContactSheet() }),
+            ]
+        }
+
         for (name, icon, action) in actions where q.isEmpty || name.lowercased().contains(q) {
             items.append(.action(name: name, icon: icon, action: action))
         }

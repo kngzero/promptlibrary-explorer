@@ -5,6 +5,8 @@
 .build/
 *.app
 *.zip
+# Zipped build copies written by src/PromptLibraryExplorer/scripts/package_app.sh
+dist/
 .swiftpm/
 
 # Logs

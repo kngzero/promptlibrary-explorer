@@ -3,12 +3,17 @@ import Foundation
 final class SmartFolderService {
     static let shared = SmartFolderService()
 
-    private static let storageKey = "promptlibrary.smartFolders"
+    static let storageKey = "promptlibrary.smartFolders"
 
-    private init() {}
+    private let defaults: UserDefaults
+
+    /// `defaults` is injectable for tests; the app uses `shared`.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     func loadSmartFolders() -> [SmartFolder] {
-        guard let data = UserDefaults.standard.data(forKey: Self.storageKey),
+        guard let data = defaults.data(forKey: Self.storageKey),
               let folders = try? JSONDecoder().decode([SmartFolder].self, from: data)
         else { return [] }
         return folders
@@ -16,7 +21,8 @@ final class SmartFolderService {
 
     func saveSmartFolders(_ folders: [SmartFolder]) {
         if let data = try? JSONEncoder().encode(folders) {
-            UserDefaults.standard.set(data, forKey: Self.storageKey)
+            defaults.set(data, forKey: Self.storageKey)
+            CurationStoreEvents.post(.smartFolders)
         }
     }
 

@@ -633,6 +633,18 @@ private struct CollectionSidebarRow: View {
             .disabled(collection.paths.isEmpty || vm.artOfficialSendProgress != nil)
         Button("Send to Story…") { vm.sendCollection(collection.id, to: .story) }
             .disabled(collection.paths.isEmpty || vm.artOfficialSendProgress != nil)
+        Menu("Export") {
+            ForEach(ExportPresetStore.shared.presets) { preset in
+                Button(preset.name) { vm.exportCollection(collection.id, presetID: preset.id) }
+            }
+            Divider()
+            Button("Export…") { vm.exportCollection(collection.id) }
+            Button("Export for Sharing (Strip AI Metadata)…") {
+                vm.exportCollection(collection.id, presetID: ExportPresetStore.shared.sharingPreset.id)
+            }
+            Button("Export Contact Sheet…") { vm.contactSheetForCollection(collection.id) }
+        }
+        .disabled(collection.paths.isEmpty || ExportController.shared.isRunning)
         Divider()
         Button("Rename") { onBeginRename() }
         CollectionMoveMenu(currentParentID: collection.parentID, excluding: []) { target in

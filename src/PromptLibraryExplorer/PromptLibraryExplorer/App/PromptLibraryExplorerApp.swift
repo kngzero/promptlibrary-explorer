@@ -73,6 +73,7 @@ struct PromptLibraryExplorerApp: App {
     var body: some Scene {
         WindowGroup {
             MainContentView()
+                .exportSheetsHost()
                 .environment(explorerVM)
                 .frame(minWidth: 900, minHeight: 600)
                 .preferredColorScheme(explorerVM.appearanceMode.preferredColorScheme)
@@ -216,6 +217,35 @@ struct PromptLibraryExplorerApp: App {
                     runInMainWindow { explorerVM.sendToArtOfficial(.story) }
                 }
                 .disabled(isBlocked || browserHidden || !explorerVM.canSendToArtOfficial)
+
+                // Export suite: selection, else the whole listing. No shortcuts.
+                Group {
+                    Divider()
+
+                    Button("Export…") {
+                        runInMainWindow { explorerVM.openExportSheet() }
+                    }
+                    .disabled(isBlocked || browserHidden || !explorerVM.canExport)
+
+                    Menu("Export With Preset") {
+                        ForEach(ExportPresetStore.shared.presets) { preset in
+                            Button(preset.name) {
+                                runInMainWindow { explorerVM.openExportSheet(presetID: preset.id) }
+                            }
+                        }
+                    }
+                    .disabled(isBlocked || browserHidden || !explorerVM.canExport)
+
+                    Button("Export for Sharing (Strip AI Metadata)…") {
+                        runInMainWindow { explorerVM.openExportForSharing() }
+                    }
+                    .disabled(isBlocked || browserHidden || !explorerVM.canExport)
+
+                    Button("Export Contact Sheet…") {
+                        runInMainWindow { explorerVM.openContactSheet() }
+                    }
+                    .disabled(isBlocked || browserHidden || !explorerVM.canExport)
+                }
             }
 
             // MARK: Edit
@@ -535,6 +565,12 @@ struct PromptLibraryExplorerApp: App {
                     run { explorerVM.reindexLibrary() }
                 }
                 .disabled(isBlocked || explorerVM.explorerRootPath == nil || explorerVM.isLibraryIndexing)
+
+                // Curation data beside the files (Settings ▸ Data has the rest).
+                Button("Write XMP Sidecars Now") {
+                    runInMainWindow { explorerVM.writeXMPSidecarsNow() }
+                }
+                .disabled(isBlocked || explorerVM.explorerRootPath == nil)
             }
 
             // MARK: Cull, Help
@@ -625,7 +661,7 @@ struct PromptLibraryExplorerApp: App {
     // MARK: - Command helpers
 
     /// Observable "a sheet/modal is up" state used to disable menu items.
-    private var isBlocked: Bool { explorerVM.isAnyModalOpen }
+    private var isBlocked: Bool { explorerVM.isAnyModalOpen || ExportController.shared.isPresenting }
 
     private var hasSelection: Bool { !explorerVM.selectedIndices.isEmpty }
 

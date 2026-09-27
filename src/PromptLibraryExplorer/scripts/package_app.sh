@@ -1,36 +1,73 @@
 #!/usr/bin/env bash
-# Build PromptLibraryExplorer (release) and assemble "PromptLibrary Explorer.app"
-# in the package root from scratch, so a clean checkout reproduces the bundle.
+# Build PromptLibraryExplorer (release), assemble "PromptLibrary Explorer.app" from
+# scratch, INSTALL it to /Applications and keep a zipped build copy in dist/.
 #
 # Usage:
-#   scripts/package_app.sh            # build + assemble + sign + register
-#   scripts/package_app.sh --launch   # ...then kill running instances and open the new build
+#   scripts/package_app.sh               # build + assemble + sign + zip + install + register
+#   scripts/package_app.sh --launch      # ...then kill running instances and open the installed app
+#   scripts/package_app.sh --no-install  # build + assemble + sign + zip only (alias: --zip-only)
+#
+# Where things go:
+#   Installed app : /Applications/PromptLibrary Explorer.app
+#                   (~/Applications/... if /Applications isn't writable; the script says so)
+#   Build copies  : <package root>/dist/PromptLibrary Explorer-<version>-<git sha>.zip
+#                   <package root>/dist/PromptLibrary Explorer-latest.zip
+#                   (the last 5 versioned zips are kept; dist/ is git-ignored)
+#
+# Why a zip and not an unzipped .app in the package root (Dropbox): LaunchServices and
+# pluginkit register every .app they see on disk. An unzipped copy in Dropbox became a
+# second registered "PromptLibrary Explorer" whose Quick Look extensions clashed with the
+# installed one (pluginkit elects one copy per extension id, often the stale one). A zip
+# is inert. The old in-repo .app is unregistered and deleted after a successful install.
 #
 # Notes:
 #   - The Command Line Tools toolchain can't evaluate SwiftPM manifests on this
 #     machine; the Xcode toolchain works, so DEVELOPER_DIR defaults to Xcode.
 #   - The bundle's Info.plist is sourced from Resources/Info.plist (tracked in git).
-#     The .app itself is git-ignored (*.app) and is fully regenerated here.
+#   - The bundle is assembled in $TMPDIR (outside Dropbox), then copied into a hidden
+#     temp sibling in the install dir and swapped in with rename(2).
+#   - Only these are ever deleted: files in dist/, the old in-repo .app, the target app
+#     in the install dir (replaced), and this script's own temp dirs.
 set -euo pipefail
 
 LAUNCH=0
+INSTALL=1
 for arg in "$@"; do
     case "$arg" in
         --launch) LAUNCH=1 ;;
-        -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+        --no-install|--zip-only) INSTALL=0 ;;
+        -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
         *) echo "Unknown argument: $arg" >&2; exit 2 ;;
     esac
 done
+if (( LAUNCH && !INSTALL )); then
+    echo "--launch needs an installed app; drop --no-install/--zip-only" >&2
+    exit 2
+fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="PromptLibrary Explorer.app"
-APP="$ROOT/$APP_NAME"
+ZIP_BASE="PromptLibrary Explorer"
+LEGACY_APP="$ROOT/$APP_NAME"          # old unzipped copy in the package root (Dropbox)
+DIST="$ROOT/dist"
+KEEP_ZIPS=5
 EXEC_NAME="PromptLibraryExplorer"
 RES="$ROOT/Resources"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 cd "$ROOT"
+
+# Temp dirs, all removed on exit.
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/package_app.XXXXXX")"
+INSTALL_TMP=""
+cleanup() {
+    rm -rf "$STAGE"
+    if [[ -n "$INSTALL_TMP" && -d "$INSTALL_TMP" ]]; then
+        rm -rf "$INSTALL_TMP"
+    fi
+}
+trap cleanup EXIT
 
 echo "==> Building ($EXEC_NAME, release) with DEVELOPER_DIR=$DEVELOPER_DIR"
 swift build -c release --product "$EXEC_NAME"
@@ -44,14 +81,18 @@ done
 BUILD_DIR="$(swift build -c release --show-bin-path)"
 
 plutil -lint "$RES/Info.plist" >/dev/null
+APP_ID="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$RES/Info.plist")"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$RES/Info.plist")"
+GIT_SHA="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo nogit)"
+EXT_IDS=()
+for ext in "${QL_EXTENSIONS[@]}"; do
+    EXT_IDS+=("$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$ROOT/Extensions/$ext/Info.plist")")
+done
 
-# Assemble in a temp dir next to the target (same volume, so the final mv is a rename).
-STAGE="$(mktemp -d "$ROOT/.package_app.XXXXXX")"
-trap 'rm -rf "$STAGE"' EXIT
 STAGED_APP="$STAGE/$APP_NAME"
 mkdir -p "$STAGED_APP/Contents/MacOS" "$STAGED_APP/Contents/Resources"
 
-echo "==> Assembling bundle"
+echo "==> Assembling bundle ($APP_ID $VERSION, $GIT_SHA)"
 cp "$RES/Info.plist" "$STAGED_APP/Contents/Info.plist"
 cp "$BUILD_DIR/$EXEC_NAME" "$STAGED_APP/Contents/MacOS/$EXEC_NAME"
 # Existing convention: a second copy named after the display name. Keep both.
@@ -108,30 +149,142 @@ if [[ -d "$STAGED_APP/Contents/PlugIns" ]]; then
 fi
 codesign --force --sign - "$STAGED_APP/Contents/MacOS/PromptLibrary Explorer"
 codesign --force --sign - "$STAGED_APP"
+codesign --verify --deep --strict "$STAGED_APP"
+echo "==> Signature OK (staged)"
 
-# Swap the new bundle into place.
-if [[ -e "$APP" ]]; then
-    mv "$APP" "$STAGE/old.app"
+# ---------------------------------------------------------------------------
+# Zipped build copy in dist/ (inside the package root, i.e. Dropbox).
+# ---------------------------------------------------------------------------
+mkdir -p "$DIST"
+ZIP="$DIST/$ZIP_BASE-$VERSION-$GIT_SHA.zip"
+LATEST_ZIP="$DIST/$ZIP_BASE-latest.zip"
+echo "==> Zipping build copy -> $ZIP"
+# --norsrc/--noextattr: no ._AppleDouble files inside the bundle (they break codesign
+# when the zip is expanded with plain unzip); signatures are embedded, not xattrs.
+ditto -c -k --keepParent --norsrc --noextattr --noacl "$STAGED_APP" "$STAGE/build.zip"
+cp "$STAGE/build.zip" "$DIST/.$ZIP_BASE-$GIT_SHA.zip.tmp"
+mv -f "$DIST/.$ZIP_BASE-$GIT_SHA.zip.tmp" "$ZIP"
+cp "$STAGE/build.zip" "$DIST/.$ZIP_BASE-latest.zip.tmp"
+mv -f "$DIST/.$ZIP_BASE-latest.zip.tmp" "$LATEST_ZIP"
+echo "    latest: $LATEST_ZIP"
+# Keep the newest $KEEP_ZIPS versioned zips (by mtime); never touches -latest.zip.
+n=0
+while IFS= read -r z; do
+    [[ -n "$z" ]] || continue
+    [[ "$z" == "$ZIP_BASE-latest.zip" ]] && continue
+    n=$((n + 1))
+    if (( n > KEEP_ZIPS )); then
+        echo "    pruning old zip: $z"
+        rm -f "$DIST/$z"
+    fi
+done < <(cd "$DIST" && ls -t -- "$ZIP_BASE"-*.zip 2>/dev/null || true)
+
+if (( !INSTALL )); then
+    echo "==> --no-install: skipped install; build copy is $ZIP"
+    exit 0
 fi
-mv "$STAGED_APP" "$APP"
 
-codesign --verify --deep --strict "$APP"
-echo "==> Signature OK"
+# ---------------------------------------------------------------------------
+# Install: copy into a hidden temp sibling in the install dir, verify, then swap.
+# ---------------------------------------------------------------------------
+INSTALL_DIR="/Applications"
+if [[ ! -w "$INSTALL_DIR" ]]; then
+    INSTALL_DIR="$HOME/Applications"
+    mkdir -p "$INSTALL_DIR"
+    echo "==> /Applications is not writable; installing to $INSTALL_DIR instead"
+fi
+INSTALLED_APP="$INSTALL_DIR/$APP_NAME"
 
-"$LSREGISTER" -f "$APP"
-echo "==> Registered with LaunchServices: $APP"
+echo "==> Installing -> $INSTALLED_APP"
+INSTALL_TMP="$(mktemp -d "$INSTALL_DIR/.package_app.install.XXXXXX")"
+ditto "$STAGED_APP" "$INSTALL_TMP/$APP_NAME"
+codesign --verify --deep --strict "$INSTALL_TMP/$APP_NAME"
+if [[ -e "$INSTALLED_APP" ]]; then
+    mv "$INSTALLED_APP" "$INSTALL_TMP/previous.app"
+fi
+mv "$INSTALL_TMP/$APP_NAME" "$INSTALLED_APP"
+# The previous install (if any) is only unregistered here; cleanup() deletes it.
+if [[ -d "$INSTALL_TMP/previous.app" ]]; then
+    "$LSREGISTER" -u "$INSTALL_TMP/previous.app" >/dev/null 2>&1 || true
+fi
+codesign --verify --deep --strict "$INSTALLED_APP"
+echo "==> Signature OK (installed)"
 
-# Register the embedded extensions with PlugInKit right away (LaunchServices would
-# pick them up eventually) and drop stale Quick Look thumbnails.
-for ext in "$APP/Contents/PlugIns"/*.appex; do
+# ---------------------------------------------------------------------------
+# Retire the old unzipped copy in the package root (only after a good install).
+# ---------------------------------------------------------------------------
+if [[ -d "$LEGACY_APP" ]]; then
+    echo "==> Removing old in-repo bundle: $LEGACY_APP"
+    shopt -s nullglob
+    for appex in "$LEGACY_APP/Contents/PlugIns"/*.appex; do
+        pluginkit -r "$appex" >/dev/null 2>&1 || true
+    done
+    shopt -u nullglob
+    "$LSREGISTER" -u "$LEGACY_APP" >/dev/null 2>&1 || true
+    rm -rf "$LEGACY_APP"
+fi
+
+# ---------------------------------------------------------------------------
+# Register the installed copy and its Quick Look extensions.
+# ---------------------------------------------------------------------------
+"$LSREGISTER" -f "$INSTALLED_APP"
+echo "==> Registered with LaunchServices: $INSTALLED_APP"
+for ext in "$INSTALLED_APP/Contents/PlugIns"/*.appex; do
     pluginkit -a "$ext" 2>/dev/null || echo "    pluginkit -a failed for $(basename "$ext")" >&2
 done
+
+# Drop registrations of any other copy (old Dropbox path, stale installs, ...).
+# Unregister only; nothing outside the paths listed in the header is deleted.
+stale_paths() {
+    local id
+    for id in "${EXT_IDS[@]}"; do
+        pluginkit -mAvvv -i "$id" 2>/dev/null | sed -n 's/^[[:space:]]*Path = //p' || true
+    done
+    for sdk in com.apple.quicklook.preview com.apple.quicklook.thumbnail; do
+        pluginkit -mAvvv -p "$sdk" 2>/dev/null | sed -n 's/^[[:space:]]*Path = //p' \
+            | grep -F -e "${QL_EXTENSIONS[0]}.appex" -e "${QL_EXTENSIONS[1]}.appex" || true
+    done
+    # LaunchServices records are separated by "-----" lines; "identifier:" comes before
+    # "path:" in plugin records and after it in bundle records, so collect both per
+    # record and emit at the separator. (Pairing across records once unregistered two
+    # unrelated /System extensions; the basename filter below is a second guard.)
+    "$LSREGISTER" -dump 2>/dev/null | awk -v ids="$APP_ID ${EXT_IDS[*]}" '
+        function flush() { if ((id in want) && p != "") print p; id = ""; p = "" }
+        BEGIN { n = split(ids, a, " "); for (i = 1; i <= n; i++) want[a[i]] = 1 }
+        /^-----/ { flush(); next }
+        /^path:/ && p == "" { p = $0; sub(/^path:[[:space:]]*/, "", p); sub(/ \(0x[0-9a-f]+\)$/, "", p) }
+        /^identifier:/ && id == "" { id = $2 }
+        END { flush() }
+    ' || true
+}
+while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    case "$p" in
+        "$INSTALLED_APP"|"$INSTALLED_APP"/*) continue ;;
+        /System/*) continue ;;
+    esac
+    # Only ever touch our own bundle names.
+    case "$(basename "$p")" in
+        "$APP_NAME"|"${QL_EXTENSIONS[0]}.appex"|"${QL_EXTENSIONS[1]}.appex") ;;
+        *) continue ;;
+    esac
+    echo "    unregistering stale copy: $p"
+    if [[ "$p" == *.appex ]]; then
+        pluginkit -r "$p" >/dev/null 2>&1 || true
+    fi
+    "$LSREGISTER" -u "$p" >/dev/null 2>&1 || true
+done < <(stale_paths | sort -u)
+
 qlmanage -r >/dev/null 2>&1 || true
 qlmanage -r cache >/dev/null 2>&1 || true
-echo "==> Registered Quick Look extensions (pluginkit -mAvvv -p com.apple.quicklook.preview)"
+echo "==> Registered Quick Look extensions:"
+for id in "${EXT_IDS[@]}"; do
+    pluginkit -mAvvv -i "$id" 2>/dev/null | sed -n 's/^[[:space:]]*Path = /    /p' || true
+done
 
 if (( LAUNCH )); then
     echo "==> Relaunching"
+    # Matches by executable name, so it also kills an instance running from any old path.
     for pid in $(pgrep -f "${EXEC_NAME}\$" || true); do
         kill -9 "$pid" 2>/dev/null || true
     done
@@ -148,7 +301,7 @@ if (( LAUNCH )); then
     NEW_PID=""
     for attempt in 1 2 3 4 5; do
         sleep 1
-        open "$APP" 2>/dev/null || true
+        open "$INSTALLED_APP" 2>/dev/null || true
         for _ in $(seq 1 20); do
             NEW_PID="$(pgrep -f "${EXEC_NAME}\$" | head -1 || true)"
             [[ -n "$NEW_PID" ]] && break 2
@@ -157,8 +310,10 @@ if (( LAUNCH )); then
         echo "    open attempt $attempt didn't start the app; retrying" >&2
     done
     if [[ -z "$NEW_PID" ]]; then
-        echo "Failed to launch $APP" >&2
+        echo "Failed to launch $INSTALLED_APP" >&2
         exit 1
     fi
-    echo "==> Launched, PID $NEW_PID"
+    echo "==> Launched, PID $NEW_PID ($(ps -o comm= -p "$NEW_PID"))"
 fi
+
+echo "==> Done: installed $INSTALLED_APP, build copy $ZIP"

@@ -22,7 +22,7 @@ enum FileSystemService {
     static func readDirectory(at url: URL) throws -> [FileEntry] {
         let keys: [URLResourceKey] = [
             .isDirectoryKey, .nameKey, .contentModificationDateKey, .creationDateKey, .fileSizeKey,
-            .labelNumberKey,
+            .labelNumberKey, .tagNamesKey,
         ]
         let contents = try fm.contentsOfDirectory(
             at: url,
@@ -35,7 +35,7 @@ enum FileSystemService {
                   let isDir = values.isDirectory
             else { return nil }
 
-            return FileEntry(
+            var entry = FileEntry(
                 url: itemURL,
                 isDirectory: isDir,
                 children: isDir ? [] : nil,
@@ -44,6 +44,9 @@ enum FileSystemService {
                 fileSize: isDir ? nil : values.fileSize.map(Int64.init),
                 labelNumber: values.labelNumber
             )
+            // For the Finder tag mirror (CurationController).
+            entry.tagNames = values.tagNames ?? []
+            return entry
         }
     }
 

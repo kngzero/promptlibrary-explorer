@@ -96,10 +96,14 @@ struct SettingsView: View {
             FiltersSettingsPage()
         case .fileOperations:
             FileOperationsSettingsPage()
+        case .export:
+            ExportSettingsPage()
         case .libraryIndex:
             LibraryIndexSettingsPage()
         case .organize:
             OrganizeSettingsPage()
+        case .data:
+            DataSettingsPage()
         case .storage:
             StorageSettingsPage()
         }

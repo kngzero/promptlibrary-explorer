@@ -7,12 +7,16 @@ import Foundation
 final class FavoritesService {
     static let shared = FavoritesService()
 
-    private static let storageKey = "promptlibrary.favoritePaths"
+    static let storageKey = "promptlibrary.favoritePaths"
 
     private let lock = NSLock()
+    private let defaults: UserDefaults
     private var cache: Set<String>?
 
-    private init() {}
+    /// `defaults` is injectable for tests; the app uses `shared`.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     func loadFavorites() -> Set<String> {
         lock.lock()
@@ -50,7 +54,7 @@ final class FavoritesService {
     private func cachedFavorites() -> Set<String> {
         if let cache { return cache }
         let decoded: Set<String>
-        if let data = UserDefaults.standard.data(forKey: Self.storageKey),
+        if let data = defaults.data(forKey: Self.storageKey),
            let value = try? JSONDecoder().decode(Set<String>.self, from: data)
         {
             decoded = value
@@ -64,7 +68,8 @@ final class FavoritesService {
     private func store(_ favorites: Set<String>) {
         cache = favorites
         if let data = try? JSONEncoder().encode(favorites) {
-            UserDefaults.standard.set(data, forKey: Self.storageKey)
+            defaults.set(data, forKey: Self.storageKey)
         }
+        CurationStoreEvents.post(.favorites)
     }
 }

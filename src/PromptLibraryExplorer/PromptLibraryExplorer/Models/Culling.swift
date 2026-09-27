@@ -155,6 +155,7 @@ struct FlagStore {
     func save(_ book: FlagBook) {
         if let data = try? JSONEncoder().encode(book.flags.mapValues(\.rawValue)) {
             defaults.set(data, forKey: Self.storageKey)
+            CurationStoreEvents.post(.flags)
         }
     }
 }

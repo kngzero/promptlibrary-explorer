@@ -53,11 +53,20 @@ final class SettingsStore: ObservableObject {
     /// Primary selected file in `lastSelectedFolder` when the app quit.
     @AppStorage("lastSelectedFilePath") var lastSelectedFilePath: String = ""
 
-    private static let customOrderKey = "promptlibrary.customSortOrder"
-    private static let ratingsKey = "promptlibrary.ratings"
+    static let customOrderKey = "promptlibrary.customSortOrder"
+    static let ratingsKey = "promptlibrary.ratings"
+
+    /// Where ratings and custom orders live. Injectable so curation backup /
+    /// sync tests never touch the real defaults (the `@AppStorage` settings
+    /// above always use `.standard`).
+    let curationDefaults: UserDefaults
+
+    init(curationDefaults: UserDefaults = .standard) {
+        self.curationDefaults = curationDefaults
+    }
 
     func loadCustomOrders() -> [String: [String]] {
-        guard let data = UserDefaults.standard.data(forKey: Self.customOrderKey),
+        guard let data = curationDefaults.data(forKey: Self.customOrderKey),
               let decoded = try? JSONDecoder().decode([String: [String]].self, from: data)
         else { return [:] }
         return decoded
@@ -65,12 +74,13 @@ final class SettingsStore: ObservableObject {
 
     func saveCustomOrders(_ orders: [String: [String]]) {
         if let data = try? JSONEncoder().encode(orders) {
-            UserDefaults.standard.set(data, forKey: Self.customOrderKey)
+            curationDefaults.set(data, forKey: Self.customOrderKey)
+            CurationStoreEvents.post(.customOrders)
         }
     }
 
     func loadRatings() -> [String: Int] {
-        guard let data = UserDefaults.standard.data(forKey: Self.ratingsKey),
+        guard let data = curationDefaults.data(forKey: Self.ratingsKey),
               let decoded = try? JSONDecoder().decode([String: Int].self, from: data)
         else { return [:] }
         return decoded
@@ -78,7 +88,8 @@ final class SettingsStore: ObservableObject {
 
     func saveRatings(_ ratings: [String: Int]) {
         if let data = try? JSONEncoder().encode(ratings) {
-            UserDefaults.standard.set(data, forKey: Self.ratingsKey)
+            curationDefaults.set(data, forKey: Self.ratingsKey)
+            CurationStoreEvents.post(.ratings)
         }
     }
 

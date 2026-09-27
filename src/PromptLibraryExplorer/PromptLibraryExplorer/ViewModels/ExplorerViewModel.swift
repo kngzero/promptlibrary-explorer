@@ -81,10 +81,12 @@ private struct PathMetadataSnapshot {
     var customOrders: [String: [String]] = [:]
     /// Collection id -> (index in that collection, path) of every removed member.
     var collectionMemberships: [UUID: [(index: Int, path: String)]] = [:]
+    /// XMP sidecars trashed with the item (put back on undo).
+    var sidecars: [SidecarTrashRecord] = []
 
     var isEmpty: Bool {
         ratings.isEmpty && flags.isEmpty && tags.isEmpty && favorites.isEmpty && customOrders.isEmpty
-            && collectionMemberships.isEmpty
+            && collectionMemberships.isEmpty && sidecars.isEmpty
     }
 }
 
@@ -562,6 +564,8 @@ final class ExplorerViewModel {
     @ObservationIgnored private var sortedFolderContentsCache: [FileEntry] = []
 
     init() {
+        // Curation safety first: backs up every store on the first launch with it.
+        CurationController.shared.bootstrap()
         customOrderByFolder = settings.loadCustomOrders()
         ratingsByPath = settings.loadRatings()
         flagBook = flagStore.load()
@@ -616,6 +620,8 @@ final class ExplorerViewModel {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.persistWindowState() }
         }
+
+        installCurationHooks()
 
         let mode = appearanceMode
         DispatchQueue.main.async { mode.applyToApp() }
@@ -899,6 +905,7 @@ final class ExplorerViewModel {
         loadListingPromptDataIfNeeded(force: false)
         if let rootToEstablish {
             autoIndexLibraryIfNeeded(root: rootToEstablish)
+            curationRootDidOpen(rootToEstablish)
             // Visual index: automatic, low priority, incremental — unless the
             // user stopped it in Settings ▸ Search Index.
             if VisualIndexController.shared.isEnabled {
@@ -2268,6 +2275,7 @@ final class ExplorerViewModel {
 
         folderContents = entries
         isLoadingFolder = false
+        CurationController.shared.listingDidLoad(entries)
         return true
     }
 
@@ -3376,6 +3384,8 @@ final class ExplorerViewModel {
     /// for folders, everything under it) to `newPath`, in memory and on disk.
     func migrateMetadataKeys(from oldPath: String, to newPath: String) {
         guard oldPath != newPath else { return }
+        // Sidecars and the Finder tag mirror follow the item.
+        CurationController.shared.itemDidMove(from: oldPath, to: newPath)
 
         CollectionService.shared.migratePaths(from: oldPath, to: newPath)
         collections = CollectionService.shared.all()
@@ -3459,6 +3469,7 @@ final class ExplorerViewModel {
     @discardableResult
     private func removeMetadata(under path: String) -> PathMetadataSnapshot {
         var snapshot = PathMetadataSnapshot()
+        snapshot.sidecars = CurationController.shared.itemWillBeRemoved(at: path)
 
         let ratingKeys = ratingsByPath.keys.filter { MetadataPathKeys.isSameOrDescendant($0, of: path) }
         if !ratingKeys.isEmpty {
@@ -3543,6 +3554,7 @@ final class ExplorerViewModel {
     /// Puts a snapshot taken at `oldPath` back, rewritten to `newPath`.
     private func restoreMetadata(_ snapshot: PathMetadataSnapshot, from oldPath: String, to newPath: String) {
         guard !snapshot.isEmpty else { return }
+        CurationController.shared.itemWasRestored(snapshot.sidecars, from: oldPath, to: newPath)
 
         func target(_ key: String) -> String {
             MetadataPathKeys.rewrite(key, from: oldPath, to: newPath) ?? key
@@ -3601,6 +3613,33 @@ final class ExplorerViewModel {
             }
             collections = CollectionService.shared.all()
         }
+    }
+
+    /// Re-reads every curation store after the curation controller changed them
+    /// (library sync, import / restore, Finder tags, sidecars). Only changed values
+    /// are reassigned, so unchanged listings don't re-sort.
+    func reloadCurationStateFromStores() {
+        let orders = settings.loadCustomOrders()
+        if orders != customOrderByFolder { customOrderByFolder = orders }
+        let ratings = settings.loadRatings()
+        if ratings != ratingsByPath { ratingsByPath = ratings }
+        let flags = flagStore.load()
+        if flags != flagBook { flagBook = flags }
+        let tags = TagService.shared.loadTags()
+        if tags != allTags { allTags = tags }
+        let assignments = TagService.shared.loadAssignments()
+        if assignments != tagAssignments { tagAssignments = assignments }
+        let favorites = FavoritesService.shared.loadFavorites()
+        if favorites != favoritePaths { favoritePaths = favorites }
+        let loadedCollections = CollectionService.shared.all()
+        if loadedCollections != collections { collections = loadedCollections }
+        let sets = CollectionService.shared.allSets()
+        if sets != collectionSets { collectionSets = sets }
+        let folders = SmartFolderService.shared.loadSmartFolders()
+        if folders != smartFolders { smartFolders = folders }
+        let recents = RecentHistoryService.shared.loadRecentFolders()
+        if recents != recentFolders { recentFolders = recents }
+        if let id = filterByTagID, !allTags.contains(where: { $0.id == id }) { filterByTagID = nil }
     }
 
     /// Runs library-index mutations one after another, in call order. They are

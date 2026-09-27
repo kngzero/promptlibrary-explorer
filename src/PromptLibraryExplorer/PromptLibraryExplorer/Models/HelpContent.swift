@@ -90,6 +90,43 @@ enum HelpContent {
             ]
         ),
         HelpFileTypeDescription(
+            id: "export",
+            extensionLabel: "Export",
+            title: "Export Presets",
+            description: "File ▸ Export… (also Export With Preset, the grid's and collections' Export context menus, and the command palette) writes converted copies of the selection, or of the whole folder or collection when nothing is selected. Originals are never changed.",
+            highlights: [
+                "A preset sets the format (Keep Original, PNG, JPEG, HEIC, TIFF, and WebP where this Mac can write it), size (long edge, exact size cropped to fill, or a percentage), quality, colour profile (keep, sRGB or Display P3), metadata, file name, destination and what to do when a name is taken.",
+                "Shipped presets: Web JPEG 2048, Full-res PNG, Instagram 1080, HEIC Archive and For Sharing. Edit them in the export sheet or in Settings ▸ Export; Save as New Preset keeps a variation.",
+                "File names use the Batch Rename tokens ({name}, {date}, {model}, {seed}, {counter:3}…); the output format's extension is added. Destinations: ask each time, a fixed folder, or a subfolder next to each original. Replacing existing files asks first and moves the old files to the Trash; an original is never replaced.",
+                "The sheet previews the count, an estimated total size and the first output names, then runs in the background with progress and Stop. The summary lists anything skipped and can reveal the new files in Finder.",
+                "Videos and audio are copied; with “Remove metadata from videos and audio” MOV, MP4, M4V and M4A are re-wrapped without metadata (no re-encoding), other formats are copied and the summary says so. Mood boards, Story projects, .plib and .aoe files are skipped unless “Export rendered previews” is on.",
+                "Watermark: text or an image (a PNG with transparency), in one of nine positions, with margin, size, opacity and an optional shadow. The preset editor shows a live preview."
+            ]
+        ),
+        HelpFileTypeDescription(
+            id: "privacy-export",
+            extensionLabel: "Privacy",
+            title: "Export for Sharing (Strip AI Metadata)",
+            description: "File ▸ Export for Sharing (Strip AI Metadata)… exports copies without the generation data: prompts, negative prompts, seeds and parameters, ComfyUI workflow and prompt graphs, A1111 parameters, EXIF User Comment, image descriptions (EXIF, TIFF, XMP), IPTC AI prompt fields and GPS location.",
+            highlights: [
+                "When the format and size don't change, the pixels are untouched: PNGs are rebuilt chunk by chunk with the image data copied byte for byte, and JPEGs get a lossless metadata rewrite.",
+                "Camera and lens data, rating, keywords and copyright are kept. The metadata policy in any preset can instead Strip All, or Keep Only the fields you tick (for example prompt and model but not the seed).",
+                "Every exported image is re-read afterwards; if any prompt, seed, parameter, ComfyUI graph or GPS location is still there, that file isn't saved and the summary says why.",
+                "Content Credentials (C2PA) in a PNG are left as they are. A JPEG's credentials don't survive the metadata rewrite, and a changed file's credentials no longer validate either way."
+            ]
+        ),
+        HelpFileTypeDescription(
+            id: "contact-sheet",
+            extensionLabel: "PDF",
+            title: "Contact Sheet",
+            description: "File ▸ Export Contact Sheet… (also in the Export context menus) lays the selection, folder or collection out as a multi-page PDF for clients or printing.",
+            highlights: [
+                "Choose A4, US Letter or a custom size, portrait or landscape, the columns and rows, margins and spacing; the first page is previewed as you go.",
+                "Captions can show the file name, the rating and flag, and a prompt excerpt. A header carries the title and date, and pages are numbered.",
+                "Pages are drawn as a real PDF (text stays text), with each image downsampled to suit its cell; videos show a frame and Mood / Story files their rendered overview."
+            ]
+        ),
+        HelpFileTypeDescription(
             id: "visual-search",
             extensionLabel: "Visual Search",
             title: "Similar Images, More Like This and Colour Search",
@@ -104,6 +141,19 @@ enum HelpContent {
                 "Filter ▸ Colour… filters the listing by 1–3 colours (swatches, a hex value or the colour panel) with a tolerance; the active filter shows in the status bar. Find Matching ranks images by the palette instead.",
                 "The details panel shows each image's dominant colours: click a swatch to filter by it. Find Images Matching Palette (context menu, details panel) searches with a Mood board's palette or an image's own colours.",
                 "Group By ▸ Colour Family groups by the main colour's hue (Red … Pink, plus Neutral, Dark and Light); smart folders can require a dominant colour; Settings ▸ Appearance can show a thin colour strip on grid tiles."
+            ]
+        ),
+        HelpFileTypeDescription(
+            id: "curation-data",
+            extensionLabel: "Your Data",
+            title: "Backups, Export and Sync Between Macs",
+            description: "Ratings, flags, tags, favorites, custom orders, smart folders, collections and sets, snippets and recent folders are backed up, can be exported and imported, and sync between Macs through your library folder. Settings ▸ Data has every control.",
+            highlights: [
+                "Backups: one a day, plus one before every import, restore and app upgrade, in Application Support ▸ PromptLibraryExplorer ▸ Backups (14 daily and 8 weekly are kept). Choose an extra backup folder — for example in Dropbox — to keep copies off this Mac. Restore from Backup… lists them with their date and counts.",
+                "Export Curation Data… writes everything to one JSON file (a documented format with both absolute and library-relative paths). Import… shows what would change per kind before anything happens; Merge keeps what you have and adds the export's data, Replace makes your data exactly the export. Undo Import puts back what you had.",
+                "Sync between Macs (on by default): each library gets a hidden .promptlibrary/curation.json with its files' curation and library-relative paths, so it works where Dropbox lives at another path. Changes are written about two seconds after you make them and merged value by value when another Mac's changes arrive — the newest change wins, removals don't come back, simultaneous edits keep this Mac's value, and Dropbox conflicted copies are merged and removed.",
+                "Finder tags (on by default): the app's tags are mirrored to Finder tags and Finder tags show up as app tags; removing one on either side removes it on the other. Finder's colour tags stay labels. Tag changes never alter file contents or modification dates.",
+                "XMP sidecars (off by default): a Lightroom / Bridge style <name>.xmp next to each image, video or audio file holds its rating, label, tags, flag and prompts. Existing sidecars (including Lightroom's) fill in ratings, labels and keywords the app doesn't have yet. Sidecars move, rename and go to the Trash (and come back on undo) with their files; Library ▸ Write XMP Sidecars Now and the context menu write them on demand. Originals are never modified."
             ]
         )
     ]

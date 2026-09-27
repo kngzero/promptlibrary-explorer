@@ -72,8 +72,13 @@ SwiftPM cannot produce `.appex` bundles, so each extension is an ordinary
    extensions) + `com.apple.security.files.user-selected.read-only`. Quick Look grants
    read access to the previewed file itself; images a `.plib` references by path outside
    that file are not readable in the sandbox and are skipped (counted as "not shown").
-4. After LaunchServices registration the script runs `pluginkit -a` on each appex and
-   `qlmanage -r` / `qlmanage -r cache`.
+4. The script installs the app to `/Applications/PromptLibrary Explorer.app` (falls back to
+   `~/Applications` if `/Applications` isn't writable), registers it with `lsregister -f`,
+   runs `pluginkit -a` on each installed appex, unregisters any other copy of the app or
+   extensions (e.g. the old unzipped bundle in the package root), and runs
+   `qlmanage -r` / `qlmanage -r cache`. The build copy kept in Dropbox is a zip in `dist/`
+   (never an unzipped `.app`: LaunchServices/pluginkit would register it as a second copy
+   and its extensions would clash with the installed ones).
 
 Build just the extensions while iterating:
 
@@ -85,10 +90,13 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter PLX
 ## Registering, verifying, debugging
 
 ```sh
-scripts/package_app.sh                                   # builds + embeds + signs + registers
-pluginkit -mAvvv -p com.apple.quicklook.preview   | grep -A3 artofficial
-pluginkit -mAvvv -p com.apple.quicklook.thumbnail | grep -A3 artofficial
-pluginkit -a "PromptLibrary Explorer.app/Contents/PlugIns/PLXQuickLookThumbnail.appex"   # force (re)registration
+scripts/package_app.sh               # builds + embeds + signs + zips to dist/ + installs to /Applications + registers
+scripts/package_app.sh --no-install  # build + zip only (alias --zip-only); nothing registered
+pluginkit -mAvvv -i com.artofficial.promptlibrary-explorer.quicklook-preview     # Path must be under /Applications
+pluginkit -mAvvv -i com.artofficial.promptlibrary-explorer.quicklook-thumbnail
+# (`pluginkit -mAvvv -p com.apple.quicklook.thumbnail` prints "(no matches)" on this machine
+#  even when the thumbnail extension is registered; query by id with -i, or `pluginkit -mv | grep artofficial`.)
+pluginkit -a "/Applications/PromptLibrary Explorer.app/Contents/PlugIns/PLXQuickLookThumbnail.appex"   # force (re)registration
 pluginkit -e use -i com.artofficial.promptlibrary-explorer.quicklook-thumbnail           # enable if disabled
 
 # Sample files + what the renderers draw (no Quick Look involved):
@@ -109,9 +117,11 @@ Notes:
   `testExportFixtures` (`*.html` files) instead; open the real preview with Space in Finder.
 - System Settings ▸ General ▸ Login Items & Extensions ▸ Quick Look lists both extensions
   and can disable them.
-- Registration follows the app's path: after moving the app (e.g. to /Applications),
-  run `lsregister -f` on it (or `scripts/package_app.sh`) and `pluginkit -a` again, and
-  delete stale copies so pluginkit doesn't elect an old one.
+- Registration follows the app's path. Only the `/Applications` copy should exist unzipped;
+  pluginkit elects one copy per extension id, often a stale one. Don't unzip a `dist/` zip
+  inside Dropbox or the repo (expand it elsewhere, or just re-run the script). If a stale
+  copy shows up, `scripts/package_app.sh` unregisters it (`pluginkit -r` + `lsregister -u`,
+  our bundle names only, never under `/System`).
 - `com.artofficial.plib` / `.aoe` conform to `public.json`, so Apple's Text thumbnail
   extension is a fallback candidate. If a type keeps getting the plain-text thumbnail
   after registration, `com.apple.quicklook.ThumbnailsAgent` is still using a stale choice;

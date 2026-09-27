@@ -12,16 +12,32 @@ struct RecentItem: Codable, Identifiable, Hashable {
 final class RecentHistoryService {
     static let shared = RecentHistoryService()
 
-    private static let foldersKey = "promptlibrary.recentFolders"
+    static let foldersKey = "promptlibrary.recentFolders"
     private static let maxItems = 10
 
-    private init() {}
+    private let defaults: UserDefaults
+
+    /// `defaults` is injectable for tests; the app uses `shared`.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     func loadRecentFolders() -> [RecentItem] {
-        guard let data = UserDefaults.standard.data(forKey: Self.foldersKey),
+        loadAllRecentFolders().filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    /// Every stored item, including folders that are currently missing
+    /// (backups keep them; an unmounted drive may come back).
+    func loadAllRecentFolders() -> [RecentItem] {
+        guard let data = defaults.data(forKey: Self.foldersKey),
               let items = try? JSONDecoder().decode([RecentItem].self, from: data)
         else { return [] }
-        return items.filter { FileManager.default.fileExists(atPath: $0.path) }
+        return items
+    }
+
+    /// Replaces the whole list (curation import / restore).
+    func replaceRecentFolders(_ items: [RecentItem]) {
+        save(Array(items.prefix(Self.maxItems)))
     }
 
     func addRecentFolder(_ url: URL) {
@@ -43,7 +59,7 @@ final class RecentHistoryService {
 
     private func save(_ items: [RecentItem]) {
         if let data = try? JSONEncoder().encode(items) {
-            UserDefaults.standard.set(data, forKey: Self.foldersKey)
+            defaults.set(data, forKey: Self.foldersKey)
         }
     }
 }

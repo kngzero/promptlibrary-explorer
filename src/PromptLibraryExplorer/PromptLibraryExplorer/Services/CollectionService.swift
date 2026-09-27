@@ -43,8 +43,8 @@ enum CollectionServiceStorage {
         return dir
     }
 
-    static func load<T: Decodable>(_ type: T.Type, from fileName: String) -> T? {
-        let url = directoryURL.appendingPathComponent(fileName)
+    static func load<T: Decodable>(_ type: T.Type, from fileName: String, in directory: URL? = nil) -> T? {
+        let url = (directory ?? directoryURL).appendingPathComponent(fileName)
         guard let data = try? Data(contentsOf: url) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -82,8 +82,13 @@ enum CollectionServiceStorage {
 
     /// Loads a JSON array element by element: bad elements are skipped (and the file backed up),
     /// an unreadable file is renamed to `<name>.corrupt-<timestamp>.json` and an empty array returned.
-    static func loadArray<Element: Decodable>(_ type: Element.Type, from fileName: String) -> (elements: [Element], status: LoadStatus) {
-        let url = directoryURL.appendingPathComponent(fileName)
+    static func loadArray<Element: Decodable>(
+        _ type: Element.Type,
+        from fileName: String,
+        in directory: URL? = nil
+    ) -> (elements: [Element], status: LoadStatus) {
+        let directory = directory ?? directoryURL
+        let url = directory.appendingPathComponent(fileName)
         guard FileManager.default.fileExists(atPath: url.path) else { return ([], .missing) }
 
         let decoder = JSONDecoder()
@@ -91,7 +96,7 @@ enum CollectionServiceStorage {
         guard let data = try? Data(contentsOf: url),
               let wrapped = try? decoder.decode([Lenient<Element>].self, from: data)
         else {
-            let backup = backupURL(for: fileName)
+            let backup = backupURL(for: fileName, in: directory)
             do {
                 try FileManager.default.moveItem(at: url, to: backup)
                 NSLog("PromptLibraryExplorer: %@ couldn't be read; moved it to %@", fileName, backup.lastPathComponent)
@@ -106,13 +111,13 @@ enum CollectionServiceStorage {
         let skipped = wrapped.count - elements.count
         guard skipped > 0 else { return (elements, .loaded) }
 
-        let backup = backupURL(for: fileName)
+        let backup = backupURL(for: fileName, in: directory)
         let copied = (try? FileManager.default.copyItem(at: url, to: backup)) != nil
         NSLog("PromptLibraryExplorer: skipped %d unreadable entries in %@", skipped, fileName)
         return (elements, .partial(skipped: skipped, backup: copied ? backup : nil))
     }
 
-    private static func backupURL(for fileName: String) -> URL {
+    private static func backupURL(for fileName: String, in directoryURL: URL) -> URL {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
@@ -127,8 +132,8 @@ enum CollectionServiceStorage {
         return candidate
     }
 
-    static func save<T: Encodable>(_ value: T, to fileName: String) {
-        let url = directoryURL.appendingPathComponent(fileName)
+    static func save<T: Encodable>(_ value: T, to fileName: String, in directory: URL? = nil) {
+        let url = (directory ?? directoryURL).appendingPathComponent(fileName)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -152,14 +157,17 @@ enum CollectionServiceStorage {
 final class CollectionService {
     static let shared = CollectionService()
 
-    private static let fileName = "collections.json"
-    private static let setsFileName = "collection-sets.json"
+    static let fileName = "collections.json"
+    static let setsFileName = "collection-sets.json"
     private var collections: [FileCollection]
     private var sets: [CollectionSet]
+    /// nil = Application Support/PromptLibraryExplorer (the app); tests inject a temp folder.
+    private let directory: URL?
 
-    private init() {
-        let loadedCollections = CollectionServiceStorage.loadArray(FileCollection.self, from: Self.fileName)
-        let loadedSets = CollectionServiceStorage.loadArray(CollectionSet.self, from: Self.setsFileName)
+    init(directory: URL? = nil) {
+        self.directory = directory
+        let loadedCollections = CollectionServiceStorage.loadArray(FileCollection.self, from: Self.fileName, in: directory)
+        let loadedSets = CollectionServiceStorage.loadArray(CollectionSet.self, from: Self.setsFileName, in: directory)
         collections = loadedCollections.elements
         sets = loadedSets.elements
 
@@ -293,6 +301,33 @@ final class CollectionService {
         return result
     }
 
+    /// Replaces every collection and set (curation import / restore / sync).
+    /// Parent links to sets that don't exist are cleared so nothing is stranded.
+    func replaceAll(collections newCollections: [FileCollection], sets newSets: [CollectionSet]) {
+        let setIDs = Set(newSets.map(\.id))
+        var cleanedSets = newSets
+        for index in cleanedSets.indices {
+            if let parent = cleanedSets[index].parentID, !setIDs.contains(parent) || parent == cleanedSets[index].id {
+                cleanedSets[index].parentID = nil
+            }
+        }
+        var cleanedCollections = newCollections
+        for index in cleanedCollections.indices {
+            if let parent = cleanedCollections[index].parentID, !setIDs.contains(parent) {
+                cleanedCollections[index].parentID = nil
+            }
+            cleanedCollections[index].paths = Self.uniqued(cleanedCollections[index].paths)
+        }
+        if cleanedSets != sets {
+            sets = cleanedSets
+            persistSets()
+        }
+        if cleanedCollections != collections {
+            collections = cleanedCollections
+            persist()
+        }
+    }
+
     // MARK: Membership
 
     func add(paths: [String], to id: UUID) {
@@ -359,11 +394,13 @@ final class CollectionService {
     }
 
     private func persist() {
-        CollectionServiceStorage.save(collections, to: Self.fileName)
+        CollectionServiceStorage.save(collections, to: Self.fileName, in: directory)
+        CurationStoreEvents.post(.collections)
     }
 
     private func persistSets() {
-        CollectionServiceStorage.save(sets, to: Self.setsFileName)
+        CollectionServiceStorage.save(sets, to: Self.setsFileName, in: directory)
+        CurationStoreEvents.post(.collectionSets)
     }
 
     private static func uniqued(_ paths: [String]) -> [String] {

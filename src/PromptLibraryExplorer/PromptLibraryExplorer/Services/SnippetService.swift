@@ -20,16 +20,26 @@ struct PromptSnippet: Codable, Identifiable, Hashable {
 final class SnippetService {
     static let shared = SnippetService()
 
-    private static let fileName = "snippets.json"
+    static let fileName = "snippets.json"
     private var snippets: [PromptSnippet]
+    /// nil = Application Support/PromptLibraryExplorer (the app); tests inject a temp folder.
+    private let directory: URL?
 
-    private init() {
+    init(directory: URL? = nil) {
+        self.directory = directory
         // Unreadable files are moved aside and bad entries skipped (with a backup copy), so a
         // later save never overwrites the only copy of the user's snippets.
-        snippets = CollectionServiceStorage.loadArray(PromptSnippet.self, from: Self.fileName).elements
+        snippets = CollectionServiceStorage.loadArray(PromptSnippet.self, from: Self.fileName, in: directory).elements
     }
 
     func all() -> [PromptSnippet] { snippets }
+
+    /// Replaces every snippet (curation import / restore).
+    func replaceAll(_ newSnippets: [PromptSnippet]) {
+        guard newSnippets != snippets else { return }
+        snippets = newSnippets
+        persist()
+    }
 
     @discardableResult
     func add(title: String, text: String, category: String) -> PromptSnippet {
@@ -88,7 +98,8 @@ final class SnippetService {
     // MARK: - Private
 
     private func persist() {
-        CollectionServiceStorage.save(snippets, to: Self.fileName)
+        CollectionServiceStorage.save(snippets, to: Self.fileName, in: directory)
+        CurationStoreEvents.post(.snippets)
     }
 
     private static func defaultTitle(for text: String) -> String {

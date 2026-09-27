@@ -149,9 +149,28 @@ struct ContentItemContextMenu: View {
             Button("Batch Edit Metadata", action: onSelection { vm.openBatchMetadataEditor() })
         }
 
+        // XMP sidecars (curation data beside the file; the original is never modified).
+        if targets.contains(where: { !$0.isDirectory && SidecarLocator.supportsSidecar($0.name) }) {
+            Button("Write XMP Sidecars", action: onSelection { vm.writeXMPSidecarsNow() })
+        }
+
         if targets.contains(where: { !$0.isDirectory && ArtOfficialSendBuilder.isSendable($0.name) }) {
             Button("Send to Mood…", action: onSelection { vm.sendToArtOfficial(.mood) })
             Button("Send to Story…", action: onSelection { vm.sendToArtOfficial(.story) })
+        }
+
+        // Export suite (acts on the selection after `ensureSelected`).
+        if targetsHaveFiles {
+            Menu("Export") {
+                ForEach(ExportPresetStore.shared.presets) { preset in
+                    Button(preset.name, action: onSelection { vm.openExportSheet(presetID: preset.id) })
+                }
+                Divider()
+                Button("Export…", action: onSelection { vm.openExportSheet() })
+                Button("Export for Sharing (Strip AI Metadata)…", action: onSelection { vm.openExportForSharing() })
+                Button("Export Contact Sheet…", action: onSelection { vm.openContactSheet() })
+            }
+            .disabled(ExportController.shared.isRunning)
         }
 
         Divider()

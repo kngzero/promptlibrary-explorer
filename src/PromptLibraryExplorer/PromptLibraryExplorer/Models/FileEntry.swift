@@ -14,6 +14,9 @@ struct FileEntry: Identifiable, Hashable {
     /// Finder colour label (`URLResourceKey.labelNumberKey`, 0 = none, see
     /// `FinderLabel`); nil when unknown.
     var labelNumber: Int?
+    /// Finder tag names (`URLResourceKey.tagNamesKey`, colour labels included) as read
+    /// by `FileSystemService.readDirectory`; nil when not read.
+    var tagNames: [String]?
 
     var path: String { url.path }
 
