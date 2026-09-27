@@ -146,6 +146,13 @@ final class SmartFolderService {
             rules.append { entry in labels.contains(FinderLabel(labelNumber: entry.labelNumber).rawValue) }
         }
 
+        if let colorRule = criteria.dominantColor {
+            // Files the visual index hasn't reached yet have no colours and don't match.
+            rules.append { entry in
+                PaletteMatcher.matches(context.dominantColorsByPath[entry.path] ?? [], filter: colorRule)
+            }
+        }
+
         return rules
     }
 
@@ -177,6 +184,8 @@ struct SmartFolderFilterContext {
     var modelByPath: [String: String]
     /// Pick / reject flags (unflagged files have no entry).
     var flags: [String: FileFlag]
+    /// Dominant colours from the visual index (unindexed files have no entry).
+    var dominantColorsByPath: [String: [DominantColor]]
 
     init(
         tagsByPath: [String: Set<UUID>] = [:],
@@ -185,7 +194,8 @@ struct SmartFolderFilterContext {
         promptByPath: [String: String] = [:],
         negativeByPath: [String: String] = [:],
         modelByPath: [String: String] = [:],
-        flags: [String: FileFlag] = [:]
+        flags: [String: FileFlag] = [:],
+        dominantColorsByPath: [String: [DominantColor]] = [:]
     ) {
         self.tagsByPath = tagsByPath
         self.favorites = favorites
@@ -194,6 +204,7 @@ struct SmartFolderFilterContext {
         self.negativeByPath = negativeByPath
         self.modelByPath = modelByPath
         self.flags = flags
+        self.dominantColorsByPath = dominantColorsByPath
     }
 }
 

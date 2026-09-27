@@ -26,6 +26,17 @@ final class SettingsStore: ObservableObject {
     @AppStorage("filterFlag") var filterFlag: String = FlagFilter.all.rawValue
     /// Comma-separated Finder label numbers.
     @AppStorage("filterLabels") var filterLabels: String = ""
+    /// JSON-encoded `ColorFilter` ("" = no colour filter).
+    @AppStorage("filterColor") var filterColor: String = ""
+
+    // Visual search
+    /// `VisualSearchScopeChoice` raw value shared by Find Similar Images,
+    /// More Like This and palette search.
+    @AppStorage("visualSearch.scope") var visualSearchScope: String = VisualSearchScopeChoice.folder.rawValue
+    /// Last tolerance used in the colour filter / palette search.
+    @AppStorage("visualSearch.colorTolerance") var colorTolerance: Double = ColorFilter.defaultTolerance
+    /// Appearance: thin dominant-colour strip on grid tiles (off by default).
+    @AppStorage("grid.showColorStrip") var showTileColorStrip: Bool = false
 
     // Culling
     @AppStorage("cullingMode") var cullingMode: Bool = false
@@ -96,7 +107,8 @@ final class SettingsStore: ObservableObject {
             hiddenFileTypes: hiddenFileTypes,
             filterMinRating: filterMinRating,
             flagFilter: FlagFilter(rawValue: filterFlag) ?? .all,
-            labelFilter: Set(filterLabels.split(separator: ",").compactMap { Int($0) }.filter { (0...7).contains($0) })
+            labelFilter: Set(filterLabels.split(separator: ",").compactMap { Int($0) }.filter { (0...7).contains($0) }),
+            colorFilter: ColorFilter(storageString: filterColor)
         )
     }
 
@@ -105,6 +117,7 @@ final class SettingsStore: ObservableObject {
         filterMinRating = config.filterMinRating
         filterFlag = config.flagFilter.rawValue
         filterLabels = config.labelFilter.sorted().map(String.init).joined(separator: ",")
+        filterColor = config.colorFilter?.storageString ?? ""
     }
 
     private func saveHiddenFileTypes(_ hiddenFileTypes: Set<FileTypeFilter>) {

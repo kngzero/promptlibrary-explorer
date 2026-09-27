@@ -406,7 +406,9 @@ struct PromptLibraryExplorerApp: App {
                         return
                     }
                     runInMainWindow {
-                        if explorerVM.isCollectionMode {
+                        if explorerVM.isVirtualListingMode {
+                            explorerVM.closeVirtualListing()
+                        } else if explorerVM.isCollectionMode {
                             explorerVM.openCollection(nil)
                         } else {
                             Task { await explorerVM.navigateUpToParentFolder() }
@@ -466,6 +468,43 @@ struct PromptLibraryExplorerApp: App {
                     run { explorerVM.snippetsOpen = true }
                 }
                 .disabled(isBlocked)
+
+                Divider()
+
+                // Visual search. Inspection only — nothing here removes files.
+                Button("Find Similar Images…") {
+                    run(allowInLightbox: false) { explorerVM.similarImagesOpen = true }
+                }
+                .disabled(isBlocked || explorerVM.explorerRootPath == nil || explorerVM.lightboxOpen)
+
+                // Bare M is owned by the key monitors (grid + lightbox); like the
+                // Cull menu, the key is shown in the title, never bound here.
+                Button("More Like This (M)") {
+                    runInMainWindow { explorerVM.showMoreLikeThisForTarget() }
+                }
+                .disabled(isBlocked || !explorerVM.canShowMoreLikeThis)
+
+                Button("Find Images Matching Palette") {
+                    runInMainWindow { explorerVM.findImagesMatchingPaletteForTarget() }
+                }
+                .disabled(isBlocked || !explorerVM.canFindMatchingPalette)
+
+                Menu("Visual Search Scope") {
+                    ForEach(VisualSearchScopeChoice.allCases) { choice in
+                        Toggle(choice.title, isOn: Binding(
+                            get: { explorerVM.visualSearchScope == choice },
+                            set: { if $0 { explorerVM.visualSearchScope = choice } }
+                        ))
+                    }
+                }
+                .disabled(isBlocked)
+
+                if explorerVM.isVirtualListingMode {
+                    Button("Close \"\(explorerVM.activeVirtualListing?.title ?? "Listing")\"") {
+                        runInMainWindow { explorerVM.closeVirtualListing() }
+                    }
+                    .disabled(isBlocked)
+                }
 
                 Divider()
 

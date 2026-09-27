@@ -110,6 +110,8 @@ struct BrowserToolbar: CustomizableToolbarContent {
         }
 
         ToolbarItem(id: BrowserToolbarItemID.filter, placement: .primaryAction) {
+            // Filter ▸ Colour… sets `vm.colorFilterPopoverOpen`; ContentBrowserView
+            // presents the popover (a toolbar item can be customized away).
             filterMenu
         }
 
@@ -218,6 +220,13 @@ struct BrowserToolbar: CustomizableToolbarContent {
 
     private var sortMenu: some View {
         Menu {
+            if vm.isVirtualListingMode {
+                Toggle("Similarity (Most Similar First)", isOn: Binding(
+                    get: { vm.virtualListingRanked },
+                    set: { if $0 { vm.restoreVirtualListingRank() } }
+                ))
+                Divider()
+            }
             ForEach(Array(Self.sortMenuFields.enumerated()), id: \.element) { index, field in
                 if index > 0 {
                     Divider()
@@ -328,6 +337,17 @@ struct BrowserToolbar: CustomizableToolbarContent {
                     if option == .all {
                         Divider()
                     }
+                }
+            }
+
+            Menu("Colour") {
+                Button(vm.filterConfig.colorFilter == nil ? "Filter by Colour…" : "Edit Colour Filter…") {
+                    // Let the menu close before the popover anchors to its button.
+                    DispatchQueue.main.async { vm.colorFilterPopoverOpen = true }
+                }
+                if let filter = vm.filterConfig.colorFilter {
+                    Text("Showing \(filter.summary)")
+                    Button("Clear Colour Filter") { vm.setColorFilter(nil) }
                 }
             }
 
@@ -545,7 +565,9 @@ struct BreadcrumbBar: View {
         // Crumbs keep their natural width first; the spacer soaks up the free
         // space so the drop target still spans it (same layout as crumbs + Spacer).
         HStack(spacing: 0) {
-            if let collection = vm.activeCollection {
+            if let listing = vm.activeVirtualListing {
+                VirtualListingCrumb(listing: listing)
+            } else if let collection = vm.activeCollection {
                 CollectionCrumb(collection: collection)
             } else {
                 folderCrumbs
@@ -696,6 +718,54 @@ private struct CollectionCrumb: View {
         .padding(.leading, AppSpacing.sm)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Collection \(collection.name)")
+    }
+}
+
+/// Stands in for the breadcrumbs while a virtual listing (Similar to …,
+/// palette matches, a similar-images group) is the listing.
+private struct VirtualListingCrumb: View {
+    @Environment(ExplorerViewModel.self) private var vm
+    let listing: VirtualListing
+
+    var body: some View {
+        HStack(spacing: AppSpacing.sm) {
+            Image(systemName: listing.systemImage)
+                .font(.appIcon(11, weight: .medium))
+                .foregroundStyle(Color.appAccent)
+                .accessibilityHidden(true)
+            if case let .palette(colors) = listing.kind {
+                HStack(spacing: 2) {
+                    ForEach(colors.prefix(5), id: \.self) { hex in
+                        ColorSwatch(hex: hex, size: 10, cornerRadius: 2)
+                    }
+                }
+                .accessibilityHidden(true)
+            }
+            Text(listing.title)
+                .font(.appCalloutEmphasis)
+                .foregroundStyle(Color.appPrimaryText)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text("\(vm.virtualListingContents.count)")
+                .font(.appMicro)
+                .foregroundStyle(Color.appMuted)
+                .padding(.horizontal, AppSpacing.xs)
+                .padding(.vertical, AppSpacing.xxs)
+                .background(Capsule().fill(Color.appElevatedSurface))
+                .accessibilityLabel("\(vm.virtualListingContents.count) items")
+            Button {
+                vm.closeVirtualListing()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.appIcon(9, weight: .semibold))
+            }
+            .buttonStyle(AppSegmentButtonStyle(width: 20, height: 20))
+            .help("Close \(listing.title)")
+            .accessibilityLabel("Close \(listing.title)")
+        }
+        .padding(.leading, AppSpacing.sm)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(listing.title)
     }
 }
 

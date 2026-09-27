@@ -372,6 +372,13 @@ struct MetadataPanelView: View {
                         }
                     }
 
+                    if let path = entry.sourcePath, VisualSearchEligibility.isVisual(path) {
+                        detailCard(title: "Dominant Colours") {
+                            DominantColorsSection(path: path)
+                                .id(path)
+                        }
+                    }
+
                     fileInfoCard(meta)
 
                     if !entry.embeddedMetadata.isEmpty {

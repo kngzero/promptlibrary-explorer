@@ -7,7 +7,11 @@ import SwiftUI
 /// settings sidebar is a fixed-width index that should never auto-collapse,
 /// slide under the titlebar, or zero out the page header as the window narrows.
 struct SettingsView: View {
-    @State private var selection: SettingsPage = .appearance
+    /// Persisted, so the window reopens on the last page, and so other views can
+    /// deep-link a page by writing `SettingsView.selectedPageKey` before opening.
+    @AppStorage(SettingsView.selectedPageKey) private var selection: SettingsPage = .appearance
+
+    static let selectedPageKey = "settings.selectedPage"
 
     private let sidebarWidth: CGFloat = 210
 

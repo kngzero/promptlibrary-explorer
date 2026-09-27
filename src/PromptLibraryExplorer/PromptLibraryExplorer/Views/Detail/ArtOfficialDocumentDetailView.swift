@@ -92,6 +92,14 @@ struct ArtOfficialDocumentDetailView: View {
                     .font(.appFootnote)
                     .foregroundStyle(Color.appMuted)
                     .textSelection(.enabled)
+                Button {
+                    vm.findImagesMatchingPalette(Array(palette.prefix(5)), title: "Matching \(fileURL.lastPathComponent) palette")
+                } label: {
+                    Label("Find Images Matching Palette", systemImage: "sparkle.magnifyingglass")
+                        .font(.appCaption)
+                }
+                .buttonStyle(AppLabeledButtonStyle(height: 24, horizontalPadding: AppSpacing.md))
+                .help("Rank images \(vm.visualScopeDescription) by how well they match this board's palette")
             }
         }
 

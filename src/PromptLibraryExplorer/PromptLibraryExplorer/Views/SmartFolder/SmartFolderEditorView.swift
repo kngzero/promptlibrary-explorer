@@ -6,12 +6,19 @@ struct SmartFolderEditorView: View {
 
     @State var folder: SmartFolder
     @State private var isLoadingPromptData = false
+    /// Dominant-colour rule being edited (mirrored into `folder.criteria.dominantColor`).
+    @State private var ruleColors: [String] = []
+    @State private var ruleTolerance: Double = ColorFilter.defaultTolerance
+    @State private var colorRuleOn = false
     let isNew: Bool
     var onSave: (SmartFolder) -> Void
 
     init(folder: SmartFolder? = nil, onSave: @escaping (SmartFolder) -> Void) {
         let f = folder ?? SmartFolder(name: "", criteria: SmartFolderCriteria())
         _folder = State(initialValue: f)
+        _ruleColors = State(initialValue: f.criteria.dominantColor?.palette ?? [])
+        _ruleTolerance = State(initialValue: f.criteria.dominantColor?.tolerance ?? ColorFilter.defaultTolerance)
+        _colorRuleOn = State(initialValue: f.criteria.dominantColor != nil)
         self.isNew = folder == nil
         self.onSave = onSave
     }
@@ -172,6 +179,31 @@ struct SmartFolderEditorView: View {
                         }
                     }
 
+                    // Dominant colour (visual index)
+                    VStack(alignment: .leading, spacing: AppSpacing.md) {
+                        Text("Dominant Colour")
+                            .font(.appHeadline)
+                            .foregroundStyle(Color.appMuted)
+                        EditorCheckbox(title: "Dominant colours match a palette", isOn: Binding(
+                            get: { colorRuleOn },
+                            set: { isOn in
+                                colorRuleOn = isOn
+                                if isOn, ruleColors.isEmpty {
+                                    ruleColors = vm.filterConfig.colorFilter?.palette ?? []
+                                    ruleTolerance = vm.filterConfig.colorFilter?.tolerance ?? vm.rememberedColorTolerance
+                                }
+                                syncColorRule()
+                            }
+                        ))
+                        if colorRuleOn {
+                            PaletteFieldsEditor(colors: $ruleColors, tolerance: $ruleTolerance, onCommit: syncColorRule)
+                                .padding(.leading, AppSpacing.xl)
+                            Text("Uses the colours found by the background visual index; files it hasn't reached yet don't match.")
+                                .font(.appCaption)
+                                .foregroundStyle(Color.appMuted)
+                        }
+                    }
+
                     // Date Range
                     VStack(alignment: .leading, spacing: AppSpacing.sm) {
                         Text("Modified Date")
@@ -218,6 +250,16 @@ struct SmartFolderEditorView: View {
             await vm.ensurePromptIndexForCurrentListing()
             isLoadingPromptData = false
         }
+        .task(id: colorRuleOn) {
+            // The live match count needs the listing's dominant colours.
+            if colorRuleOn { vm.loadListingDominantColorsIfNeeded(force: true) }
+        }
+    }
+
+    private func syncColorRule() {
+        folder.criteria.dominantColor = colorRuleOn
+            ? ColorFilter(palette: ruleColors, tolerance: ruleTolerance)
+            : nil
     }
 
     // MARK: - Live count

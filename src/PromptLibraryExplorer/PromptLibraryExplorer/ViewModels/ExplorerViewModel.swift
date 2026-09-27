@@ -183,10 +183,18 @@ final class ExplorerViewModel {
 
     // Sort & Filter
     var sortConfig = SortConfig() {
-        didSet { invalidateSortedFolderContents() }
+        didSet {
+            // Picking a sort in a virtual listing replaces its similarity ranking
+            // (Sort ▸ Similarity brings it back).
+            if activeVirtualListing != nil, virtualListingRanked { virtualListingRanked = false }
+            invalidateSortedFolderContents()
+        }
     }
     var filterConfig = FilterConfig() {
-        didSet { invalidateProcessedFolderContents() }
+        didSet {
+            invalidateProcessedFolderContents()
+            if filterConfig.colorFilter != oldValue.colorFilter { loadListingDominantColorsIfNeeded() }
+        }
     }
     var searchQuery = "" {
         didSet { invalidateProcessedFolderContents() }
@@ -362,6 +370,7 @@ final class ExplorerViewModel {
             if groupBy.needsGenerationParameters {
                 loadListingPromptDataIfNeeded(force: true)
             }
+            if groupBy == .colorFamily { loadListingDominantColorsIfNeeded() }
         }
     }
     /// Generation parameters for files in the current listing, filled from the
@@ -414,6 +423,62 @@ final class ExplorerViewModel {
         didSet { invalidateSortedFolderContents() }
     }
 
+    // Virtual listings (More Like This, palette matches, a Similar Images group)
+    /// When set, the listing is these ranked files instead of the folder's.
+    /// Mutually exclusive with `activeCollectionID` (see `ListingModeState`).
+    var activeVirtualListing: VirtualListing? {
+        didSet {
+            guard activeVirtualListing != oldValue else { return }
+            invalidateSortedFolderContents()
+        }
+    }
+    /// Existing files of the virtual listing, in rank order.
+    var virtualListingContents: [FileEntry] = [] {
+        didSet { invalidateSortedFolderContents() }
+    }
+    /// Rank order (true) or the regular sort (false) for a virtual listing.
+    var virtualListingRanked = true {
+        didSet {
+            guard virtualListingRanked != oldValue else { return }
+            invalidateSortedFolderContents()
+        }
+    }
+
+    // Visual search
+    var similarImagesOpen = false
+    /// Find Similar Images results; kept across openings of the sheet.
+    let similarImages = SimilarImagesModel()
+    /// This Folder / Whole Library for every visual search (persisted).
+    var visualSearchScope: VisualSearchScopeChoice = .folder {
+        didSet {
+            guard visualSearchScope != oldValue else { return }
+            settings.visualSearchScope = visualSearchScope.rawValue
+        }
+    }
+    /// Filter ▸ Colour… popover (anchored to the toolbar's Filter menu).
+    var colorFilterPopoverOpen = false
+    /// Appearance: thin dominant-colour strip on grid tiles.
+    var showTileColorStrip = false {
+        didSet {
+            guard showTileColorStrip != oldValue else { return }
+            settings.showTileColorStrip = showTileColorStrip
+            loadListingDominantColorsIfNeeded()
+        }
+    }
+    /// Dominant colours of the listing's files (loaded only while something
+    /// needs them: colour filter / rule, Colour Family grouping, tile strip).
+    var dominantColorsByPath: [String: [DominantColor]] = [:] {
+        didSet {
+            if groupBy == .colorFamily { contentGroupsRevision &+= 1 }
+            if filterConfig.colorFilter != nil || groupBy == .colorFamily
+                || activeSmartFolder?.criteria.dominantColor != nil
+            {
+                invalidateProcessedFolderContents()
+            }
+        }
+    }
+    @ObservationIgnored var dominantColorsTask: Task<Void, Never>?
+
     // Library search
     var librarySearchQuery = ""
     var librarySearchResults: [LibrarySearchHit] = []
@@ -441,6 +506,7 @@ final class ExplorerViewModel {
         didSet {
             invalidateProcessedFolderContents()
             if activeSmartFolderNeedsPromptData { loadListingPromptDataIfNeeded(force: false) }
+            if activeSmartFolder?.criteria.dominantColor != nil { loadListingDominantColorsIfNeeded() }
         }
     }
     var showSmartFolderEditor = false
@@ -508,6 +574,8 @@ final class ExplorerViewModel {
         previewPaneCollapsed = settings.previewPaneCollapsed
         viewMode = BrowserViewMode(rawValue: settings.viewMode) ?? .grid
         groupBy = GroupByField(rawValue: settings.groupBy) ?? .none
+        visualSearchScope = VisualSearchScopeChoice(rawValue: settings.visualSearchScope) ?? .folder
+        showTileColorStrip = settings.showTileColorStrip
         collections = CollectionService.shared.all()
         collectionSets = CollectionService.shared.allSets()
 
@@ -569,7 +637,7 @@ final class ExplorerViewModel {
         settings.previewPaneCollapsed = previewPaneCollapsed
         settings.viewMode = viewMode.rawValue
         settings.groupBy = groupBy.rawValue
-        if activeCollectionID == nil {
+        if isFolderListing {
             settings.lastSelectedFolder = selectedFolderPath?.path ?? ""
             settings.lastSelectedFilePath = primarySelectionPath ?? ""
         }
@@ -629,6 +697,12 @@ final class ExplorerViewModel {
             items = items.filter { config.passesCullFilters(flag: flag(for: $0.path), labelNumber: $0.labelNumber) }
         }
 
+        // Colour filter: files whose dominant colours are near the palette.
+        if let colorFilter = filterConfig.colorFilter {
+            let colors = dominantColorsByPath
+            items = items.filter { PaletteMatcher.matches(colors[$0.path] ?? [], filter: colorFilter) }
+        }
+
         // Tag filter
         if let tagID = filterByTagID {
             let taggedPaths = taggedPaths(for: tagID)
@@ -662,7 +736,10 @@ final class ExplorerViewModel {
         }
 
         let sorted: [FileEntry]
-        if activeCollectionID != nil, sortConfig.field == .custom {
+        if activeVirtualListing != nil, virtualListingRanked {
+            // Similarity rank, most similar first.
+            sorted = virtualListingContents
+        } else if activeCollectionID != nil, sortConfig.field == .custom {
             // Collection order is the custom order in collection mode.
             sorted = collectionContents
         } else {
@@ -709,11 +786,24 @@ final class ExplorerViewModel {
     /// Unsorted, unfiltered entries behind the listing: the active collection's
     /// files, or the selected folder's contents.
     var listingSourceContents: [FileEntry] {
-        activeCollectionID != nil ? collectionContents : folderContents
+        if activeVirtualListing != nil { return virtualListingContents }
+        return activeCollectionID != nil ? collectionContents : folderContents
     }
 
     /// True while the listing shows a collection instead of a folder.
     var isCollectionMode: Bool { activeCollectionID != nil }
+
+    /// True while the listing shows a virtual listing (Similar to …, palette matches…).
+    var isVirtualListingMode: Bool { activeVirtualListing != nil }
+
+    /// True when the listing is the selected folder's own contents (not a
+    /// collection or a virtual listing): folder-only actions need this.
+    var isFolderListing: Bool { activeCollectionID == nil && activeVirtualListing == nil }
+
+    /// Folder / collection / virtual listing, as the pure state machine sees it.
+    var listingModeState: ListingModeState {
+        ListingModeState(collectionID: activeCollectionID, virtualListing: activeVirtualListing)
+    }
 
     var activeCollection: FileCollection? {
         guard let activeCollectionID else { return nil }
@@ -768,7 +858,7 @@ final class ExplorerViewModel {
         }
 
         clearSelection()
-        let leavingCollection = activeCollectionID != nil
+        let leavingCollection = !isFolderListing
         if folderChanged || rootToEstablish != nil || leavingCollection {
             // Stale entries from the previous folder must not stay actionable
             // while the new one is scanned off the main thread.
@@ -777,6 +867,8 @@ final class ExplorerViewModel {
         }
         activeCollectionID = nil
         collectionContents = []
+        activeVirtualListing = nil
+        virtualListingContents = []
         selectedFolderPath = url
         settings.lastSelectedFolder = url.path
         activeSmartFolder = nil
@@ -796,6 +888,11 @@ final class ExplorerViewModel {
         loadListingPromptDataIfNeeded(force: false)
         if let rootToEstablish {
             autoIndexLibraryIfNeeded(root: rootToEstablish)
+            // Visual index: automatic, low priority, incremental — unless the
+            // user stopped it in Settings ▸ Search Index.
+            if VisualIndexController.shared.isEnabled {
+                VisualIndexController.shared.start(root: rootToEstablish)
+            }
         }
         guard await refreshFolderTree() else { return }
         guard generation == navigationGeneration else { return }
@@ -831,7 +928,9 @@ final class ExplorerViewModel {
             await clearParserCaches()
         }
         guard generation == navigationGeneration else { return }
-        if activeCollectionID != nil {
+        if activeVirtualListing != nil {
+            guard await reloadVirtualListingContents() else { return }
+        } else if activeCollectionID != nil {
             guard await reloadCollectionContents() else { return }
         } else {
             guard await refreshFolderContents(showLoading: false) else { return }
@@ -1100,12 +1199,12 @@ final class ExplorerViewModel {
 
     /// False in collection mode or without a folder.
     var canCreateFolder: Bool {
-        activeCollectionID == nil && selectedFolderPath != nil
+        isFolderListing && selectedFolderPath != nil
     }
     var newFolderName = "untitled folder"
 
     func createNewFolder() async {
-        guard activeCollectionID == nil, let parent = selectedFolderPath else {
+        guard isFolderListing, let parent = selectedFolderPath else {
             showToast("No folder selected", type: .error)
             return
         }
@@ -1160,7 +1259,7 @@ final class ExplorerViewModel {
     }
 
     func importExternalFiles(_ urls: [URL]) async {
-        guard activeCollectionID == nil else {
+        guard isFolderListing else {
             showToast("Open a folder to import files into it", type: .info)
             return
         }
@@ -1411,6 +1510,8 @@ final class ExplorerViewModel {
     }
 
     func ensureCustomSortForCurrentFolder() {
+        // A virtual listing has no custom order of its own.
+        if activeVirtualListing != nil { return }
         if let collectionID = activeCollectionID {
             // In collection mode the collection's own order is the custom order;
             // adopt the order currently on screen before switching to it.
@@ -1449,6 +1550,7 @@ final class ExplorerViewModel {
     }
 
     func reorderItems(sourcePaths: [String], targetPath: String, position: ReorderPosition) {
+        if activeVirtualListing != nil { return }
         if activeCollectionID != nil {
             reorderCollectionItems(sourcePaths: sourcePaths, targetPath: targetPath, position: position)
             return
@@ -1824,6 +1926,7 @@ final class ExplorerViewModel {
     /// starting a build if needed or waiting on the one already running.
     /// Key the prompt index is built for: the active collection, else the folder.
     var promptIndexScope: String? {
+        if let activeVirtualListing { return "virtual:\(activeVirtualListing.id.uuidString)" }
         if let activeCollectionID { return "collection:\(activeCollectionID.uuidString)" }
         return selectedFolderPath?.path
     }
@@ -2100,6 +2203,11 @@ final class ExplorerViewModel {
     // MARK: - Breadcrumbs
 
     var breadcrumbs: [(name: String, url: URL)] {
+        if let listing = activeVirtualListing {
+            // A single crumb, like a collection's.
+            let back = selectedFolderPath ?? explorerRootPath ?? URL(fileURLWithPath: NSHomeDirectory())
+            return [(listing.title, back)]
+        }
         if let collection = activeCollection {
             // A single crumb; clicking it returns to the folder the collection
             // was opened from.
@@ -2414,9 +2522,9 @@ final class ExplorerViewModel {
         }
 
         let scope = promptIndexScope
-        let folderScope = activeCollectionID == nil ? selectedFolderPath?.standardizedFileURL.path : nil
+        let folderScope = isFolderListing ? selectedFolderPath?.standardizedFileURL.path : nil
         func inScope(_ path: String) -> Bool {
-            guard let folderScope else { return true }  // collections: membership follows the file
+            guard let folderScope else { return true }  // collections / virtual listings: membership follows the file
             return (path as NSString).deletingLastPathComponent == folderScope
         }
 
@@ -3122,6 +3230,8 @@ final class ExplorerViewModel {
                 let restoredURL = try FileSystemService.moveEntry(from: record.trashedURL, to: record.originalURL).standardizedFileURL
                 restoredURLs.append(restoredURL)
                 restoreMetadata(record.metadata, from: record.originalURL.path, to: restoredURL.path)
+                // Back from the Trash: the visual index picks the file up again.
+                VisualIndexController.shared.invalidate(paths: [restoredURL.path])
             } catch {
                 failedRecords.append(record)
                 if firstError == nil { firstError = error }
@@ -3256,6 +3366,10 @@ final class ExplorerViewModel {
         CollectionService.shared.migratePaths(from: oldPath, to: newPath)
         collections = CollectionService.shared.all()
         enqueueLibraryIndexMutation { await LibraryIndexService.shared.movePath(from: oldPath, to: newPath) }
+        VisualIndexController.shared.invalidate(paths: [oldPath, newPath])
+        if var listing = activeVirtualListing, listing.migratePaths(from: oldPath, to: newPath) {
+            activeVirtualListing = listing
+        }
         if let migrated = MetadataPathKeys.migratingKeys(of: parametersByPath, from: oldPath, to: newPath) {
             parametersByPath = migrated
         }
@@ -3392,6 +3506,7 @@ final class ExplorerViewModel {
         }
 
         enqueueLibraryIndexMutation { await LibraryIndexService.shared.removeEntries(under: path) }
+        VisualIndexController.shared.invalidate(paths: [path])
 
         // Parsed prompt data belongs to the file that left, not to whatever
         // takes its path next.
@@ -3763,7 +3878,7 @@ extension ExplorerViewModel {
         // `groupedContiguously`), so every group's indices form one ascending run.
         let items = processedFolderContents
         let field = groupBy
-        let keyer = GroupKeyer(field: field, flags: flagBook)
+        let keyer = GroupKeyer(field: field, flags: flagBook, colors: dominantColorsByPath)
         var order: [String] = []
         var titles: [String: String] = [:]
         var indicesByKey: [String: [Int]] = [:]
@@ -3794,7 +3909,7 @@ extension ExplorerViewModel {
     /// Stable regrouping of `items` for `groupBy`: groups in order of their first
     /// item ("Unknown" last), each group's items together in their sorted order.
     fileprivate func groupedContiguously(_ items: [FileEntry]) -> [FileEntry] {
-        let keyer = GroupKeyer(field: groupBy, flags: flagBook)
+        let keyer = GroupKeyer(field: groupBy, flags: flagBook, colors: dominantColorsByPath)
         var order: [String] = []
         var buckets: [String: [FileEntry]] = [:]
         for item in items {
@@ -3815,12 +3930,14 @@ extension ExplorerViewModel {
         static let unknownKey = "__unknown__"
         let field: GroupByField
         let flags: FlagBook
+        let colors: [String: [DominantColor]]
         let dayFormatter: DateFormatter
         let keyFormatter: DateFormatter
 
-        init(field: GroupByField, flags: FlagBook) {
+        init(field: GroupByField, flags: FlagBook, colors: [String: [DominantColor]] = [:]) {
             self.field = field
             self.flags = flags
+            self.colors = colors
             dayFormatter = DateFormatter()
             dayFormatter.dateStyle = .medium
             dayFormatter.timeStyle = .none
@@ -3864,6 +3981,13 @@ extension ExplorerViewModel {
                 guard label != .none else { return (Self.unknownKey, "No Label") }
                 groupKey = "label\(label.rawValue)"
                 title = label.title
+            case .colorFamily:
+                // Not yet indexed (or no colours: folders, audio…) forms the last group.
+                guard let family = ColorFamily.of(colors[item.path] ?? []) else {
+                    return (Self.unknownKey, "No Colour Data")
+                }
+                groupKey = "colour\(family.rawValue)"
+                title = family.title
             }
 
             guard let groupKey else { return (Self.unknownKey, "Unknown") }
@@ -3882,6 +4006,9 @@ extension ExplorerViewModel {
     func resetListingPromptData() {
         libraryParametersTask?.cancel()
         libraryParametersTask = nil
+        dominantColorsTask?.cancel()
+        dominantColorsTask = nil
+        if !dominantColorsByPath.isEmpty { dominantColorsByPath = [:] }
         promptDataCompleteScope = nil
         if !parametersByPath.isEmpty { parametersByPath = [:] }
         if !promptTextByPath.isEmpty { promptTextByPath = [:] }
@@ -3892,6 +4019,7 @@ extension ExplorerViewModel {
     /// and — when grouping or the active smart folder needs prompt data — builds
     /// the per-listing prompt index, which captures prompts and parameters too.
     func loadListingPromptDataIfNeeded(force: Bool) {
+        loadListingDominantColorsIfNeeded()
         let paths = listingSourceContents.filter { !$0.isDirectory }.map(\.path)
         guard !paths.isEmpty, let scope = promptIndexScope else { return }
 
@@ -3934,7 +4062,8 @@ extension ExplorerViewModel {
             promptByPath: promptTextByPath,
             negativeByPath: negativePromptByPath,
             modelByPath: modelByPath,
-            flags: flagBook.flags
+            flags: flagBook.flags,
+            dominantColorsByPath: dominantColorsByPath
         )
     }
 
@@ -3948,6 +4077,9 @@ extension ExplorerViewModel {
         clearSelection()
         resetListingPromptData()
         activeSmartFolder = nil
+        // A collection replaces any virtual listing (ListingModeState.openCollection).
+        activeVirtualListing = nil
+        virtualListingContents = []
 
         guard let id, collections.contains(where: { $0.id == id }) else {
             activeCollectionID = nil
@@ -3993,6 +4125,123 @@ extension ExplorerViewModel {
         collectionContents = entries
         isLoadingFolder = false
         return true
+    }
+
+    // MARK: Virtual listings
+
+    /// Shows `listing` (ranked paths) in place of the folder or collection.
+    /// The files are read first and swapped in at once, so an open lightbox
+    /// stays on its file when that file is part of the new listing (More Like
+    /// This from the lightbox lists the reference image first).
+    ///
+    /// - Parameters:
+    ///   - selecting: path to select (and show in an open lightbox) afterwards.
+    ///   - selectAll: select every listed file afterwards.
+    ///   - openLightboxAt: path to open in the lightbox afterwards.
+    func openVirtualListing(
+        _ listing: VirtualListing,
+        selecting: String? = nil,
+        selectAll: Bool = false,
+        openLightboxAt: String? = nil
+    ) {
+        var state = listingModeState
+        state.openVirtual(listing)
+        guard let resolved = state.virtualListing else { return }
+
+        navigationGeneration &+= 1
+        let generation = navigationGeneration
+        let paths = resolved.paths
+        Task {
+            let entries = await Self.loadVirtualListingEntries(paths)
+            guard generation == self.navigationGeneration else { return }
+            self.applyVirtualListing(resolved, entries: entries)
+
+            if let target = openLightboxAt ?? selecting, self.selectPath(target) {
+                if openLightboxAt != nil || self.lightboxOpen,
+                   let index = self.processedFolderContents.firstIndex(where: { $0.path == target }),
+                   FileHelpers.isPreviewable(self.processedFolderContents[index])
+                {
+                    self.lightboxIndex = index
+                    self.lightboxOpen = true
+                }
+            } else if selectAll {
+                self.selectAllItems()
+            }
+            self.loadListingPromptDataIfNeeded(force: false)
+            self.refreshPromptSearchIfNeeded()
+        }
+    }
+
+    /// Swaps the listing over in one step (no intermediate remaps).
+    private func applyVirtualListing(_ listing: VirtualListing, entries: [FileEntry]) {
+        cancelPromptIndexBuild()
+        clearSelection()
+        resetListingPromptData()
+        activeSmartFolder = nil
+
+        isRemappingSelection = true
+        activeCollectionID = nil
+        collectionContents = []
+        virtualListingRanked = true
+        virtualListingContents = entries
+        activeVirtualListing = listing
+        isRemappingSelection = false
+        invalidateSortedFolderContents()
+        isLoadingFolder = false
+    }
+
+    /// Closes the virtual listing and returns to where it was opened from
+    /// (the folder, or the collection that was open), reselecting the
+    /// reference file of a More Like This listing.
+    func closeVirtualListing() {
+        guard let listing = activeVirtualListing else { return }
+        var state = listingModeState
+        state.closeVirtual()
+
+        if let id = state.collectionID, collections.contains(where: { $0.id == id }) {
+            virtualListingContents = []
+            activeVirtualListing = nil
+            openCollection(id)
+            return
+        }
+
+        navigationGeneration &+= 1
+        let generation = navigationGeneration
+        cancelPromptIndexBuild()
+        clearSelection()
+        resetListingPromptData()
+        virtualListingContents = []
+        activeVirtualListing = nil
+        let source = listing.sourcePath
+        Task {
+            guard await self.refreshFolderContents(showLoading: self.folderContents.isEmpty) else { return }
+            guard generation == self.navigationGeneration else { return }
+            self.loadListingPromptDataIfNeeded(force: false)
+            self.refreshPromptSearchIfNeeded()
+            if let source { self.selectPath(source) }
+        }
+    }
+
+    /// Re-reads the virtual listing's files (missing ones are skipped, so files
+    /// put back from the Trash reappear). Returns false when stale.
+    @discardableResult
+    func reloadVirtualListingContents() async -> Bool {
+        guard let listing = activeVirtualListing else { return false }
+        let generation = navigationGeneration
+        let entries = await Self.loadVirtualListingEntries(listing.paths)
+        guard generation == navigationGeneration, activeVirtualListing?.id == listing.id else { return false }
+        virtualListingContents = entries
+        return true
+    }
+
+    nonisolated static func loadVirtualListingEntries(_ paths: [String]) async -> [FileEntry] {
+        await Task.detached(priority: .userInitiated) {
+            var seen = Set<String>()
+            return paths.compactMap { path -> FileEntry? in
+                guard seen.insert(path).inserted else { return nil }
+                return FileEntry.load(from: URL(fileURLWithPath: path))
+            }
+        }.value
     }
 
     func createCollection(named name: String, withSelection: Bool, inSet setID: UUID? = nil) {
@@ -4236,7 +4485,7 @@ extension GroupByField {
     var needsGenerationParameters: Bool {
         switch self {
         case .model, .sampler, .seed: return true
-        case .none, .day, .type, .flag, .label: return false
+        case .none, .day, .type, .flag, .label, .colorFamily: return false
         }
     }
 }

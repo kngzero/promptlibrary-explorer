@@ -186,6 +186,7 @@ extension ExplorerViewModel {
         }
         if let next = patched(folderContents) { folderContents = next }
         if let next = patched(collectionContents) { collectionContents = next }
+        if let next = patched(virtualListingContents) { virtualListingContents = next }
     }
 
     // MARK: Rejects

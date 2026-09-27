@@ -13,6 +13,7 @@ extension ExplorerViewModel {
             || batchMetadataEditorOpen || metadataEditorPath != nil
             || deleteConfirmationRequest != nil || isShowingNewFolderPrompt
             || batchRenameOpen || librarySearchOpen || duplicatesOpen || snippetsOpen
+            || similarImagesOpen
     }
 
     /// `isAnyModalOpen`, plus AppKit modal sessions / sheets the model doesn't
@@ -27,7 +28,7 @@ extension ExplorerViewModel {
     /// True when any search, filter, tag, smart folder or collection narrows the listing.
     var hasActiveFilters: Bool {
         !searchQuery.isEmpty || filterConfig != FilterConfig() || filterByTagID != nil
-            || activeSmartFolder != nil || activeCollectionID != nil
+            || activeSmartFolder != nil || activeCollectionID != nil || activeVirtualListing != nil
     }
 
     func clearAllFilters() {
@@ -40,6 +41,7 @@ extension ExplorerViewModel {
         if filterByTagID != nil { filterByTagID = nil }
         if activeSmartFolder != nil { activeSmartFolder = nil }
         if activeCollectionID != nil { openCollection(nil) }
+        if activeVirtualListing != nil { closeVirtualListing() }
     }
 
     /// Selected files (not folders) in listing order.
@@ -112,7 +114,7 @@ extension ExplorerViewModel {
 
     func revealSelectionInFinder() {
         let urls = selectedItems.map(\.url)
-        if urls.isEmpty, let folder = selectedFolderPath, activeCollectionID == nil {
+        if urls.isEmpty, let folder = selectedFolderPath, isFolderListing {
             NSWorkspace.shared.activateFileViewerSelecting([folder])
             return
         }
@@ -255,7 +257,7 @@ extension ExplorerViewModel {
 
         let root = explorerRootPath?.standardizedFileURL
         let insideRoot = root.map { parent.path == $0.path || parent.path.hasPrefix($0.path + "/") } ?? false
-        if activeCollectionID != nil || selectedFolderPath?.standardizedFileURL.path != parent.path {
+        if !isFolderListing || selectedFolderPath?.standardizedFileURL.path != parent.path {
             await selectFolder(parent, setAsRoot: !insideRoot)
             if !insideRoot { recordRecentFolderIfNeeded(parent) }
         }
@@ -284,7 +286,7 @@ extension ExplorerViewModel {
 
         let root = explorerRootPath?.standardizedFileURL
         let insideRoot = root.map { target.path == $0.path || target.path.hasPrefix($0.path + "/") } ?? false
-        guard activeCollectionID != nil || selectedFolderPath?.standardizedFileURL.path != target.path else { return }
+        guard !isFolderListing || selectedFolderPath?.standardizedFileURL.path != target.path else { return }
         await selectFolder(target, setAsRoot: !insideRoot)
         if !insideRoot { recordRecentFolderIfNeeded(target) }
     }

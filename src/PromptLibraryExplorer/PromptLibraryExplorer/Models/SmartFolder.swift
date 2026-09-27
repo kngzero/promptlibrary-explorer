@@ -40,6 +40,8 @@ struct SmartFolderCriteria: Codable, Hashable {
     var flag: FlagFilter = .all
     /// Finder label numbers, any of (0 = no label). Empty = no rule.
     var labels: Set<Int> = []
+    /// Dominant colours near this palette (from the visual index). Nil = no rule.
+    var dominantColor: ColorFilter?
     var matchMode: SmartFolderMatchMode = .all
 
     typealias MatchMode = SmartFolderMatchMode
@@ -56,12 +58,14 @@ struct SmartFolderCriteria: Codable, Hashable {
             || requiresNegativePrompt
             || flag != .all
             || !labels.isEmpty
+            || dominantColor != nil
     }
 
     enum CodingKeys: String, CodingKey {
         case searchQuery, fileTypes, minRating, dateRange
         case tagIDs, favoritesOnly, modelContains, requiresPrompt, requiresNegativePrompt, matchMode
         case flag, labels
+        case dominantColor
     }
 }
 
@@ -93,6 +97,8 @@ extension SmartFolderCriteria {
         if let rawLabels = try? c.decodeIfPresent([Int].self, forKey: .labels) {
             labels = Set(rawLabels.filter { FinderLabel(rawValue: $0) != nil })
         }
+        // A malformed palette drops the rule rather than the whole folder.
+        dominantColor = (try? c.decodeIfPresent(ColorFilter.self, forKey: .dominantColor)) ?? nil
     }
 }
 

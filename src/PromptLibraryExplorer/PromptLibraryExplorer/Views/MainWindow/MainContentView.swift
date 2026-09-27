@@ -60,6 +60,10 @@ struct MainContentView: View {
             SimilarPromptsView()
                 .environment(vm)
         }
+        .sheet(isPresented: $vm.similarImagesOpen) {
+            SimilarImagesView()
+                .environment(vm)
+        }
         .sheet(isPresented: $vm.batchRenameOpen) {
             BatchRenameView()
                 .environment(vm)
@@ -270,6 +274,14 @@ struct MainContentView: View {
             guard vm.activePane == .content, !vm.selectedItems.isEmpty else { return false }
             // A held key must not flag a whole folder by auto-advancing.
             if !event.isARepeat { applyCullKey(action) }
+            return true
+        }
+
+        // More Like This: bare M, owned by this monitor (and the lightbox's).
+        // The Library menu shows "(M)" in the title but binds no key equivalent.
+        if VisualSearchKeys.isMoreLikeThis(event) {
+            guard vm.activePane == .content, vm.canShowMoreLikeThis else { return false }
+            if !event.isARepeat { vm.showMoreLikeThisForTarget() }
             return true
         }
 

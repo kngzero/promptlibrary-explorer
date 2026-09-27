@@ -103,6 +103,13 @@ struct LightboxView: View {
                 if !event.isARepeat { applyCullKey(action) }
                 return true
             }
+            // Bare M: More Like This for the item shown. The listing switches to
+            // "Similar to …" with this item first, so the lightbox stays on it.
+            if VisualSearchKeys.isMoreLikeThis(event) {
+                guard let item = currentItem, VisualSearchEligibility.isVisual(item.name) else { return false }
+                if !event.isARepeat { vm.showMoreLikeThis(for: item) }
+                return true
+            }
             // Mood / Story: ←/→ step inside the document; ↑/↓ or ⌥←/⌥→ move between files.
             if currentDocument != nil, handleDocumentKey(event) { return true }
             switch event.keyCode {

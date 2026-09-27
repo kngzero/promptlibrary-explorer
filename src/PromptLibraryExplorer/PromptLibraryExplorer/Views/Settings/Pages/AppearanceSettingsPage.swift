@@ -25,5 +25,16 @@ struct AppearanceSettingsPage: View {
 
             SettingsFootnote("System follows your Mac's appearance setting and switches automatically. Light mode mirrors the dark neutrals into lighter counterparts while keeping the app accent intact.")
         }
+
+        SettingsCard(title: "Grid", icon: "square.grid.2x2") {
+            SettingsToggleRow(
+                title: "Show a dominant-colour strip on grid tiles",
+                detail: "A thin bar along the bottom of each thumbnail with the colours the visual index found, each as wide as its share of the image. Files not indexed yet have no strip.",
+                isOn: Binding(
+                    get: { vm.showTileColorStrip },
+                    set: { vm.showTileColorStrip = $0 }
+                )
+            )
+        }
     }
 }

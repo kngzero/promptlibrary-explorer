@@ -195,7 +195,7 @@ extension ExplorerViewModel {
 
     /// Re-reads the listing when `folder` is the folder on screen, so new files appear.
     private func refreshIfShowing(_ folder: URL) async {
-        guard activeCollectionID == nil,
+        guard isFolderListing,
               let current = selectedFolderPath?.standardizedFileURL.path,
               current == folder.standardizedFileURL.path
         else { return }
@@ -222,7 +222,7 @@ extension ExplorerViewModel {
     /// File ▸ Send to Mood… / Send to Story… and the grid context menu.
     func sendToArtOfficial(_ target: ArtOfficialSendTarget) {
         let title = ArtOfficialSendBuilder.defaultTitle(
-            activeCollection?.name ?? selectedFolderPath?.lastPathComponent,
+            activeVirtualListing?.title ?? activeCollection?.name ?? selectedFolderPath?.lastPathComponent,
             fallback: target == .mood ? "Mood Board" : "Story"
         )
         send(sendToSourceItems, title: title, to: target)
@@ -262,7 +262,7 @@ extension ExplorerViewModel {
             title: title,
             fileExtension: target.fileKind.fileExtension
         )
-        if activeCollectionID == nil, let folder = selectedFolderPath {
+        if isFolderListing, let folder = selectedFolderPath {
             panel.directoryURL = folder
         }
         guard panel.runModal() == .OK, var destination = panel.url else { return }

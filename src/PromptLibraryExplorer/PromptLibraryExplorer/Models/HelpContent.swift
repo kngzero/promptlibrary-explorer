@@ -88,6 +88,21 @@ enum HelpContent {
                 "Story projects get one shot per image, named after the file, with the file's prompt as the description and its tags.",
                 "When it's done you can open the new file in Mood or Story, or reveal it in Finder."
             ]
+        ),
+        HelpFileTypeDescription(
+            id: "visual-search",
+            extensionLabel: "Visual Search",
+            title: "Find Similar Images, More Like This and Colour Search",
+            description: "A background visual index (images and videos — a frame from the middle of each clip) powers searching by look and by colour. It builds automatically when a folder opens; the indicator in the bottom status bar shows its progress, and clicking it gives Pause, Resume and Stop. Settings ▸ Search Index has the same controls and a full rebuild.",
+            highlights: [
+                "Library ▸ Find Similar Images… groups exact copies (identical files, labelled Exact) and near-duplicates (labelled Similar) in This Folder or the Whole Library, with a strictness slider and an Include Videos switch. Each file shows its resolution, size and folder as plain information.",
+                "Every file is kept: nothing in a group is marked, pre-selected or suggested for removal — a larger copy is often an upscale of the master. Per group you can Compare (steps through the group in the lightbox), Select in Grid, Add to Collection… or Reveal in Finder; double-click a thumbnail to open it in the lightbox.",
+                "More Like This (press M in the grid or lightbox, or use the context menu, the details panel or the Library menu) lists the files that look most like the selected one, most similar first, as \"Similar to <name>\". Library ▸ Visual Search Scope chooses This Folder or Whole Library for every visual search.",
+                "A virtual listing works like a collection: its name and a close button replace the breadcrumbs; flags, ratings, labels, collections and Send to all work on it; Sort ▸ Similarity restores the ranking. Close it (or press Cmd ↑) to go back.",
+                "Filter ▸ Colour… filters the listing by 1–3 colours (swatches, a hex value or the colour panel) with a tolerance; the active filter shows in the status bar. Find Matching ranks images by the palette instead.",
+                "The details panel shows each image's dominant colours: click a swatch to filter by it. Find Images Matching Palette (context menu, details panel) searches with a Mood board's palette or an image's own colours.",
+                "Group By ▸ Colour Family groups by the main colour's hue (Red … Pink, plus Neutral, Dark and Light); smart folders can require a dominant colour; Settings ▸ Appearance can show a thin colour strip on grid tiles."
+            ]
         )
     ]
 
@@ -136,7 +151,7 @@ enum HelpContent {
             items: [
                 HelpShortcutItem(id: "nav-back", keys: ["Cmd", "["], description: "Go back to the previously visited folder. Cmd and ← also works."),
                 HelpShortcutItem(id: "nav-forward", keys: ["Cmd", "]"], description: "Go forward again after going back. Cmd and → also works."),
-                HelpShortcutItem(id: "nav-up", keys: ["Cmd", "↑"], description: "Go to the enclosing folder (or leave a collection)."),
+                HelpShortcutItem(id: "nav-up", keys: ["Cmd", "↑"], description: "Go to the enclosing folder (or leave a collection or a Similar to … listing)."),
                 HelpShortcutItem(id: "nav-drop-breadcrumb", keys: ["Drag", "→ Breadcrumbs"], description: "Drop a folder (from the grid or Finder) on the breadcrumb bar to open it. Drop a file to open its folder with the file selected. Nothing is moved or copied."),
                 HelpShortcutItem(id: "command-palette", keys: ["Cmd", "K"], description: "Open or close the command palette for folders, files, smart folders, tags, and actions.")
             ]
@@ -153,7 +168,8 @@ enum HelpContent {
                 HelpShortcutItem(id: "content-preview", keys: ["Space"], description: "Open the selected previewable item in the lightbox."),
                 HelpShortcutItem(id: "content-parent", keys: ["Delete / Backspace"], description: "Navigate up one folder."),
                 HelpShortcutItem(id: "content-delete", keys: ["Shift", "Delete"], description: "Open permanent delete confirmation for the current selection."),
-                HelpShortcutItem(id: "content-clear", keys: ["Esc"], description: "Clear the current content selection.")
+                HelpShortcutItem(id: "content-clear", keys: ["Esc"], description: "Clear the current content selection."),
+                HelpShortcutItem(id: "content-more-like-this", keys: ["M"], description: "More Like This: list the files that look most like the selected image or video (This Folder or Whole Library, per Library ▸ Visual Search Scope).")
             ]
         ),
         HelpShortcutGroup(
@@ -176,7 +192,8 @@ enum HelpContent {
                 HelpShortcutItem(id: "lightbox-close-space", keys: ["Space"], description: "Play or pause video and audio; otherwise close the lightbox."),
                 HelpShortcutItem(id: "lightbox-nav", keys: ["←", "→"], description: "Move to the previous or next previewable item. On a Mood board or Story project they step through its images or shots instead."),
                 HelpShortcutItem(id: "lightbox-nav-files", keys: ["↑", "↓"], description: "Move to the previous or next previewable item, including from inside a Mood board or Story project. Option ← / Option → do the same."),
-                HelpShortcutItem(id: "lightbox-doc-back", keys: ["Esc"], description: "While stepping through a Mood board or Story project, return to the whole board or contact sheet (press again to close).")
+                HelpShortcutItem(id: "lightbox-doc-back", keys: ["Esc"], description: "While stepping through a Mood board or Story project, return to the whole board or contact sheet (press again to close)."),
+                HelpShortcutItem(id: "lightbox-more-like-this", keys: ["M"], description: "More Like This for the item shown; the lightbox stays on it and ← / → step through the most similar files.")
             ]
         ),
         HelpShortcutGroup(

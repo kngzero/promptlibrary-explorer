@@ -69,6 +69,15 @@ struct ContentItemContextMenu: View {
             ArtOfficialItemMenuItems(item: item, kind: kind)
         }
 
+        // Visual search (inspection only: opens a ranked listing, changes nothing)
+        if !item.isDirectory, VisualSearchEligibility.hasPalette(item.name) {
+            Divider()
+            if VisualSearchEligibility.isVisual(item.name) {
+                Button("More Like This") { vm.showMoreLikeThis(for: item) }
+            }
+            Button("Find Images Matching Palette") { vm.findImagesMatchingPalette(of: item) }
+        }
+
         Divider()
 
         // Copy

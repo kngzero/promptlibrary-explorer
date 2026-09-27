@@ -89,6 +89,8 @@ enum GroupByField: String, CaseIterable, Identifiable {
     case type
     case flag
     case label
+    /// Hue bucket of the first dominant colour (from the visual index).
+    case colorFamily
 
     var id: String { rawValue }
 
@@ -102,6 +104,7 @@ enum GroupByField: String, CaseIterable, Identifiable {
         case .type: return "Kind"
         case .flag: return "Flag"
         case .label: return "Label"
+        case .colorFamily: return "Colour Family"
         }
     }
 }
@@ -164,11 +167,15 @@ struct FilterConfig: Equatable {
     /// Finder label numbers to show (any of; 0 = no label). Empty = no filter.
     var labelFilter: Set<Int> = []
 
+    /// Dominant-colour filter (1–3 colours + tolerance). Nil = no filter.
+    var colorFilter: ColorFilter?
+
     var activeCount: Int {
         hiddenFileTypes.subtracting(Self.defaultHiddenFileTypes).count
             + (filterMinRating > 0 ? 1 : 0)
             + (flagFilter != .all ? 1 : 0)
             + (labelFilter.isEmpty ? 0 : 1)
+            + (colorFilter == nil ? 0 : 1)
     }
 
     /// True when the flag and label filters let a file with these values through.

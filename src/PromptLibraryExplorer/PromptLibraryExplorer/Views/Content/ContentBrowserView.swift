@@ -64,6 +64,24 @@ struct ContentBrowserView: View {
             }
         }
         .background(Color.appBackground)
+        // Filter ▸ Colour…: anchored under the toolbar's trailing controls here,
+        // since the Filter toolbar item may be moved or removed by customization.
+        .overlay(alignment: .topTrailing) {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .padding(.trailing, 180)
+                .popover(
+                    isPresented: Binding(
+                        get: { vm.colorFilterPopoverOpen },
+                        set: { vm.colorFilterPopoverOpen = $0 }
+                    ),
+                    arrowEdge: .top
+                ) {
+                    ColorFilterEditor { vm.colorFilterPopoverOpen = false }
+                        .environment(vm)
+                }
+                .accessibilityHidden(true)
+        }
         // Back/forward, breadcrumbs, view, sort/group/filter, search… live in the
         // window's native toolbar over this column (user-customizable).
         .toolbar(id: BrowserToolbarItemID.toolbar) {
@@ -85,6 +103,10 @@ struct ContentBrowserView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .beginRenameSelection)) { _ in
             beginRenameOfSelection()
+        }
+        // A finished visual-index run brings colours for newly indexed files.
+        .onChange(of: VisualIndexController.shared.lastCompleted) { _, _ in
+            vm.loadListingDominantColorsIfNeeded()
         }
         .alert("New Collection", isPresented: $isShowingNewCollectionPrompt) {
             TextField("Collection name", text: $newCollectionName)
@@ -215,7 +237,19 @@ struct ContentBrowserView: View {
     @ViewBuilder
     private var emptyState: some View {
         let isFocused = vm.activePane == .content
-        if vm.isCollectionMode && vm.listingSourceContents.isEmpty {
+        if let listing = vm.activeVirtualListing, vm.listingSourceContents.isEmpty {
+            EmptyContentStateView(
+                systemImage: listing.systemImage,
+                title: "Nothing left in \u{201C}\(listing.title)\u{201D}",
+                message: "These files were moved or renamed outside the app. Close the listing to go back.",
+                isFocused: isFocused
+            ) {
+                Button("Close Listing") {
+                    vm.closeVirtualListing()
+                }
+                .buttonStyle(AppLabeledButtonStyle())
+            }
+        } else if vm.isCollectionMode && vm.listingSourceContents.isEmpty {
             EmptyContentStateView(
                 systemImage: "rectangle.stack",
                 title: "\(vm.activeCollection?.name ?? "This collection") is empty",
@@ -238,7 +272,7 @@ struct ContentBrowserView: View {
                 Button("Clear Filters", action: clearFilters)
                     .buttonStyle(AppPrimaryButtonStyle(font: .appCalloutEmphasis))
             }
-        } else if vm.selectedFolderPath == nil && !vm.isCollectionMode {
+        } else if vm.selectedFolderPath == nil && vm.isFolderListing {
             EmptyContentStateView(
                 systemImage: "folder.badge.questionmark",
                 title: "No folder open",
@@ -267,7 +301,7 @@ struct ContentBrowserView: View {
     private var filterSummary: String {
         var parts: [String] = []
         if !vm.searchQuery.isEmpty { parts.append("search \u{201C}\(vm.searchQuery)\u{201D}") }
-        if vm.filterConfig != FilterConfig() { parts.append("file type, rating, flag or label filters") }
+        if vm.filterConfig != FilterConfig() { parts.append("file type, rating, flag, label or colour filters") }
         if vm.filterByTagID != nil { parts.append("a tag filter") }
         if let smart = vm.activeSmartFolder { parts.append("smart folder \u{201C}\(smart.name)\u{201D}") }
         guard !parts.isEmpty else { return "Nothing here matches the current filters." }
@@ -280,10 +314,10 @@ struct ContentBrowserView: View {
             || vm.filterByTagID != nil || vm.activeSmartFolder != nil
     }
 
-    /// Clears search / type / tag / smart-folder filters. In a collection this
-    /// keeps the collection open (`clearAllFilters()` would also leave it).
+    /// Clears search / type / tag / smart-folder filters. In a collection or a
+    /// virtual listing this keeps it open (`clearAllFilters()` would also leave it).
     private func clearFilters() {
-        guard vm.isCollectionMode else {
+        guard !vm.isFolderListing else {
             vm.clearAllFilters()
             return
         }
@@ -563,6 +597,13 @@ struct ContentStatusBarView: View {
                 .foregroundStyle(Color.appMuted)
 
             Spacer(minLength: 0)
+
+            // Visual index progress (click for pause / resume / stop).
+            VisualIndexStatusItem()
+
+            if let colorFilter = vm.filterConfig.colorFilter {
+                ColorFilterChip(filter: colorFilter)
+            }
 
             // Active tag filter indicator
             if let tagID = vm.filterByTagID,
@@ -913,6 +954,15 @@ private struct ExplorerItemView: View {
                     FavoritePinBadge(isPinned: vm.isFavorite(path: item.path))
                         .offset(x: 4, y: -6)
                         .allowsHitTesting(false)
+                }
+                .overlay(alignment: .bottom) {
+                    if vm.showTileColorStrip, let colors = vm.dominantColorsByPath[item.path], !colors.isEmpty {
+                        DominantColorBar(colors: colors, height: 4)
+                            .clipShape(Capsule())
+                            .padding(.horizontal, AppSpacing.xs)
+                            .padding(.bottom, AppSpacing.xs)
+                            .allowsHitTesting(false)
+                    }
                 }
                 .overlay(alignment: .topTrailing) {
                     TileCullBadges(
