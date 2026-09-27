@@ -92,11 +92,13 @@ enum HelpContent {
         HelpFileTypeDescription(
             id: "visual-search",
             extensionLabel: "Visual Search",
-            title: "Find Similar Images, More Like This and Colour Search",
+            title: "Similar Images, More Like This and Colour Search",
             description: "A background visual index (images and videos — a frame from the middle of each clip) powers searching by look and by colour. It builds automatically when a folder opens; the indicator in the bottom status bar shows its progress, and clicking it gives Pause, Resume and Stop. Settings ▸ Search Index has the same controls and a full rebuild.",
             highlights: [
-                "Library ▸ Find Similar Images… groups exact copies (identical files, labelled Exact) and near-duplicates (labelled Similar) in This Folder or the Whole Library, with a strictness slider and an Include Videos switch. Each file shows its resolution, size and folder as plain information.",
-                "Every file is kept: nothing in a group is marked, pre-selected or suggested for removal — a larger copy is often an upscale of the master. Per group you can Compare (steps through the group in the lightbox), Select in Grid, Add to Collection… or Reveal in Finder; double-click a thumbnail to open it in the lightbox.",
+                "Library ▸ Similar Images (also in the command palette) turns the main window into the Similar Images page: the sidebar stays, and the browser and details panel make way for it. The left column lists the groups — exact copies (identical files, labelled Exact) and near-duplicates (labelled Similar) — in This Folder or the Whole Library, with a strictness slider, an Include Videos switch and Find. Drag the divider to resize it.",
+                "Select a group to see its files large, side by side, in folder-then-name order, each with its folder, pixel size, file size, date, flag / rating / label and prompt. Hover a file (or right-click it) for Open in Lightbox, Reveal in Finder, More Like This, Copy Prompt and the Flag, Rating and Label menus; the group's header has Select in Browser, Add to Collection… and Open Group as Listing.",
+                "Every file is kept: nothing in a group is marked, pre-selected, ranked or suggested for removal — a larger copy is often an upscale of the master — and the page has no delete button.",
+                "Clicking a folder in the sidebar keeps the page (with This Folder it searches the new folder); a collection or smart folder shows in the browser. Done, Esc or View ▸ Show Browser returns to the browser exactly as you left it; results are remembered, so coming back is instant.",
                 "More Like This (press M in the grid or lightbox, or use the context menu, the details panel or the Library menu) lists the files that look most like the selected one, most similar first, as \"Similar to <name>\". Library ▸ Visual Search Scope chooses This Folder or Whole Library for every visual search.",
                 "A virtual listing works like a collection: its name and a close button replace the breadcrumbs; flags, ratings, labels, collections and Send to all work on it; Sort ▸ Similarity restores the ranking. Close it (or press Cmd ↑) to go back.",
                 "Filter ▸ Colour… filters the listing by 1–3 colours (swatches, a hex value or the colour panel) with a tolerance; the active filter shows in the status bar. Find Matching ranks images by the palette instead.",
@@ -170,6 +172,19 @@ enum HelpContent {
                 HelpShortcutItem(id: "content-delete", keys: ["Shift", "Delete"], description: "Open permanent delete confirmation for the current selection."),
                 HelpShortcutItem(id: "content-clear", keys: ["Esc"], description: "Clear the current content selection."),
                 HelpShortcutItem(id: "content-more-like-this", keys: ["M"], description: "More Like This: list the files that look most like the selected image or video (This Folder or Whole Library, per Library ▸ Visual Search Scope).")
+            ]
+        ),
+        HelpShortcutGroup(
+            id: "similar-images",
+            title: "Similar Images Page",
+            description: "Keys while Library ▸ Similar Images is showing. They act on the page, never on the browser behind it.",
+            items: [
+                HelpShortcutItem(id: "similar-groups", keys: ["↑", "↓"], description: "Previous or next group."),
+                HelpShortcutItem(id: "similar-cards", keys: ["←", "→"], description: "Previous or next file in the group (the focused file has an accent ring)."),
+                HelpShortcutItem(id: "similar-open", keys: ["Space / Return"], description: "Open the focused file in the lightbox; ← / → there step through the group. Closing it returns to the page."),
+                HelpShortcutItem(id: "similar-more", keys: ["M"], description: "More Like This for the focused file (opens in the browser)."),
+                HelpShortcutItem(id: "similar-cull", keys: ["P", "X", "U", "0 – 9"], description: "Flag, rate or label the focused file (with Culling Mode's auto-advance, focus moves to the next file)."),
+                HelpShortcutItem(id: "similar-leave", keys: ["Esc"], description: "Back to the browser.")
             ]
         ),
         HelpShortcutGroup(

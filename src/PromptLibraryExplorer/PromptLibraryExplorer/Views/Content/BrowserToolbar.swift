@@ -41,6 +41,11 @@ enum BrowserToolbarItemID {
 struct BrowserToolbar: CustomizableToolbarContent {
     @Bindable var vm: ExplorerViewModel
 
+    /// The Similar Images page covers the browser: its browser-only items are
+    /// disabled (not removed, so a customized toolbar doesn't reflow) and the
+    /// page's title stands in for the breadcrumbs.
+    private var browserHidden: Bool { vm.isSimilarImagesPageActive }
+
     var body: some CustomizableToolbarContent {
         // Split in two: a toolbar builder takes at most ten items.
         browsingItems
@@ -76,8 +81,20 @@ struct BrowserToolbar: CustomizableToolbarContent {
 
         // Crumbs keep a flexible width so the whole strip stays a drop target.
         ToolbarItem(id: BrowserToolbarItemID.breadcrumbs, placement: .navigation) {
-            BreadcrumbBar()
-                .frame(minWidth: 120, idealWidth: 300, maxWidth: 480, alignment: .leading)
+            // Both views stay mounted and swap by opacity: a customizable toolbar
+            // item doesn't reliably re-render when its view *structure* changes
+            // (an if/else here left the breadcrumbs on screen over the page).
+            ZStack(alignment: .leading) {
+                BreadcrumbBar()
+                    .opacity(browserHidden ? 0 : 1)
+                    .allowsHitTesting(!browserHidden)
+                    .accessibilityHidden(browserHidden)
+                SimilarImagesPageCrumb()
+                    .opacity(browserHidden ? 1 : 0)
+                    .allowsHitTesting(browserHidden)
+                    .accessibilityHidden(!browserHidden)
+            }
+            .frame(minWidth: 120, idealWidth: 300, maxWidth: 480, alignment: .leading)
         }
 
         ToolbarItem(id: BrowserToolbarItemID.indexing, placement: .primaryAction) {
@@ -96,6 +113,7 @@ struct BrowserToolbar: CustomizableToolbarContent {
                 }
             }
             .pickerStyle(.segmented)
+            .disabled(browserHidden)
             .help("View as Grid (⌘1) or List (⌘2)")
             .accessibilityLabel("View Mode")
             .accessibilityValue(vm.viewMode.title)
@@ -103,16 +121,19 @@ struct BrowserToolbar: CustomizableToolbarContent {
 
         ToolbarItem(id: BrowserToolbarItemID.sort, placement: .primaryAction) {
             sortMenu
+                .disabled(browserHidden)
         }
 
         ToolbarItem(id: BrowserToolbarItemID.groupBy, placement: .primaryAction) {
             groupByMenu
+                .disabled(browserHidden)
         }
 
         ToolbarItem(id: BrowserToolbarItemID.filter, placement: .primaryAction) {
             // Filter ▸ Colour… sets `vm.colorFilterPopoverOpen`; ContentBrowserView
             // presents the popover (a toolbar item can be customized away).
             filterMenu
+                .disabled(browserHidden)
         }
 
     }
@@ -126,7 +147,7 @@ struct BrowserToolbar: CustomizableToolbarContent {
                 Label("New Folder", systemImage: "plus.rectangle.on.folder")
             }
             // Disabled rather than removed, so the toolbar doesn't reflow.
-            .disabled(!vm.canCreateFolder)
+            .disabled(!vm.canCreateFolder || browserHidden)
             .help("New Folder (⇧⌘N)")
             .accessibilityLabel("New Folder")
         }
@@ -177,6 +198,7 @@ struct BrowserToolbar: CustomizableToolbarContent {
 
         ToolbarItem(id: BrowserToolbarItemID.searchMode, placement: .primaryAction) {
             searchModeMenu
+                .disabled(browserHidden)
         }
 
         ToolbarItem(id: BrowserToolbarItemID.search, placement: .primaryAction) {
@@ -185,7 +207,8 @@ struct BrowserToolbar: CustomizableToolbarContent {
                 .onChange(of: vm.searchQuery) { _, _ in
                     vm.updateContentSearch()
                 }
-                .help("Search this folder (⌘F)")
+                .disabled(browserHidden)
+                .help(browserHidden ? "Search is for the browser (Esc or Done returns to it)" : "Search this folder (⌘F)")
                 .accessibilityLabel("Search")
         }
     }
@@ -718,6 +741,50 @@ private struct CollectionCrumb: View {
         .padding(.leading, AppSpacing.sm)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Collection \(collection.name)")
+    }
+}
+
+/// Stands in for the breadcrumbs while the Similar Images page is up.
+private struct SimilarImagesPageCrumb: View {
+    @Environment(ExplorerViewModel.self) private var vm
+
+    private var scopeText: String {
+        switch vm.visualSearchScope {
+        case .folder: return (vm.selectedFolderPath ?? vm.explorerRootPath)?.lastPathComponent ?? ""
+        case .library: return "Whole Library"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: AppSpacing.sm) {
+            Image(systemName: "square.on.square")
+                .font(.appIcon(11, weight: .medium))
+                .foregroundStyle(Color.appAccent)
+                .accessibilityHidden(true)
+            Text("Similar Images")
+                .font(.appCalloutEmphasis)
+                .foregroundStyle(Color.appPrimaryText)
+                .lineLimit(1)
+            if !scopeText.isEmpty {
+                Text(scopeText)
+                    .font(.appCaption)
+                    .foregroundStyle(Color.appMuted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Button {
+                vm.leaveSimilarImagesPage()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.appIcon(9, weight: .semibold))
+            }
+            .buttonStyle(AppSegmentButtonStyle(width: 20, height: 20))
+            .help("Back to the browser (Esc)")
+            .accessibilityLabel("Close Similar Images")
+        }
+        .padding(.leading, AppSpacing.sm)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Similar Images")
     }
 }
 

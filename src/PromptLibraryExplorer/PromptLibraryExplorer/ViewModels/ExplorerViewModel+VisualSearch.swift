@@ -63,6 +63,8 @@ extension ExplorerViewModel {
     /// The file More Like This / palette search acts on: the lightbox's item
     /// while it's open, else the primary selection.
     var visualSearchTargetItem: FileEntry? {
+        // The Similar Images page: its focused card.
+        if let path = similarPageTargetPath { return similarImages.entry(for: path) }
         let items = processedFolderContents
         if lightboxOpen, lightboxIndex >= 0, lightboxIndex < items.count {
             return items[lightboxIndex]
@@ -113,6 +115,8 @@ extension ExplorerViewModel {
                 )
                 return
             }
+            // The listing shows in the browser (from the lightbox, once it closes).
+            if !lightboxOpen { similarPage.leave() }
             openVirtualListing(
                 VirtualListing(kind: .similarTo(path: path), title: "Similar to \(name)", paths: ranked),
                 selecting: path
@@ -212,6 +216,7 @@ extension ExplorerViewModel {
                 showToast("No images match that palette \(scopeText)", type: .info)
                 return
             }
+            if !lightboxOpen { similarPage.leave() }
             openVirtualListing(
                 VirtualListing(
                     kind: .palette(colors: colors),
@@ -225,53 +230,21 @@ extension ExplorerViewModel {
 
     // MARK: Similar Images groups (inspection only)
 
-    /// Performs a group action. There is no removal action to perform.
-    func perform(_ action: SimilarGroupAction, on set: SimilarSet, path: String? = nil) {
-        switch action {
-        case .compare:
-            // No side-by-side image compare view exists: show the group as a
-            // listing and step through it in the lightbox.
-            openSimilarGroup(set, lightboxAt: set.paths.first)
-        case .selectInGrid:
-            selectSimilarGroupInGrid(set)
-        case .openInLightbox:
-            openSimilarGroup(set, lightboxAt: path ?? set.paths.first)
-        case .revealInFinder:
-            let urls = (path.map { [$0] } ?? set.paths).map { URL(fileURLWithPath: $0) }
-            NSWorkspace.shared.activateFileViewerSelecting(urls)
-        case .addToCollection:
-            // Needs a collection choice; the sheet calls `addPaths(_:toCollection:)`.
-            break
-        }
-    }
-
-    func openSimilarGroup(_ set: SimilarSet, lightboxAt path: String? = nil, selectAll: Bool = false) {
+    /// The browser listing for one Similar Images group, in the group's own order.
+    func similarGroupListing(_ set: SimilarSet) -> VirtualListing {
         let noun = set.kind == .exact ? "Exact Copies" : "Similar Images"
         let first = set.paths.first.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
-        openVirtualListing(
-            VirtualListing(
-                kind: .similarGroup(exact: set.kind == .exact),
-                title: "\(noun) · \(first)",
-                paths: set.paths
-            ),
-            selectAll: selectAll,
-            openLightboxAt: path
+        return VirtualListing(
+            kind: .similarGroup(exact: set.kind == .exact),
+            title: "\(noun) · \(first)",
+            paths: set.paths
         )
     }
 
-    /// Selects the group in the current listing when it's all there; otherwise
-    /// opens the group as a listing with every file selected.
-    func selectSimilarGroupInGrid(_ set: SimilarSet) {
-        let items = processedFolderContents
-        let wanted = Set(set.paths)
-        let indices = items.indices.filter { wanted.contains(items[$0].path) }
-        guard indices.count == wanted.count, let first = indices.first else {
-            openSimilarGroup(set, selectAll: true)
-            return
-        }
-        selectItem(at: first)
-        selectedIndices = Set(indices)
-        syncQuickLookWithSelection()
+    /// Shows a group as a virtual listing (every file visible), optionally
+    /// selecting all of it or one file.
+    func openSimilarGroup(_ set: SimilarSet, selecting path: String? = nil, selectAll: Bool = false) {
+        openVirtualListing(similarGroupListing(set), selecting: path, selectAll: selectAll)
     }
 
     func addPaths(_ paths: [String], toCollection collection: FileCollection) {

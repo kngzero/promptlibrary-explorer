@@ -18,6 +18,9 @@ extension ExplorerViewModel {
     /// What a culling action applies to: the lightbox's item while it's open,
     /// otherwise the whole selection. Flags and ratings skip folders.
     func cullTargets(for action: CullAction) -> [FileEntry] {
+        // The Similar Images page: its focused card, never the hidden grid's selection.
+        if let path = similarPageTargetPath { return [similarImages.entry(for: path)] }
+        if similarPage.isActive, !lightboxOpen { return [] }
         let items = lightboxOpen ? (lightboxItem.map { [$0] } ?? []) : selectedItems
         return action.appliesToFolders ? items : items.filter { !$0.isDirectory }
     }
@@ -52,6 +55,7 @@ extension ExplorerViewModel {
             applyLabel(label, to: items.map(\.url))
         }
         cullFeedback = CullFeedback(id: (cullFeedback?.id ?? 0) &+ 1, action: action, count: items.count)
+        similarImages.noteCullApplied(action, paths: items.map(\.path))
         if !lightboxOpen, items.count > 1 {
             showToast("\(action.feedbackTitle) · \(items.count) items", type: .success)
         }
@@ -198,6 +202,7 @@ extension ExplorerViewModel {
 
     /// Cull ▸ Select Rejects: selects every listed rejected file.
     func selectRejects() {
+        guard !similarPage.isActive else { return }
         let items = processedFolderContents
         let indices = items.indices.filter { !items[$0].isDirectory && flag(for: items[$0].path) == .reject }
         guard let first = indices.first else {
@@ -214,6 +219,8 @@ extension ExplorerViewModel {
 
     /// Cull ▸ Move Rejects to Trash…: always asks first (the trash itself is undoable).
     func requestTrashRejects() {
+        // Browser only: the Similar Images page never offers to trash anything.
+        guard !similarPage.isActive else { return }
         let rejects = rejectedListingItems
         guard !rejects.isEmpty else {
             showToast("No rejects in this listing", type: .info)

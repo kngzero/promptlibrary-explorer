@@ -199,17 +199,16 @@ final class VisualFeaturesListingStateTests: XCTestCase {
 final class VisualFeaturesSimilarImagesTests: XCTestCase {
     private let forbidden = ["trash", "delete", "remove", "keep", "best", "discard", "clean"]
 
-    @MainActor
-    func testModelExposesNoDeletionAction() {
-        let model = SimilarImagesModel()
-        let actions = model.groupActions + model.fileActions
-        XCTAssertEqual(Set(SimilarGroupAction.allCases), [.compare, .selectInGrid, .addToCollection, .revealInFinder, .openInLightbox])
-        XCTAssertEqual(model.groupActions, [.compare, .selectInGrid, .addToCollection, .revealInFinder])
-        XCTAssertEqual(model.fileActions, [.openInLightbox, .revealInFinder])
-        for action in actions + SimilarGroupAction.allCases {
-            let text = (action.rawValue + " " + action.title + " " + action.systemImage).lowercased()
+    /// The Similar Images page's card and group actions (the old sheet's
+    /// `SimilarGroupAction` was folded into these).
+    func testPageExposesNoDeletionAction() {
+        XCTAssertEqual(Set(SimilarCardAction.allCases), [.openInLightbox, .revealInFinder, .moreLikeThis, .copyPrompt])
+        XCTAssertEqual(Set(SimilarGroupPageAction.allCases), [.selectInBrowser, .addToCollection, .openAsListing])
+        let texts = SimilarCardAction.allCases.map { $0.rawValue + " " + $0.title + " " + $0.systemImage }
+            + SimilarGroupPageAction.allCases.map { $0.rawValue + " " + $0.title + " " + $0.systemImage }
+        for text in texts {
             for word in forbidden {
-                XCTAssertFalse(text.contains(word), "\(action) mentions \(word)")
+                XCTAssertFalse(text.lowercased().contains(word), "\(text) mentions \(word)")
             }
         }
     }

@@ -201,7 +201,7 @@ private struct VisualIndexSettingsSection: View {
                 )
             )
 
-            SettingsFootnote("Signatures (content hash, perceptual hash, Vision feature print and dominant colours) power Find Similar Images, More Like This and colour search. They stay on this Mac and your files are never modified.")
+            SettingsFootnote("Signatures (content hash, perceptual hash, Vision feature print and dominant colours) power Library ▸ Similar Images, More Like This and colour search. They stay on this Mac and your files are never modified.")
 
             HStack(spacing: AppSpacing.lg) {
                 switch controller.state {

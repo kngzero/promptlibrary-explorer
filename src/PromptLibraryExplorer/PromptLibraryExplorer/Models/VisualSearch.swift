@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-// Pure models behind visual search (Find Similar Images, More Like This,
+// Pure models behind visual search (the Similar Images page, More Like This,
 // colour search). The engine (VisualIndexService / VisualIndexController)
 // computes signatures and matches; these types shape what the UI does with them.
 //
@@ -247,7 +247,7 @@ enum PaletteMatcher {
 // MARK: - Scope
 
 /// Folder (direct children of the folder on screen) or the whole library
-/// (everything under the root). Shared by Find Similar Images, More Like This
+/// (everything under the root). Shared by the Similar Images page, More Like This
 /// and palette search; persisted.
 enum VisualSearchScopeChoice: String, CaseIterable, Identifiable, Sendable {
     case folder
@@ -274,7 +274,7 @@ struct VirtualListing: Identifiable, Equatable, Sendable {
         case similarTo(path: String)
         /// Files ranked by how well their dominant colours match the palette.
         case palette(colors: [String])
-        /// One group from Find Similar Images, in the group's own order.
+        /// One group from the Similar Images page, in the group's own order.
         case similarGroup(exact: Bool)
     }
 
@@ -335,7 +335,7 @@ struct VirtualListing: Identifiable, Equatable, Sendable {
 
 /// Which listing the browser shows: the folder, a collection, or a virtual
 /// listing. Pure state machine behind `ExplorerViewModel`'s listing switches.
-struct ListingModeState: Equatable {
+struct ListingModeState: Equatable, Sendable {
     enum Mode: Equatable {
         case folder
         case collection(UUID)
@@ -392,43 +392,10 @@ struct ListingModeState: Equatable {
 }
 
 // MARK: - Similar Images actions
-
-/// Everything a Find Similar Images group (or a file in it) offers. There is
-/// deliberately no removal / trash / "keep best" action: every file is kept.
-enum SimilarGroupAction: String, CaseIterable, Identifiable, Sendable {
-    case compare
-    case selectInGrid
-    case addToCollection
-    case revealInFinder
-    case openInLightbox
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .compare: return "Compare"
-        case .selectInGrid: return "Select in Grid"
-        case .addToCollection: return "Add to Collection"
-        case .revealInFinder: return "Reveal in Finder"
-        case .openInLightbox: return "Open in Lightbox"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .compare: return "rectangle.split.2x1"
-        case .selectInGrid: return "checkmark.circle"
-        case .addToCollection: return "rectangle.stack.badge.plus"
-        case .revealInFinder: return "folder"
-        case .openInLightbox: return "arrow.up.left.and.arrow.down.right"
-        }
-    }
-
-    /// Group-level buttons, in display order.
-    static let groupActions: [SimilarGroupAction] = [.compare, .selectInGrid, .addToCollection, .revealInFinder]
-    /// Per-file actions (click / double-click a thumbnail, its context menu).
-    static let fileActions: [SimilarGroupAction] = [.openInLightbox, .revealInFinder]
-}
+//
+// The Similar Images page's card and group actions live in
+// Models/SimilarImagesPage.swift (`SimilarCardAction`, `SimilarGroupPageAction`).
+// There is deliberately no removal / trash / "keep best" action: every file is kept.
 
 // MARK: - Keys & eligibility
 

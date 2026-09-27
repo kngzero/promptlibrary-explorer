@@ -41,6 +41,12 @@ final class VisualIndexController {
     }
 
     static let enabledKey = "visualIndex.enabled"
+
+    /// Posted on the main actor after the index changed: `invalidate` / `moved`
+    /// work finished (userInfo `changedPathsKey`: the paths), a run completed
+    /// (the root), or the whole index was reset (no paths: everything).
+    nonisolated static let didChangeNotification = Notification.Name("VisualIndexController.didChange")
+    nonisolated static let changedPathsKey = "paths"
     static let lastCompletedKey = "visualIndex.lastCompleted"
 
     @ObservationIgnored private let service: VisualIndexService
@@ -145,13 +151,17 @@ final class VisualIndexController {
             if reindex, !existing.isEmpty {
                 await service.index(paths: existing)
             }
+            await Self.postDidChange(paths: paths)
         }
     }
 
     /// A rename / move the app performed itself: rows move without recomputing.
     func moved(from oldPath: String, to newPath: String) {
         let service = service
-        enqueueMutation { await service.movePath(from: oldPath, to: newPath) }
+        enqueueMutation {
+            await service.movePath(from: oldPath, to: newPath)
+            await Self.postDidChange(paths: [oldPath, newPath])
+        }
     }
 
     /// Clears the whole visual index (all libraries).
@@ -162,6 +172,7 @@ final class VisualIndexController {
         currentItemName = nil
         completedRootPath = nil
         await service.reset()
+        Self.postDidChange(paths: nil)
     }
 
     /// Waits for queued `invalidate` / `moved` work (tests).
@@ -231,6 +242,13 @@ final class VisualIndexController {
         completedAt = now
         completedRootPath = root.map { VisualIndexService.normalizedPath($0.path) }
         defaults.set(now.timeIntervalSince1970, forKey: Self.lastCompletedKey)
+        Self.postDidChange(paths: completedRootPath.map { [$0] })
+    }
+
+    /// nil `paths` = everything changed.
+    private static func postDidChange(paths: [String]?) {
+        let info: [AnyHashable: Any]? = paths.map { [changedPathsKey: $0] }
+        NotificationCenter.default.post(name: didChangeNotification, object: nil, userInfo: info)
     }
 
     private func cancelRun() {

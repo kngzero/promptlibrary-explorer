@@ -335,6 +335,8 @@ final class ExplorerViewModel {
             if lightboxOpen, !oldValue {
                 lightboxPath = processedPath(at: lightboxIndex)
             }
+            // A lightbox the Similar Images page opened hands the browser back.
+            if !lightboxOpen, oldValue { similarPageLightboxDidClose() }
         }
     }
     var lightboxIndex: Int = 0 {
@@ -445,9 +447,18 @@ final class ExplorerViewModel {
     }
 
     // Visual search
-    var similarImagesOpen = false
-    /// Find Similar Images results; kept across openings of the sheet.
+    /// Browser or the Similar Images page (never persisted: launch shows the browser).
+    var similarPage = SimilarPageModeState()
+    /// Similar Images page state and results; kept while the page is closed.
     let similarImages = SimilarImagesModel()
+    /// Set while a lightbox opened from the Similar Images page borrows the
+    /// hidden browser's listing (see `SimilarPageLightboxSession`).
+    @ObservationIgnored var similarPageLightboxSession: SimilarPageLightboxSession?
+    /// True while the page puts the browser's listing back, so the listing
+    /// switches involved don't count as the user leaving the page.
+    @ObservationIgnored var isRestoringBrowserForSimilarPage = false
+    /// Browser state a restore (after a page lightbox) is still putting back.
+    @ObservationIgnored var similarPagePendingRestore: SimilarPageBrowserSnapshot?
     /// This Folder / Whole Library for every visual search (persisted).
     var visualSearchScope: VisualSearchScopeChoice = .folder {
         didSet {
@@ -1763,6 +1774,9 @@ final class ExplorerViewModel {
     // MARK: - Smart Folders
 
     func activateSmartFolder(_ folder: SmartFolder) {
+        // From the Similar Images page, a click shows the smart folder in the
+        // browser (it doesn't toggle an already active one off).
+        if similarPage.handle(.smartFolderActivated) == .leftPage, activeSmartFolder?.id == folder.id { return }
         if activeSmartFolder?.id == folder.id {
             activeSmartFolder = nil
         } else {
@@ -4070,8 +4084,12 @@ extension ExplorerViewModel {
     // MARK: Collections
 
     /// Shows `id`'s files as the listing (nil returns to the folder).
-    func openCollection(_ id: UUID?) {
-        guard id != activeCollectionID else { return }
+    func openCollection(_ id: UUID?, then completion: (() -> Void)? = nil) {
+        if id != nil, !isRestoringBrowserForSimilarPage { similarPage.handle(.collectionOpened) }
+        guard id != activeCollectionID else {
+            completion?()
+            return
+        }
         navigationGeneration &+= 1
         cancelPromptIndexBuild()
         clearSelection()
@@ -4089,6 +4107,7 @@ extension ExplorerViewModel {
                 guard await self.refreshFolderContents(showLoading: true) else { return }
                 self.loadListingPromptDataIfNeeded(force: false)
                 self.refreshPromptSearchIfNeeded()
+                completion?()
             }
             return
         }
@@ -4099,6 +4118,7 @@ extension ExplorerViewModel {
             guard await self.reloadCollectionContents() else { return }
             self.loadListingPromptDataIfNeeded(force: false)
             self.refreshPromptSearchIfNeeded()
+            completion?()
         }
     }
 
@@ -4138,11 +4158,13 @@ extension ExplorerViewModel {
     ///   - selecting: path to select (and show in an open lightbox) afterwards.
     ///   - selectAll: select every listed file afterwards.
     ///   - openLightboxAt: path to open in the lightbox afterwards.
+    ///   - completion: runs once the listing shows (not when superseded).
     func openVirtualListing(
         _ listing: VirtualListing,
         selecting: String? = nil,
         selectAll: Bool = false,
-        openLightboxAt: String? = nil
+        openLightboxAt: String? = nil,
+        then completion: (() -> Void)? = nil
     ) {
         var state = listingModeState
         state.openVirtual(listing)
@@ -4169,6 +4191,7 @@ extension ExplorerViewModel {
             }
             self.loadListingPromptDataIfNeeded(force: false)
             self.refreshPromptSearchIfNeeded()
+            completion?()
         }
     }
 
@@ -4193,15 +4216,21 @@ extension ExplorerViewModel {
     /// Closes the virtual listing and returns to where it was opened from
     /// (the folder, or the collection that was open), reselecting the
     /// reference file of a More Like This listing.
-    func closeVirtualListing() {
-        guard let listing = activeVirtualListing else { return }
+    func closeVirtualListing(then completion: (() -> Void)? = nil) {
+        guard let listing = activeVirtualListing else {
+            completion?()
+            return
+        }
         var state = listingModeState
         state.closeVirtual()
 
         if let id = state.collectionID, collections.contains(where: { $0.id == id }) {
             virtualListingContents = []
             activeVirtualListing = nil
-            openCollection(id)
+            let wasRestoring = isRestoringBrowserForSimilarPage
+            isRestoringBrowserForSimilarPage = true
+            openCollection(id, then: completion)
+            isRestoringBrowserForSimilarPage = wasRestoring
             return
         }
 
@@ -4219,6 +4248,7 @@ extension ExplorerViewModel {
             self.loadListingPromptDataIfNeeded(force: false)
             self.refreshPromptSearchIfNeeded()
             if let source { self.selectPath(source) }
+            completion?()
         }
     }
 

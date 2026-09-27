@@ -32,7 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // Settings (or another auxiliary window) is key with no text field
         // focused: don't select the browser's items behind it.
         guard !ModalKeyGuard.isAuxiliaryWindowKey else { return }
-        guard let viewModel, !viewModel.isModalBlockingCommands, !viewModel.lightboxOpen else { return }
+        guard let viewModel, !viewModel.isModalBlockingCommands, !viewModel.lightboxOpen,
+              !viewModel.isSimilarImagesPageActive
+        else { return }
         viewModel.selectAllItems()
     }
 
@@ -42,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard let viewModel, !ModalKeyGuard.isAuxiliaryWindowKey else { return false }
         return !viewModel.isModalBlockingCommands
             && !viewModel.lightboxOpen
+            && !viewModel.isSimilarImagesPageActive
             && !viewModel.processedFolderContents.isEmpty
     }
 
@@ -130,18 +133,18 @@ struct PromptLibraryExplorerApp: App {
                     run { explorerVM.isShowingNewFolderPrompt = true }
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
-                .disabled(isBlocked || !explorerVM.canCreateFolder)
+                .disabled(isBlocked || browserHidden || !explorerVM.canCreateFolder)
 
                 Button("Rename") {
                     // The inline rename field lives in the browser, under the lightbox.
                     runInMainWindow(allowInLightbox: false) { NotificationCenter.default.post(name: .beginRenameSelection, object: nil) }
                 }
-                .disabled(isBlocked || explorerVM.lightboxOpen || explorerVM.selectedIndices.count != 1)
+                .disabled(isBlocked || browserHidden || explorerVM.lightboxOpen || explorerVM.selectedIndices.count != 1)
 
                 Button("Batch Rename…") {
                     run { explorerVM.batchRenameOpen = true }
                 }
-                .disabled(isBlocked || explorerVM.batchRenameTargets.isEmpty)
+                .disabled(isBlocked || browserHidden || explorerVM.batchRenameTargets.isEmpty)
 
                 Divider()
 
@@ -155,13 +158,16 @@ struct PromptLibraryExplorerApp: App {
                     runInMainWindow(allowInLightbox: false) { explorerVM.trashSelection() }
                 }
                 .keyboardShortcut(.delete, modifiers: .command)
-                .disabled(isBlocked || !hasSelection)
+                // Never from the Similar Images page (nothing there is ever trashed).
+                .disabled(isBlocked || browserHidden || !hasSelection)
 
                 Button("Reveal in Finder") {
                     run { explorerVM.revealSelectionInFinder() }
                 }
                 .keyboardShortcut("r", modifiers: [.command, .option])
-                .disabled(isBlocked || (!hasSelection && explorerVM.selectedFolderPath == nil))
+                .disabled(isBlocked || (browserHidden
+                    ? explorerVM.similarPageTargetPath == nil
+                    : (!hasSelection && explorerVM.selectedFolderPath == nil)))
 
                 Divider()
 
@@ -174,14 +180,14 @@ struct PromptLibraryExplorerApp: App {
                         }
                     }
                 }
-                .disabled(isBlocked || explorerVM.selectedFileItems.isEmpty)
+                .disabled(isBlocked || browserHidden || explorerVM.selectedFileItems.isEmpty)
 
                 Button("New Collection from Selection") {
                     run { explorerVM.createCollection(named: defaultCollectionName, withSelection: true) }
                 }
-                .disabled(isBlocked || explorerVM.selectedFileItems.isEmpty)
+                .disabled(isBlocked || browserHidden || explorerVM.selectedFileItems.isEmpty)
 
-                if explorerVM.isCollectionMode {
+                if explorerVM.isCollectionMode, !browserHidden {
                     Button("Remove from Collection") {
                         run { explorerVM.removeSelectionFromActiveCollection() }
                     }
@@ -204,12 +210,12 @@ struct PromptLibraryExplorerApp: App {
                 Button("Send to Mood…") {
                     runInMainWindow { explorerVM.sendToArtOfficial(.mood) }
                 }
-                .disabled(isBlocked || !explorerVM.canSendToArtOfficial)
+                .disabled(isBlocked || browserHidden || !explorerVM.canSendToArtOfficial)
 
                 Button("Send to Story…") {
                     runInMainWindow { explorerVM.sendToArtOfficial(.story) }
                 }
-                .disabled(isBlocked || !explorerVM.canSendToArtOfficial)
+                .disabled(isBlocked || browserHidden || !explorerVM.canSendToArtOfficial)
             }
 
             // MARK: Edit
@@ -233,7 +239,9 @@ struct PromptLibraryExplorerApp: App {
                     run { explorerVM.copyPromptOfSelection() }
                 }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
-                .disabled(isBlocked || explorerVM.selectedFileItems.isEmpty)
+                .disabled(isBlocked || (browserHidden
+                    ? explorerVM.similarPageTargetPath == nil
+                    : explorerVM.selectedFileItems.isEmpty))
 
                 Menu("Copy Prompt As") {
                     ForEach(PromptCopyFormat.allCases) { format in
@@ -242,13 +250,13 @@ struct PromptLibraryExplorerApp: App {
                         }
                     }
                 }
-                .disabled(isBlocked || explorerVM.selectedFileItems.isEmpty)
+                .disabled(isBlocked || browserHidden || explorerVM.selectedFileItems.isEmpty)
 
                 Button("Copy Path") {
                     run { explorerVM.copyPathsOfSelection() }
                 }
                 .keyboardShortcut("c", modifiers: [.command, .option])
-                .disabled(isBlocked || !hasSelection)
+                .disabled(isBlocked || (browserHidden ? explorerVM.similarPageTargetPath == nil : !hasSelection))
             }
             CommandGroup(replacing: .textEditing) {
                 Button("Find") {
@@ -257,7 +265,7 @@ struct PromptLibraryExplorerApp: App {
                     runClosingLightbox { NotificationCenter.default.post(name: .focusSearchField, object: nil) }
                 }
                 .keyboardShortcut("f", modifiers: .command)
-                .disabled(isBlocked || explorerVM.explorerRootPath == nil)
+                .disabled(isBlocked || browserHidden || explorerVM.explorerRootPath == nil)
 
                 Button("Find in Library…") {
                     run { explorerVM.librarySearchOpen = true }
@@ -268,18 +276,26 @@ struct PromptLibraryExplorerApp: App {
                 Button("Clear All Filters") {
                     run { explorerVM.clearAllFilters() }
                 }
-                .disabled(isBlocked || !explorerVM.hasActiveFilters)
+                .disabled(isBlocked || browserHidden || !explorerVM.hasActiveFilters)
             }
 
             // MARK: View
             CommandGroup(after: .sidebar) {
+                // Leaves the Similar Images page (same as its Done button / Esc).
+                Button("Show Browser") {
+                    run { explorerVM.leaveSimilarImagesPage() }
+                }
+                .disabled(isBlocked || !browserHidden)
+
+                Divider()
+
                 Toggle("as Grid", isOn: viewModeBinding(.grid))
                     .keyboardShortcut("1", modifiers: .command)
-                    .disabled(isBlocked)
+                    .disabled(isBlocked || browserHidden)
 
                 Toggle("as List", isOn: viewModeBinding(.list))
                     .keyboardShortcut("2", modifiers: .command)
-                    .disabled(isBlocked)
+                    .disabled(isBlocked || browserHidden)
 
                 Divider()
 
@@ -291,7 +307,7 @@ struct PromptLibraryExplorerApp: App {
                         Text(field.title).tag(field)
                     }
                 }
-                .disabled(isBlocked)
+                .disabled(isBlocked || browserHidden)
 
                 Menu("Sort By") {
                     Picker("Sort By", selection: Binding(
@@ -324,7 +340,7 @@ struct PromptLibraryExplorerApp: App {
                     .labelsHidden()
                     .disabled(!explorerVM.sortConfig.field.supportsDirection)
                 }
-                .disabled(isBlocked)
+                .disabled(isBlocked || browserHidden)
 
                 Divider()
             }
@@ -340,7 +356,7 @@ struct PromptLibraryExplorerApp: App {
                 Button(explorerVM.previewPaneCollapsed ? "Show Preview Pane" : "Hide Preview Pane") {
                     run { explorerVM.togglePreviewPane() }
                 }
-                .disabled(isBlocked)
+                .disabled(isBlocked || browserHidden)
 
                 Divider()
 
@@ -350,18 +366,18 @@ struct PromptLibraryExplorerApp: App {
                     explorerVM.quickLookSelection()
                 }
                 .keyboardShortcut("y", modifiers: .command)
-                .disabled(explorerVM.isAnyModalOpen || explorerVM.lightboxOpen || !hasSelection)
+                .disabled(explorerVM.isAnyModalOpen || explorerVM.lightboxOpen || browserHidden || !hasSelection)
 
                 Button("Compare Prompts") {
                     run { explorerVM.openPromptDiff() }
                 }
                 .keyboardShortcut("d", modifiers: .command)
-                .disabled(isBlocked || explorerVM.selectedIndices.count != 2)
+                .disabled(isBlocked || browserHidden || explorerVM.selectedIndices.count != 2)
 
                 Button("Compare Selected .aoe Files") {
                     run { Task { await explorerVM.openComparison() } }
                 }
-                .disabled(isBlocked || explorerVM.selectedAoeItems.count < 2 || explorerVM.isLoadingComparison)
+                .disabled(isBlocked || browserHidden || explorerVM.selectedAoeItems.count < 2 || explorerVM.isLoadingComparison)
 
                 Divider()
 
@@ -416,7 +432,7 @@ struct PromptLibraryExplorerApp: App {
                     }
                 }
                 .keyboardShortcut(.upArrow, modifiers: .command)
-                .disabled(isBlocked || explorerVM.selectedFolderPath == nil)
+                .disabled(isBlocked || browserHidden || explorerVM.selectedFolderPath == nil)
 
                 Divider()
 
@@ -472,9 +488,16 @@ struct PromptLibraryExplorerApp: App {
                 Divider()
 
                 // Visual search. Inspection only — nothing here removes files.
-                Button("Find Similar Images…") {
-                    run(allowInLightbox: false) { explorerVM.similarImagesOpen = true }
-                }
+                // A page of the main window (checked while it shows); View ▸
+                // Show Browser, its Done button and Esc return to the browser.
+                Toggle("Similar Images", isOn: Binding(
+                    get: { explorerVM.isSimilarImagesPageActive },
+                    set: { show in
+                        run(allowInLightbox: false) {
+                            if show { explorerVM.showSimilarImagesPage() } else { explorerVM.leaveSimilarImagesPage() }
+                        }
+                    }
+                ))
                 .disabled(isBlocked || explorerVM.explorerRootPath == nil || explorerVM.lightboxOpen)
 
                 // Bare M is owned by the key monitors (grid + lightbox); like the
@@ -499,7 +522,7 @@ struct PromptLibraryExplorerApp: App {
                 }
                 .disabled(isBlocked)
 
-                if explorerVM.isVirtualListingMode {
+                if explorerVM.isVirtualListingMode, !browserHidden {
                     Button("Close \"\(explorerVM.activeVirtualListing?.title ?? "Listing")\"") {
                         runInMainWindow { explorerVM.closeVirtualListing() }
                     }
@@ -589,12 +612,13 @@ struct PromptLibraryExplorerApp: App {
             Button("Select Rejects") {
                 runInMainWindow(allowInLightbox: false) { explorerVM.selectRejects() }
             }
-            .disabled(isBlocked || explorerVM.lightboxOpen || explorerVM.explorerRootPath == nil)
+            .disabled(isBlocked || browserHidden || explorerVM.lightboxOpen || explorerVM.explorerRootPath == nil)
 
+            // Browser only: never offered from the Similar Images page.
             Button("Move Rejects to Trash…") {
                 runInMainWindow(allowInLightbox: false) { explorerVM.requestTrashRejects() }
             }
-            .disabled(isBlocked || explorerVM.lightboxOpen || explorerVM.explorerRootPath == nil)
+            .disabled(isBlocked || browserHidden || explorerVM.lightboxOpen || explorerVM.explorerRootPath == nil)
         }
     }
 
@@ -604,6 +628,11 @@ struct PromptLibraryExplorerApp: App {
     private var isBlocked: Bool { explorerVM.isAnyModalOpen }
 
     private var hasSelection: Bool { !explorerVM.selectedIndices.isEmpty }
+
+    /// The Similar Images page covers the browser: browser-only commands are
+    /// disabled; Cull, Copy Prompt, Copy Path, Reveal and More Like This act on
+    /// the page's focused card instead of the hidden selection.
+    private var browserHidden: Bool { explorerVM.isSimilarImagesPageActive }
 
     /// Cull menu actions: the lightbox's item while it's open, else the selection.
     private func cull(_ action: CullAction) {

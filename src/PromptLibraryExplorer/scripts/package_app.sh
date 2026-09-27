@@ -143,11 +143,22 @@ if (( LAUNCH )); then
         echo "Old instance(s) still running: $(pgrep -f "${EXEC_NAME}\$" | tr '\n' ' ')" >&2
         exit 1
     fi
-    open "$APP"
-    for _ in $(seq 1 40); do
-        NEW_PID="$(pgrep -f "${EXEC_NAME}\$" | head -1 || true)"
-        [[ -n "$NEW_PID" ]] && break
-        sleep 0.25
+    # LaunchServices can still be tearing down the killed instance (or finishing
+    # the lsregister above) and answer -600 "procNotFound"; retry a few times.
+    NEW_PID=""
+    for attempt in 1 2 3 4 5; do
+        sleep 1
+        open "$APP" 2>/dev/null || true
+        for _ in $(seq 1 20); do
+            NEW_PID="$(pgrep -f "${EXEC_NAME}\$" | head -1 || true)"
+            [[ -n "$NEW_PID" ]] && break 2
+            sleep 0.25
+        done
+        echo "    open attempt $attempt didn't start the app; retrying" >&2
     done
-    echo "==> Launched, PID ${NEW_PID:-unknown}"
+    if [[ -z "$NEW_PID" ]]; then
+        echo "Failed to launch $APP" >&2
+        exit 1
+    fi
+    echo "==> Launched, PID $NEW_PID"
 fi

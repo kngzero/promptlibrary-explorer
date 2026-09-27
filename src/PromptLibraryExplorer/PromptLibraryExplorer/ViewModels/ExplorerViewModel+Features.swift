@@ -13,7 +13,6 @@ extension ExplorerViewModel {
             || batchMetadataEditorOpen || metadataEditorPath != nil
             || deleteConfirmationRequest != nil || isShowingNewFolderPrompt
             || batchRenameOpen || librarySearchOpen || duplicatesOpen || snippetsOpen
-            || similarImagesOpen
     }
 
     /// `isAnyModalOpen`, plus AppKit modal sessions / sheets the model doesn't
@@ -51,6 +50,10 @@ extension ExplorerViewModel {
 
     /// Copies the prompts of every selected file, blank-line separated.
     func copyPromptOfSelection() {
+        if let path = similarPageTargetPath {
+            copySimilarCardPrompt(path)
+            return
+        }
         let items = selectedFileItems
         guard !items.isEmpty else {
             showToast("Select files to copy their prompts", type: .info)
@@ -106,13 +109,17 @@ extension ExplorerViewModel {
     }
 
     func copyPathsOfSelection() {
-        let paths = selectedPaths
+        let paths = similarPageTargetPath.map { [$0] } ?? selectedPaths
         guard !paths.isEmpty else { return }
         ClipboardService.copyString(paths.joined(separator: "\n"))
         showToast(paths.count == 1 ? "Path copied" : "Copied \(paths.count) paths", type: .success)
     }
 
     func revealSelectionInFinder() {
+        if let path = similarPageTargetPath {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+            return
+        }
         let urls = selectedItems.map(\.url)
         if urls.isEmpty, let folder = selectedFolderPath, isFolderListing {
             NSWorkspace.shared.activateFileViewerSelecting([folder])
@@ -124,6 +131,8 @@ extension ExplorerViewModel {
 
     /// Moves the selection to the Trash (confirmation per preference; undoable).
     func trashSelection() {
+        // The Similar Images page never trashes anything (not even the hidden grid's selection).
+        guard !similarPage.isActive else { return }
         let urls = selectedItems.map(\.url)
         guard !urls.isEmpty else { return }
         requestTrash(at: urls)
@@ -131,6 +140,7 @@ extension ExplorerViewModel {
 
     /// Toggles Quick Look for the selection (the primary item shows first).
     func quickLookSelection() {
+        guard !similarPage.isActive else { return }
         let items = selectedItems
         guard !items.isEmpty || QuickLookController.isPanelVisible else { return }
         let startIndex = items.firstIndex(where: { $0.path == selectedItemPath }) ?? 0
@@ -248,6 +258,8 @@ extension ExplorerViewModel {
     /// otherwise as a new root) and selects the file, clearing filters that
     /// would hide it.
     func revealFile(at url: URL) async {
+        // The file is shown in the browser, so the Similar Images page closes.
+        similarPage.handle(.fileRevealed)
         let fileURL = url.standardizedFileURL
         let parent = fileURL.deletingLastPathComponent().standardizedFileURL
         guard FileManager.default.fileExists(atPath: fileURL.path) else {

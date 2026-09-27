@@ -74,6 +74,9 @@ struct CommandPaletteView: View {
             ("New Smart Folder", "folder.badge.gearshape", { vm.editingSmartFolder = nil; vm.showSmartFolderEditor = true }),
             ("Settings", "gearshape", { vm.openSettings() }),
             ("Statistics", "chart.bar", { vm.statisticsOpen = true }),
+            vm.isSimilarImagesPageActive
+                ? ("Show Browser", "square.grid.2x2", { vm.leaveSimilarImagesPage() })
+                : ("Similar Images", "square.on.square", { vm.showSimilarImagesPage() }),
         ]
 
         for (name, icon, action) in actions where q.isEmpty || name.lowercased().contains(q) {
@@ -262,6 +265,8 @@ struct CommandPaletteView: View {
         case .smartFolder(let sf):
             vm.activateSmartFolder(sf)
         case .tag(let tag):
+            // A tag filters the browser, so the Similar Images page makes way.
+            if vm.similarPage.handle(.tagFilterChanged) == .leftPage, vm.filterByTagID == tag.id { return }
             vm.filterByTagID = vm.filterByTagID == tag.id ? nil : tag.id
         case .action(_, _, let action):
             action()

@@ -8,6 +8,13 @@ struct MainContentView: View {
     /// Collapsed group sections of the content browser. Owned here so arrow-key
     /// navigation can skip the items of collapsed sections.
     @State private var collapsedGroups: Set<String> = []
+    /// Sizes of the content and details columns and of the split view, so the
+    /// Similar Images page can cover exactly those two columns. Sizes, not
+    /// positions: the columns live in their own hosting views, whose
+    /// coordinate spaces needn't match the split view's.
+    @State private var contentColumnSize: CGSize = .zero
+    @State private var detailColumnSize: CGSize = .zero
+    @State private var splitSize: CGSize = .zero
 
     var body: some View {
         @Bindable var vm = vm
@@ -58,10 +65,6 @@ struct MainContentView: View {
         }
         .sheet(isPresented: $vm.duplicatesOpen) {
             SimilarPromptsView()
-                .environment(vm)
-        }
-        .sheet(isPresented: $vm.similarImagesOpen) {
-            SimilarImagesView()
                 .environment(vm)
         }
         .sheet(isPresented: $vm.batchRenameOpen) {
@@ -122,8 +125,15 @@ struct MainContentView: View {
         .toolbar(vm.lightboxOpen ? .hidden : .automatic, for: .windowToolbar)
         .animation(.easeInOut(duration: 0.2), value: vm.toastMessage?.message)
         .background(WindowTitleConfigurator())
+        // The principal item carries the app identity; with a customizable toolbar
+        // macOS 15 otherwise adds the window title as its own toolbar item.
+        .modifier(HideToolbarTitle())
         .onGlobalKeyDown { event in
             handleGlobalKey(event)
+        }
+        .onChange(of: vm.isSimilarImagesPageActive) { _, _ in
+            // Nothing in the covered (or uncovered) browser keeps keyboard focus.
+            ModalKeyGuard.mainBrowserWindow?.makeFirstResponder(nil)
         }
         .onChange(of: splitViewVisibility) { _, visibility in
             SettingsStore.shared.sidebarVisible = visibility != .doubleColumn && visibility != .detailOnly
@@ -152,13 +162,29 @@ struct MainContentView: View {
                         .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 320)
                 } content: {
                     ContentBrowserView(collapsedGroups: $collapsedGroups)
+                        .coveredBySimilarImagesPage(vm.isSimilarImagesPageActive)
+                        .background(SizeReporter(size: $contentColumnSize))
                         .navigationSplitViewColumnWidth(min: 400, ideal: 600)
                 } detail: {
                     MetadataPanelView()
+                        .coveredBySimilarImagesPage(vm.isSimilarImagesPageActive)
+                        .background(SizeReporter(size: $detailColumnSize))
                         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 400)
                 }
                 .navigationSplitViewStyle(.balanced)
                 .styledSplitViewDividers()
+                .background(SizeReporter(size: $splitSize))
+                // Similar Images page: covers the content and details columns
+                // (the sidebar stays), anchored to the window's bottom-trailing
+                // corner where those columns end. The browser keeps running
+                // underneath, so leaving shows it exactly as it was.
+                .overlay(alignment: .bottomTrailing) {
+                    if vm.isSimilarImagesPageActive, contentColumnSize.width > 0 {
+                        SimilarImagesPageView()
+                            .frame(width: similarPageWidth, height: max(0, contentColumnSize.height))
+                            .transition(.opacity.animation(.easeInOut(duration: 0.12)))
+                    }
+                }
             } else {
                 FirstRunView()
             }
@@ -199,7 +225,7 @@ struct MainContentView: View {
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            if vm.selectedAoeItems.count >= 2 && !vm.lightboxOpen {
+            if vm.selectedAoeItems.count >= 2 && !vm.lightboxOpen && !vm.isSimilarImagesPageActive {
                 CompareAoeBanner(
                     selectedCount: vm.selectedAoeItems.count,
                     isLoading: vm.isLoadingComparison
@@ -210,6 +236,12 @@ struct MainContentView: View {
                 .zIndex(150)
             }
         }
+    }
+
+    /// Content column + its (thin, 1 pt) divider + details column.
+    private var similarPageWidth: CGFloat {
+        let width = contentColumnSize.width + detailColumnSize.width + (detailColumnSize.width > 0 ? 1 : 0)
+        return max(0, splitSize.width > 0 ? min(width, splitSize.width) : width)
     }
 
     /// Central keyboard dispatcher — routes keys based on app state.
@@ -263,6 +295,19 @@ struct MainContentView: View {
 
         // No root path = nothing to navigate
         guard vm.explorerRootPath != nil else { return false }
+
+        // The Similar Images page owns the bare keys while it's up; nothing may
+        // leak into the browser hidden underneath (no grid moves, no culling
+        // auto-advance there, no Delete / Shift-Delete on its selection).
+        if vm.isSimilarImagesPageActive {
+            guard let action = SimilarPageKeyAction.action(
+                keyCode: event.keyCode,
+                characters: event.charactersIgnoringModifiers,
+                modifiers: event.modifierFlags
+            ) else { return false }
+            vm.performSimilarPageKey(action, isRepeat: event.isARepeat)
+            return true
+        }
 
         let items = vm.processedFolderContents
         let selectionModifiers = contentSelectionModifiers(for: event)
@@ -571,5 +616,43 @@ struct EmptyStateView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.appBackground)
+    }
+}
+
+// MARK: - Similar Images page support
+
+/// Reports a view's size.
+private struct SizeReporter: View {
+    @Binding var size: CGSize
+
+    var body: some View {
+        GeometryReader { proxy in
+            let current = proxy.size
+            Color.clear
+                .onAppear { size = current }
+                .onChange(of: current) { _, value in size = value }
+        }
+    }
+}
+
+private extension View {
+    /// The browser columns stay alive under the Similar Images page (state,
+    /// scroll position and toolbar are kept) but take no clicks and are
+    /// hidden from VoiceOver while covered.
+    func coveredBySimilarImagesPage(_ covered: Bool) -> some View {
+        allowsHitTesting(!covered)
+            .accessibilityHidden(covered)
+    }
+}
+
+/// Removes the automatic window-title item from the toolbar (macOS 15+), and
+/// keeps SwiftUI from re-setting the window title on earlier systems.
+private struct HideToolbarTitle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content.toolbar(removing: .title)
+        } else {
+            content.navigationTitle("")
+        }
     }
 }

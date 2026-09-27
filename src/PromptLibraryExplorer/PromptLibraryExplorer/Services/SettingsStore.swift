@@ -30,7 +30,7 @@ final class SettingsStore: ObservableObject {
     @AppStorage("filterColor") var filterColor: String = ""
 
     // Visual search
-    /// `VisualSearchScopeChoice` raw value shared by Find Similar Images,
+    /// `VisualSearchScopeChoice` raw value shared by the Similar Images page,
     /// More Like This and palette search.
     @AppStorage("visualSearch.scope") var visualSearchScope: String = VisualSearchScopeChoice.folder.rawValue
     /// Last tolerance used in the colour filter / palette search.
