@@ -171,10 +171,37 @@ enum HelpContent {
             ]
         ),
         HelpFileTypeDescription(
+            id: "version-stacks",
+            extensionLabel: "Stacks",
+            title: "Version Stacks",
+            description: "Variants of one image — re-rolls with the same seed and prompt, numbered copies, upscales — can sit behind one cover tile. Turn it on per folder or collection with View ▸ Stack Variants (also in the context menu's Stack submenu); it's off until you do.",
+            highlights: [
+                "Automatic stacks group files in the listing with the same seed and prompt; names that differ only by a variant suffix (name_1, name (2), name copy, name-upscaled, name@2x, name-v2); ComfyUI-style counters (ComfyUI_00012_) when the prompt matches; and upscales — the same picture (visual index signature), the same aspect ratio, a larger pixel size.",
+                "A stack tile shows the cover with stacked edges and a count badge; click the badge's chevron (or View ▸ Stacks ▸ Expand Stack, or the details panel's Expand) to list every variant inline right after the cover, marked with an accent rail. Expand All / Collapse All are in View ▸ Stacks.",
+                "Selecting a collapsed stack selects its cover only: ratings, flags, labels, tags, drags, exports and every other action apply to the cover. Expand the stack to act on the other variants.",
+                "Opening a collapsed stack in the lightbox expands it, so the arrow keys walk through its variants; closing the lightbox collapses it again (unless you ended on another variant).",
+                "The cover is the one you chose (Set as Cover), otherwise the most recently modified file — never the largest. It's only what the tile shows: nothing about stacks marks, ranks or suggests any file for deletion.",
+                "Stack Selected makes a manual stack of the selection (turning Stack Variants on); Unstack breaks a stack up and keeps its files out of automatic stacks; Remove from Stack takes the selected variant out. Manual stacks, covers and these choices are curation data: they're in backups, exports and the library data file that syncs between Macs."
+            ]
+        ),
+        HelpFileTypeDescription(
+            id: "image-text",
+            extensionLabel: "Text & Tags",
+            title: "Text in Images and Suggested Tags",
+            description: "After the visual index, a background pass reads the text visible in each image (Vision text recognition, accurate, with language correction) and classifies what the image shows. It runs at low priority on a reduced-size copy, follows the visual index's Pause and Stop, and stays on this Mac. Settings ▸ Search Index has the switches, counts, Re-analyse and Reset.",
+            highlights: [
+                "Search: choose the Text in Image search mode to match only recognised text; All includes it too, and Find in Library… matches it across the library. Prompt search stays prompt-only, so watermarks and the garbled lettering image models paint don't pollute it.",
+                "The details panel's Text in Image card shows what was read, with Copy. Images not analysed yet have an Analyse Now button.",
+                "Smart folders can require \u{201C}Text in image contains …\u{201D} or \u{201C}Has text in image\u{201D}.",
+                "Suggested tags (under the file's tags in the details panel) come from confident, specific classification labels (generic ones like \u{201C}structure\u{201D} or \u{201C}people\u{201D} are left out), the main colour family and the generation model. Click a chip to add that tag, or Add All.",
+                "Library ▸ Apply Suggested Tags… (and the context menu) reviews suggestions for the whole selection with a checkbox each; nothing is added until you press Apply and confirm. Suggestions only ever add tags — they never remove any — and are never applied on their own."
+            ]
+        ),
+        HelpFileTypeDescription(
             id: "curation-data",
             extensionLabel: "Your Data",
             title: "Backups, Export and Sync Between Macs",
-            description: "Ratings, flags, tags, favorites, custom orders, smart folders, collections and sets, snippets and recent folders are backed up, can be exported and imported, and sync between Macs through your library folder. Settings ▸ Data has every control.",
+            description: "Ratings, flags, tags, favorites, custom orders, smart folders, collections and sets, snippets, version stacks and recent folders are backed up, can be exported and imported, and sync between Macs through your library folder. Settings ▸ Data has every control.",
             highlights: [
                 "Backups: one a day, plus one before every import, restore and app upgrade, in Application Support ▸ PromptLibraryExplorer ▸ Backups (14 daily and 8 weekly are kept). Choose an extra backup folder — for example in Dropbox — to keep copies off this Mac. Restore from Backup… lists them with their date and counts.",
                 "Export Curation Data… writes everything to one JSON file (a documented format with both absolute and library-relative paths). Import… shows what would change per kind before anything happens; Merge keeps what you have and adds the export's data, Replace makes your data exactly the export. Undo Import puts back what you had.",
@@ -197,6 +224,64 @@ enum HelpContent {
                 "The sidebar's Inbox shows files ingested in the last 7 days, with a badge for the new ones; click it (or a folder under it) for an Inbox listing, newest first. Mark All Seen clears the badge; Clear Inbox empties the list without touching files. Library ▸ Show Inbox, Mark Inbox as Seen and Ingest Log… do the same.",
                 "Folders on external, network or Dropbox volumes work; a folder that disappears is marked Unavailable and picked up again when it comes back. With \u{201C}Process files added while the app was closed\u{201D} (on by default) files that arrived while the app wasn't running are processed at the next launch (\u{201C}N new files since last run\u{201D}).",
                 "Activity shows in the status bar's indexing indicator; problems appear as a message and in the Ingest Log (the last 200 events)."
+            ]
+        ),
+        HelpFileTypeDescription(
+            id: "spotlight-automation",
+            extensionLabel: "System",
+            title: "Spotlight, Shortcuts and promptlibrary:// Links",
+            description: "Find library files from Spotlight by their prompt, tags, model or rating, and drive the app from Shortcuts, scripts and links. Settings ▸ Integrations has the controls.",
+            highlights: [
+                "Spotlight (on by default): every file in the library search index is added to Spotlight with its name, a prompt excerpt, the full prompt text, its tags, model, sampler, rating, pixel size and a small thumbnail. Choosing a result opens the app on the file's folder with the file selected. New, re-indexed, moved and trashed files update Spotlight as the search index changes; rating and tag changes update just those files. Rebuild Spotlight Index replaces everything; Remove from Spotlight takes every item out and turns the option off. Files are never modified.",
+                "Shortcuts actions (under PromptLibrary Explorer in the Shortcuts app): Search Library (a query in, matching files out), Add Files to Collection (creates it if needed), Export with Preset (one of your export presets; a Destination Folder is needed when the preset asks each time), Strip AI Metadata (the Export for Sharing preset), Open Folder in PromptLibrary and Get Prompt of File. Exports never replace existing files and never touch the originals. Siri / Spotlight phrases such as \u{201C}Search PromptLibrary Explorer\u{201D} run them too.",
+                "Links, for Shortcuts' Open URL, Terminal's open or any note: promptlibrary://open?path=~/Pictures/Renders opens a folder (a file opens its folder with the file selected); promptlibrary://search?q=cinematic%20portrait runs Find in Library; promptlibrary://collection?name=Portfolio opens a collection. Paths may start with ~; spaces are %20. Links only navigate: nothing reachable from a link changes, exports or deletes files."
+            ]
+        ),
+        HelpFileTypeDescription(
+            id: "cloud-files",
+            extensionLabel: "Cloud",
+            title: "Online-Only Cloud Files (Dropbox, iCloud Drive, Google Drive)",
+            description: "Files your cloud provider keeps online only are shown but never downloaded behind your back.",
+            highlights: [
+                "Online-only files (not downloaded to this Mac) show a cloud badge and a cloud placeholder instead of a thumbnail. Thumbnails, prompt parsing, library and visual indexing, hover scrubbing and waveforms skip them, so browsing a big Dropbox folder never starts hundreds of downloads. Their names stay searchable; their prompts are indexed once they're downloaded.",
+                "Right-click ▸ Download (or File ▸ Download from Cloud) fetches the selected online-only files; the tiles fill in when each one arrives. Make Available Offline… downloads them and shows them in Finder, where Dropbox and Google Drive's \u{201C}Make Available Offline\u{201D} or iCloud Drive's \u{201C}Keep Downloaded\u{201D} keeps them on this Mac (only the provider can pin files).",
+                "The lightbox shows \u{201C}Download to View\u{201D} for an online-only file. With \u{201C}Download files automatically when opened\u{201D} (Settings ▸ Integrations, on by default) opening one in the lightbox downloads it straight away; this only applies to files you open yourself."
+            ]
+        ),
+        HelpFileTypeDescription(
+            id: "prompt-lineage-builder",
+            extensionLabel: "Prompts",
+            title: "Prompt Lineage and the Prompt Builder",
+            description: "See how a prompt evolved across related files, and compose new prompts from your own text, snippets and phrases already in your library.",
+            highlights: [
+                "Show Prompt Lineage (context menu, Library menu, the details panel's Prompt Tools): select two or more related files, or use a Similar Images group. The chain runs oldest first by file date; each step shows its thumbnail, the prompt with added words underlined in green and removed words struck through in red, and the seed / steps / CFG / sampler / model / size changes since the step before. Negative prompts can be shown too.",
+                "Library ▸ Prompt Builder… starts empty; Open in Prompt Builder (context menu, details panel, a lineage step's menu) starts from a file's prompt, negative prompt and parameters.",
+                "Add snippets (filter by category; click or drag into the prompt) or search the library index for a word and click a phrase that contains it. Every comma-separated phrase gets a weight chip: − / + write Stable Diffusion's (phrase:1.2) syntax; Reset Weights removes them.",
+                "The preview shows the prompt as Plain Text, Midjourney, Stable Diffusion, DALL-E or JSON (Midjourney and DALL-E leave SD weights out). Copy any format, Save as Snippet (category Builder), or Send to Generator."
+            ]
+        ),
+        HelpFileTypeDescription(
+            id: "send-to-generator",
+            extensionLabel: "Generators",
+            title: "Re-run in ComfyUI and Send to A1111 / Forge",
+            description: "Send a file's prompt and settings back to a generator running on this Mac or your network. Settings ▸ Generators holds the server addresses (ComfyUI http://127.0.0.1:8188, Automatic1111 / Forge http://127.0.0.1:7860) and Test Connection.",
+            highlights: [
+                "Re-run in ComfyUI queues the file's embedded ComfyUI API graph as-is, or with a new random seed and/or an edited positive prompt (the text of the encoder feeding the sampler's positive input). You get the queued prompt id. A file that only carries the UI workflow can't be queued directly: copy the workflow JSON and queue it in ComfyUI.",
+                "Send to A1111 / Forge posts the prompt, negative prompt, steps, CFG, sampler, seed and size to txt2img (start the server with --api). Images are saved into an \"A1111 Output\" folder beside the source file (or a folder you choose); nothing is ever overwritten. A progress bar follows the server, and Cancel interrupts it.",
+                "Use the file's model asks the server to switch to the file's checkpoint for that request and switch back afterwards.",
+                "The app connects only to the addresses in Settings, only when you press Queue, Generate or Test Connection, and never in the background. Requests time out instead of hanging; errors explain what the server said."
+            ]
+        ),
+        HelpFileTypeDescription(
+            id: "prompt-statistics",
+            extensionLabel: "Statistics",
+            title: "Prompt Statistics",
+            description: "Library ▸ Prompt Statistics… summarises This Folder (the current listing) or the Whole Library (from the search index; Library ▸ Reindex Library keeps it current).",
+            highlights: [
+                "Top words and two- or three-word phrases, counted once per file with common words left out. Click one to find it with Find in Library.",
+                "Model usage by month (all models or one), sampler, steps and CFG distributions, and files per day over the last 60 days. Hover a bar for its numbers.",
+                "Average rating and pick rate by model and by sampler, from your ratings and flags. Click a model or sampler to list its files in the browser.",
+                "View ▸ Folder Statistics still shows file types and sizes for the folder."
             ]
         )
     ]

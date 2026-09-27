@@ -99,6 +99,47 @@ cp "$BUILD_DIR/$EXEC_NAME" "$STAGED_APP/Contents/MacOS/$EXEC_NAME"
 cp "$BUILD_DIR/$EXEC_NAME" "$STAGED_APP/Contents/MacOS/PromptLibrary Explorer"
 cp "$RES/AppIcon.icns" "$STAGED_APP/Contents/Resources/AppIcon.icns"
 
+# App Intents metadata (Shortcuts actions). SwiftPM doesn't run Xcode's "Extract App
+# Intents Metadata" phase, so do it here: the release build emits the compiler's const
+# values for the App Intents protocols (Package.swift, appIntentsFlags) and Xcode's
+# appintentsmetadataprocessor turns them into Contents/Resources/Metadata.appintents,
+# which LaunchServices reads when the app is registered. Without it the app still
+# works (and promptlibrary:// links still do); Shortcuts just won't list the actions.
+AIMP="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor"
+CONST_VALUES="$ROOT/.build/appintents/$EXEC_NAME.swiftconstvalues"
+if [[ -x "$AIMP" && -f "$CONST_VALUES" ]]; then
+    echo "==> Extracting App Intents metadata"
+    find "$ROOT/$EXEC_NAME" -name '*.swift' > "$STAGE/appintents-sources.txt"
+    echo "$CONST_VALUES" > "$STAGE/appintents-constvalues.txt"
+    XCODE_BUILD_VERSION="$(xcodebuild -version 2>/dev/null | awk '/Build version/ { print $3 }')"
+    DEPLOYMENT_TARGET="$(/usr/libexec/PlistBuddy -c 'Print LSMinimumSystemVersion' "$RES/Info.plist" 2>/dev/null || echo 14.0)"
+    if "$AIMP" \
+        --output "$STAGED_APP/Contents/Resources" \
+        --toolchain-dir "$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain" \
+        --module-name "$EXEC_NAME" \
+        --sdk-root "$(xcrun --sdk macosx --show-sdk-path)" \
+        --xcode-version "${XCODE_BUILD_VERSION:-unknown}" \
+        --platform-family macOS \
+        --deployment-target "$DEPLOYMENT_TARGET" \
+        --target-triple "$(uname -m)-apple-macos$DEPLOYMENT_TARGET" \
+        --binary-file "$STAGED_APP/Contents/MacOS/$EXEC_NAME" \
+        --bundle-identifier "$APP_ID" \
+        --source-file-list "$STAGE/appintents-sources.txt" \
+        --swift-const-vals-list "$STAGE/appintents-constvalues.txt" \
+        > "$STAGE/appintents.log" 2>&1 \
+        && [[ -f "$STAGED_APP/Contents/Resources/Metadata.appintents/extract.actionsdata" ]]
+    then
+        echo "    Metadata.appintents: $(/usr/bin/python3 -c 'import json,sys; print(", ".join(sorted(json.load(open(sys.argv[1]))["actions"])))' \
+            "$STAGED_APP/Contents/Resources/Metadata.appintents/extract.actionsdata" 2>/dev/null || echo written)"
+    else
+        echo "    WARNING: App Intents metadata extraction failed; Shortcuts won't list the actions:" >&2
+        sed 's/^/    /' "$STAGE/appintents.log" | tail -20 >&2
+        rm -rf "$STAGED_APP/Contents/Resources/Metadata.appintents"
+    fi
+else
+    echo "    WARNING: no App Intents const values ($CONST_VALUES); Shortcuts won't list the actions" >&2
+fi
+
 # SwiftPM resource bundles (none today; appear if a target declares `resources:`).
 # Bundle.module looks for them next to the executable's bundle Resources.
 shopt -s nullglob

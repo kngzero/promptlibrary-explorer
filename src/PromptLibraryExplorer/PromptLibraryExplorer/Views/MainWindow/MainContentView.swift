@@ -75,6 +75,14 @@ struct MainContentView: View {
             SnippetsView()
                 .environment(vm)
         }
+        // Library ▸ Apply Suggested Tags… (Views/Stacks); applies nothing unconfirmed.
+        .sheet(item: Binding(
+            get: { TagSuggestionController.shared.session },
+            set: { if $0 == nil { TagSuggestionController.shared.closeReview() } }
+        )) { session in
+            ApplySuggestedTagsSheet(session: session) { TagSuggestionController.shared.closeReview() }
+                .environment(vm)
+        }
         .alert(
             vm.deleteConfirmationRequest?.title ?? "Delete Permanently?",
             isPresented: Binding(

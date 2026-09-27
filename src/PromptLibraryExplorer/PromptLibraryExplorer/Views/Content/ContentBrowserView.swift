@@ -811,7 +811,8 @@ private struct ExplorerItemView: View {
     }
 
     private var loadKey: String {
-        "\(item.id)|\(Int(size.rounded()))"
+        // The cloud state reloads the thumbnail once an online-only file is downloaded.
+        "\(item.id)|\(Int(size.rounded()))|\(CloudFileController.shared.isCloudOnly(item))"
     }
 
     private var badgeKind: PreviewBadgeKind? {
@@ -872,7 +873,8 @@ private struct ExplorerItemView: View {
                 .font(.system(size: size * 0.35))
                 .foregroundStyle(Color.appAccent.opacity(0.6))
         } else {
-            Image(systemName: iconForFile(item.name))
+            // Online-only cloud files get a cloud placeholder (never downloaded for a thumbnail).
+            Image(systemName: CloudFileController.shared.isCloudOnly(item) ? "icloud" : iconForFile(item.name))
                 .font(.system(size: size * 0.25))
                 .foregroundStyle(Color.appMuted)
         }
@@ -947,6 +949,9 @@ private struct ExplorerItemView: View {
                     RoundedRectangle(cornerRadius: AppRadius.md)
                         .strokeBorder(tileStrokeColor, lineWidth: 2)
                 )
+                // Version stacks: stacked edges behind a collapsed stack, a rail on expanded members.
+                .background { StackTileEdges(path: item.path, size: size) }
+                .overlay(alignment: .leading) { StackMemberRail(path: item.path, size: size) }
                 .overlay(alignment: .topLeading) {
                     CompactStarBadge(rating: vm.rating(for: item.path))
                         .offset(x: 4, y: 4)
@@ -966,6 +971,11 @@ private struct ExplorerItemView: View {
                             .padding(.bottom, AppSpacing.xs)
                             .allowsHitTesting(false)
                     }
+                }
+                .overlay(alignment: .bottomLeading) {
+                    CloudFileBadge(item: item, side: badgeSide)
+                        .offset(x: 4, y: -4)
+                        .allowsHitTesting(false)
                 }
                 .overlay(alignment: .topTrailing) {
                     TileCullBadges(
@@ -1016,6 +1026,10 @@ private struct ExplorerItemView: View {
                     }
                 )
             }
+        }
+        // Stack count + expand / collapse, above the click / drag layer.
+        .overlay(alignment: .top) {
+            StackTileBadge(path: item.path, size: size, cellWidth: cellWidth)
         }
         // One VoiceOver element per tile. Accessibility modifiers don't affect hit
         // testing, so FileDragSource's click/drag handling is unchanged. While renaming,

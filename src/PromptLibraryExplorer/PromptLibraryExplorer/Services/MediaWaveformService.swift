@@ -96,6 +96,8 @@ enum MediaWaveformService {
             return stored
         }
         guard !Task.isCancelled else { return nil }
+        // Waveform thumbnails never download an online-only cloud file.
+        guard CloudFileStatus.isLocallyAvailable(url) else { return nil }
 
         let peaks: [Float]? = try? await MediaWaveformLimiter.run {
             try await extractPeaks(from: url, bucketCount: bucketCount)

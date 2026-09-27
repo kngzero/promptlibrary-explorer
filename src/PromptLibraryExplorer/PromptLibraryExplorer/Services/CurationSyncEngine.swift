@@ -24,8 +24,13 @@ import Foundation
 //     "tags":           { "hero":   { "v": { "name": "Hero", "colorHex": "#EF4444" }, "t", "d" } },
 //     "collections":    { "UUID":   { "v": { "name", "createdAt", "parentID", "items": [relative] }, "t", "d" } },
 //     "collectionSets": { "UUID":   { "v": { "name", "createdAt", "parentID" }, "t", "d" } },
-//     "smartFolders":   { "UUID":   { "v": { "name", "createdAt", "criteria", "tagNames" }, "t", "d" } }
+//     "smartFolders":   { "UUID":   { "v": { "name", "createdAt", "criteria", "tagNames" }, "t", "d" } },
+//     "stacks":         { "UUID":   { "v": { "createdAt", "items": [relative], "cover": relative? }, "t", "d" } },
+//     "stackExclusions": { "Shoot/a.png": { "v": true, "t", "d" } }   // kept out of automatic stacks
 //   }
+//
+// "stacks" / "stackExclusions" were added without a schema bump (older apps ignore them;
+// the ledger on a Mac that knows them writes them back on its next sync).
 //
 // "t" is seconds since 1970 when that Mac changed the value ("t": 0 marks values that
 // existed before sync was first turned on), "d" the device. A record without "v" is a
@@ -81,6 +86,13 @@ struct LibrarySetValue: Codable, Equatable {
     var parentID: UUID?
 }
 
+/// A manual version stack in the library data file (members root-relative).
+struct LibraryStackValue: Codable, Equatable {
+    var createdAt: String
+    var items: [String]
+    var cover: String?
+}
+
 struct LibrarySmartFolderValue: Codable, Equatable {
     var name: String
     var createdAt: String
@@ -107,12 +119,15 @@ struct LibraryCurationDocument: Codable, Equatable {
     var collections: [String: Stamped<LibraryCollectionValue>] = [:]
     var collectionSets: [String: Stamped<LibrarySetValue>] = [:]
     var smartFolders: [String: Stamped<LibrarySmartFolderValue>] = [:]
+    var stacks: [String: Stamped<LibraryStackValue>] = [:]
+    var stackExclusions: [String: Stamped<Bool>] = [:]
 
     init() {}
 
     enum CodingKeys: String, CodingKey {
         case format, schemaVersion, updatedAt, updatedBy, updatedByName, appVersion
         case files, customOrders, tags, collections, collectionSets, smartFolders
+        case stacks, stackExclusions
     }
 
     init(from decoder: Decoder) throws {
@@ -133,6 +148,8 @@ struct LibraryCurationDocument: Codable, Equatable {
         collections = try c.decodeIfPresent([String: Stamped<LibraryCollectionValue>].self, forKey: .collections) ?? [:]
         collectionSets = try c.decodeIfPresent([String: Stamped<LibrarySetValue>].self, forKey: .collectionSets) ?? [:]
         smartFolders = try c.decodeIfPresent([String: Stamped<LibrarySmartFolderValue>].self, forKey: .smartFolders) ?? [:]
+        stacks = (try? c.decodeIfPresent([String: Stamped<LibraryStackValue>].self, forKey: .stacks)) ?? [:]
+        stackExclusions = (try? c.decodeIfPresent([String: Stamped<Bool>].self, forKey: .stackExclusions)) ?? [:]
     }
 
     /// True when the synced content (not the header) is the same.
@@ -140,11 +157,13 @@ struct LibraryCurationDocument: Codable, Equatable {
         files == other.files && customOrders == other.customOrders && tags == other.tags
             && collections == other.collections && collectionSets == other.collectionSets
             && smartFolders == other.smartFolders
+            && stacks == other.stacks && stackExclusions == other.stackExclusions
     }
 
     var isEmpty: Bool {
         files.isEmpty && customOrders.isEmpty && tags.isEmpty && collections.isEmpty
             && collectionSets.isEmpty && smartFolders.isEmpty
+            && stacks.isEmpty && stackExclusions.isEmpty
     }
 
     static func decode(_ data: Data) throws -> LibraryCurationDocument {
@@ -198,6 +217,8 @@ struct CurationPortableState: Equatable {
     var collections: [String: LibraryCollectionValue] = [:]
     var collectionSets: [String: LibrarySetValue] = [:]
     var smartFolders: [String: LibrarySmartFolderValue] = [:]
+    var stacks: [String: LibraryStackValue] = [:]
+    var stackExclusions: [String: Bool] = [:]
 }
 
 extension LibraryCurationDocument {
@@ -218,6 +239,8 @@ extension LibraryCurationDocument {
         state.collections = collections.compactMapValues(\.value)
         state.collectionSets = collectionSets.compactMapValues(\.value)
         state.smartFolders = smartFolders.compactMapValues(\.value)
+        state.stacks = stacks.compactMapValues(\.value)
+        state.stackExclusions = stackExclusions.compactMapValues(\.value)
         return state
     }
 }
@@ -318,6 +341,8 @@ enum CurationMergeEngine {
         result.collections = mergeMaps(local.collections, remote.collections, kind: "collection", preferLocal: preferLocal, conflicts: &conflicts)
         result.collectionSets = mergeMaps(local.collectionSets, remote.collectionSets, kind: "collection set", preferLocal: preferLocal, conflicts: &conflicts)
         result.smartFolders = mergeMaps(local.smartFolders, remote.smartFolders, kind: "smart folder", preferLocal: preferLocal, conflicts: &conflicts)
+        result.stacks = mergeMaps(local.stacks, remote.stacks, kind: "stack", preferLocal: preferLocal, conflicts: &conflicts)
+        result.stackExclusions = mergeMaps(local.stackExclusions, remote.stackExclusions, kind: "stack exclusion", preferLocal: preferLocal, conflicts: &conflicts)
         return result
     }
 
@@ -371,6 +396,8 @@ enum CurationMergeEngine {
         result.collections = stampMap(result.collections, current.collections)
         result.collectionSets = stampMap(result.collectionSets, current.collectionSets)
         result.smartFolders = stampMap(result.smartFolders, current.smartFolders)
+        result.stacks = stampMap(result.stacks, current.stacks)
+        result.stackExclusions = stampMap(result.stackExclusions, current.stackExclusions)
         return result
     }
 
@@ -395,6 +422,8 @@ enum CurationMergeEngine {
         result.collections = document.collections.compactMapValues { keep($0) }
         result.collectionSets = document.collectionSets.compactMapValues { keep($0) }
         result.smartFolders = document.smartFolders.compactMapValues { keep($0) }
+        result.stacks = document.stacks.compactMapValues { keep($0) }
+        result.stackExclusions = document.stackExclusions.compactMapValues { keep($0) }
         return result
     }
 

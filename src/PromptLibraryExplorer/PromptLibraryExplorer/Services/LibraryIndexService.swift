@@ -116,8 +116,12 @@ actor LibraryIndexService {
     /// extracted records at or under them instead of resurrecting ghost rows.
     private var activeBuildCount = 0
     private var pathsMutatedDuringBuilds: [String] = []
+    /// Only the app's own index (`shared`, default location) feeds Spotlight;
+    /// test instances on a temp database never post `didChangeNotification`.
+    private let postsChanges: Bool
 
     init(databaseURL: URL? = nil) {
+        postsChanges = databaseURL == nil
         if let databaseURL {
             self.databaseURL = databaseURL
         } else {
@@ -171,6 +175,7 @@ actor LibraryIndexService {
             transaction {
                 for path in stale { deleteRow(path: path) }
             }
+            postChange(removed: stale)
         }
 
         let total = toIndex.count
@@ -196,6 +201,7 @@ actor LibraryIndexService {
             transaction {
                 for record in records { upsert(record) }
             }
+            postChange(upserted: records.map(\.path))
             done += batch.count
             start += batchSize
             progress?(done, total)
@@ -273,6 +279,46 @@ actor LibraryIndexService {
         return result
     }
 
+    /// Prompt Statistics rows: every indexed file under `root` (nil = all), or
+    /// exactly `paths` when given, with its prompt text and parameters.
+    /// Ratings and flags are filled in by the caller.
+    func statsRows(under root: URL?, paths: [String]? = nil) async -> [PromptStatsRow] {
+        guard openIfNeeded() else { return [] }
+        let select = """
+        SELECT f.path, f.mtime, f.model, f.sampler, f.steps, f.cfg, p.prompt
+        FROM files f LEFT JOIN prompts p ON p.rowid = f.id
+        """
+        var rows: [PromptStatsRow] = []
+        func read(_ stmt: OpaquePointer) {
+            let mtime = sqlite3_column_double(stmt, 1)
+            rows.append(PromptStatsRow(
+                path: Self.columnText(stmt, 0) ?? "",
+                date: mtime > 0 ? Date(timeIntervalSince1970: mtime) : nil,
+                prompt: Self.columnText(stmt, 6) ?? "",
+                model: Self.columnText(stmt, 2),
+                sampler: Self.columnText(stmt, 3),
+                steps: Self.columnText(stmt, 4),
+                cfg: Self.columnText(stmt, 5)
+            ))
+        }
+        if let paths {
+            var index = 0
+            while index < paths.count {
+                if Task.isCancelled { return rows }
+                let chunk = Array(paths[index..<min(index + 400, paths.count)])
+                index += 400
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                queryUncached(select + " WHERE f.path IN (\(placeholders))", chunk.map { .text($0) }, row: read)
+            }
+        } else if let root {
+            let (lower, upper) = Self.descendantRange(Self.normalizedPath(root.path))
+            queryUncached(select + " WHERE f.path > ? AND f.path < ?", [.text(lower), .text(upper)], row: read)
+        } else {
+            queryUncached(select, [], row: read)
+        }
+        return rows
+    }
+
     func movePath(from oldPath: String, to newPath: String) async {
         guard openIfNeeded() else { return }
         let old = Self.normalizedPath(oldPath)
@@ -285,6 +331,7 @@ actor LibraryIndexService {
         let newURL = URL(fileURLWithPath: new)
         let newName = newURL.lastPathComponent
         let newFolder = newURL.deletingLastPathComponent().path
+        let movedPaths = postsChanges ? indexedPaths(atOrUnder: old) : []
 
         transaction {
             // Anything already at the destination is replaced.
@@ -310,17 +357,26 @@ actor LibraryIndexService {
                  [.text(movedLower), .text(movedUpper)])
             exec("UPDATE roots SET root = ? WHERE root = ?", [.text(new), .text(old)])
         }
+        if !movedPaths.isEmpty {
+            let oldPrefixCount = old.count
+            postChange(
+                upserted: movedPaths.map { new + String($0.dropFirst(oldPrefixCount)) },
+                removed: movedPaths
+            )
+        }
     }
 
     func removeEntries(under path: String) async {
         guard openIfNeeded() else { return }
         let normalized = Self.normalizedPath(path)
         noteMutation(normalized)
+        let removedPaths = postsChanges ? indexedPaths(atOrUnder: normalized) : []
         let (lower, upper) = Self.descendantRange(normalized)
         transaction {
             deleteRow(path: normalized)
             deleteRange(lower: lower, upper: upper)
         }
+        postChange(removed: removedPaths)
     }
 
     /// Per-path update for live folder changes and ingest: each path that is a new
@@ -355,6 +411,8 @@ actor LibraryIndexService {
         }
         if !missing.isEmpty {
             for path in missing { noteMutation(path) }
+            let removedPaths = postsChanges ? missing.flatMap { indexedPaths(atOrUnder: $0) } : []
+            defer { postChange(removed: removedPaths) }
             transaction {
                 for path in missing {
                     deleteRow(path: path)
@@ -367,6 +425,32 @@ actor LibraryIndexService {
         let records = await Self.extractRecords(candidates)
         transaction {
             // A file removed while it was being read must not come back as a ghost row.
+            for record in records where FileManager.default.fileExists(atPath: record.path) { upsert(record) }
+        }
+        postChange(upserted: records.map(\.path).filter { FileManager.default.fileExists(atPath: $0) })
+    }
+
+    /// Re-reads files that are already indexed even though they didn't change: their
+    /// recognised image text (ImageTextService) did. Paths not in the index are skipped;
+    /// the next index picks them up.
+    func refreshIndexedText(paths: [String]) async {
+        guard openIfNeeded(), !paths.isEmpty else { return }
+        var candidates: [LibraryIndexCandidate] = []
+        for raw in Set(paths) {
+            let path = Self.normalizedPath(raw)
+            query("SELECT folder, name, mtime, size FROM files WHERE path = ?", [.text(path)]) { stmt in
+                candidates.append(LibraryIndexCandidate(
+                    path: path,
+                    name: Self.columnText(stmt, 1) ?? (path as NSString).lastPathComponent,
+                    folder: Self.columnText(stmt, 0) ?? (path as NSString).deletingLastPathComponent,
+                    mtime: sqlite3_column_double(stmt, 2),
+                    size: sqlite3_column_int64(stmt, 3)
+                ))
+            }
+        }
+        guard !candidates.isEmpty else { return }
+        let records = await Self.extractRecords(candidates)
+        transaction {
             for record in records where FileManager.default.fileExists(atPath: record.path) { upsert(record) }
         }
     }
@@ -421,6 +505,83 @@ actor LibraryIndexService {
             exec("DELETE FROM roots", [])
         }
         exec("VACUUM", [])
+        postChange(reset: true)
+    }
+
+    // MARK: - Change feed (Spotlight)
+
+    /// Posted by `shared` after rows change. userInfo: `upsertedPathsKey` / `removedPathsKey`
+    /// ([String]) and `resetKey` (Bool). Posted from the actor; observers hop to the main actor.
+    nonisolated static let didChangeNotification = Notification.Name("LibraryIndexService.didChange")
+    nonisolated static let upsertedPathsKey = "upserted"
+    nonisolated static let removedPathsKey = "removed"
+    nonisolated static let resetKey = "reset"
+
+    private func postChange(upserted: [String] = [], removed: [String] = [], reset: Bool = false) {
+        guard postsChanges, reset || !upserted.isEmpty || !removed.isEmpty else { return }
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil, userInfo: [
+            Self.upsertedPathsKey: upserted, Self.removedPathsKey: removed, Self.resetKey: reset,
+        ])
+    }
+
+    /// Indexed file paths equal to or under `path`.
+    private func indexedPaths(atOrUnder path: String) -> [String] {
+        var paths: [String] = []
+        let (lower, upper) = Self.descendantRange(path)
+        queryUncached("SELECT path FROM files WHERE path = ? OR (path > ? AND path < ?)",
+                      [.text(path), .text(lower), .text(upper)]) { stmt in
+            if let value = Self.columnText(stmt, 0) { paths.append(value) }
+        }
+        return paths
+    }
+
+    /// Spotlight source rows: exactly `paths` when given, else every file under `root`
+    /// (nil = the whole index).
+    func spotlightRows(forPaths paths: [String]? = nil, under root: URL? = nil) async -> [LibraryIndexSpotlightRow] {
+        guard openIfNeeded() else { return [] }
+        let select = "SELECT f.path, f.name, f.folder, p.prompt, p.negative, f.model, f.sampler, f.width, f.height "
+            + "FROM files f LEFT JOIN prompts p ON p.rowid = f.id"
+        var rows: [LibraryIndexSpotlightRow] = []
+        func read(_ stmt: OpaquePointer) {
+            guard let path = Self.columnText(stmt, 0) else { return }
+            rows.append(LibraryIndexSpotlightRow(
+                path: path,
+                name: Self.columnText(stmt, 1) ?? (path as NSString).lastPathComponent,
+                folder: Self.columnText(stmt, 2) ?? (path as NSString).deletingLastPathComponent,
+                prompt: Self.columnText(stmt, 3) ?? "",
+                negative: Self.columnText(stmt, 4) ?? "",
+                model: Self.columnText(stmt, 5),
+                sampler: Self.columnText(stmt, 6),
+                width: Self.columnInt(stmt, 7),
+                height: Self.columnInt(stmt, 8)
+            ))
+        }
+        if let paths {
+            var index = 0
+            while index < paths.count {
+                if Task.isCancelled { return rows }
+                let chunk = Array(paths[index..<min(index + 400, paths.count)])
+                index += 400
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                queryUncached(select + " WHERE f.path IN (\(placeholders))", chunk.map { .text($0) }, row: read)
+            }
+        } else if let root {
+            let (lower, upper) = Self.descendantRange(Self.normalizedPath(root.path))
+            queryUncached(select + " WHERE f.path > ? AND f.path < ?", [.text(lower), .text(upper)], row: read)
+        } else {
+            queryUncached(select, [], row: read)
+        }
+        return rows
+    }
+
+    /// Every root that has been indexed (Spotlight domains).
+    func indexedRoots() async -> [String] {
+        guard openIfNeeded() else { return [] }
+        var roots: [String] = []
+        queryUncached("SELECT root FROM roots", []) { stmt in
+            if let root = Self.columnText(stmt, 0) { roots.append(root) }
+        }
+        return roots
     }
 
     // MARK: - Database plumbing
@@ -867,7 +1028,18 @@ struct LibraryIndexRecord: Sendable {
 /// Reads the same metadata the app shows for a file, without decoding images or touching the
 /// parsers' in-memory caches (which are sized for browsing, not whole-library scans).
 enum LibraryIndexExtractor {
+    /// Text recognised in an image (ImageTextService), appended to its searchable prompt
+    /// text. Installed by the app at launch; nil (tests) = no lookup.
+    nonisolated(unsafe) static var imageTextLookup: (@Sendable (String) async -> String?)?
+
     static func record(for candidate: LibraryIndexCandidate) async -> LibraryIndexRecord {
+        // Online-only cloud file: index the name only, never download it. The -1
+        // mtime makes the next pass look at it again (once it's been downloaded).
+        guard CloudFileStatus.isLocallyAvailable(path: candidate.path) else {
+            return LibraryIndexRecord(
+                path: candidate.path, name: candidate.name, folder: candidate.folder, mtime: -1, size: candidate.size
+            )
+        }
         var record = LibraryIndexRecord(
             path: candidate.path,
             name: candidate.name,
@@ -923,6 +1095,9 @@ enum LibraryIndexExtractor {
                 params.height = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue
             }
             record.parameters = params
+            if let lookup = imageTextLookup, let text = await lookup(candidate.path), !text.isEmpty {
+                record.prompt = record.prompt.isEmpty ? text : record.prompt + "\n" + text
+            }
         } else if FileHelpers.isAudioFile(name) {
             let meta = await AudioMetadataParser.shared.parse(at: url)
             record.prompt = meta.searchText
@@ -937,4 +1112,17 @@ enum LibraryIndexExtractor {
         record.title = text.title.trimmingCharacters(in: .whitespacesAndNewlines)
         record.prompt = document.indexText
     }
+}
+
+/// One file's searchable data for Core Spotlight (`SpotlightItemBuilder`).
+struct LibraryIndexSpotlightRow: Sendable, Equatable {
+    var path: String
+    var name: String
+    var folder: String
+    var prompt: String
+    var negative: String
+    var model: String?
+    var sampler: String?
+    var width: Int?
+    var height: Int?
 }

@@ -98,6 +98,9 @@ struct LibraryIndexSettingsPage: View {
         }
 
         VisualIndexSettingsSection()
+
+        // OCR + classification (Views/Stacks); follows the visual index's schedule.
+        ImageAnalysisSettingsSection()
     }
 
     @ViewBuilder

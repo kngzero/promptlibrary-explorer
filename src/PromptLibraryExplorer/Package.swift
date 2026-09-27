@@ -1,4 +1,5 @@
 // swift-tools-version: 5.9
+ import Foundation
  import PackageDescription
 
 // App-extension link flags (Xcode's appex recipe): link app-extension-safe and enter at
@@ -7,6 +8,18 @@
 let extensionLinkerFlags = [
     "-Xlinker", "-application_extension",
     "-Xlinker", "-e", "-Xlinker", "_NSExtensionMain",
+]
+
+// App Intents (Shortcuts): SwiftPM doesn't run Xcode's "Extract App Intents Metadata"
+// step. Release builds of the app emit the compiler's const values for the App Intents
+// protocols; scripts/package_app.sh feeds them to appintentsmetadataprocessor, which
+// writes Contents/Resources/Metadata.appintents (what Shortcuts reads).
+let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
+let appIntentsConstValuesPath = packageDirectory + "/.build/appintents/PromptLibraryExplorer.swiftconstvalues"
+let appIntentsFlags = [
+    "-emit-const-values-path", appIntentsConstValuesPath,
+    "-Xfrontend", "-const-gather-protocols-file",
+    "-Xfrontend", packageDirectory + "/scripts/appintents-const-protocols.json",
 ]
 
 let package = Package(
@@ -25,7 +38,8 @@ let package = Package(
         .executableTarget(
             name: "PromptLibraryExplorer",
             dependencies: ["ArtOfficialFormats"],
-            path: "PromptLibraryExplorer"
+            path: "PromptLibraryExplorer",
+            swiftSettings: [.unsafeFlags(appIntentsFlags, .when(configuration: .release))]
         ),
         // MARK: Quick Look app extensions (see Extensions/README.md)
         // SwiftPM can't emit .appex bundles; these build as plain executables that

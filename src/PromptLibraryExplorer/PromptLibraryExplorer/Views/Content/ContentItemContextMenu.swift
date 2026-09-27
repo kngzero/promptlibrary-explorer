@@ -52,6 +52,9 @@ struct ContentItemContextMenu: View {
 
         Button("Reveal in Finder", action: onSelection { vm.revealSelectionInFinder() })
 
+        // Online-only cloud files: Download / Make Available Offline… (nothing otherwise).
+        CloudItemMenuItems(targets: targets)
+
         if !item.isDirectory, FileHelpers.isImageFile(item.name) || FileHelpers.isVideoFile(item.name) {
             let apps = FileSystemService.applicationsForFile(url: item.url)
             if !apps.isEmpty {
@@ -128,6 +131,9 @@ struct ContentItemContextMenu: View {
             TagAssignmentMenu(paths: targets.map(\.path))
         }
 
+        // Suggested tags (review sheet) and version stacks (Views/Stacks).
+        StackContextMenuItems(item: item, index: index, targets: targets)
+
         // Collections
         if targetsHaveFiles {
             Menu("Add to Collection") {
@@ -149,6 +155,11 @@ struct ContentItemContextMenu: View {
         // (right-clicking an unselected item selects just that item).
         if targets.count == 2 {
             Button("Compare Prompts", action: onSelection { vm.openPromptDiff() })
+        }
+
+        // Prompt workflows: lineage, builder, send to generator (Views/Prompts).
+        PromptItemMenuItems(item: item, targets: targets) {
+            ContentItemActions.ensureSelected(item, at: index, vm: vm)
         }
 
         // 2–4 images / videos side by side with synced zoom (Views/Compare).

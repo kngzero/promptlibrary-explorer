@@ -413,6 +413,8 @@ actor AudioMetadataParser {
         if let cached = cache[path] {
             return cached
         }
+        // Online-only cloud file: nothing to show until it's downloaded (not cached).
+        guard CloudFileStatus.isLocallyAvailable(url) else { return .empty }
 
         let parsed = Self.readMetadata(at: url)
         cache[path] = parsed

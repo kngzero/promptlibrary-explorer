@@ -92,6 +92,8 @@ struct SettingsView: View {
         switch selection {
         case .appearance:
             AppearanceSettingsPage()
+        case .integrations:
+            IntegrationSettingsPage()
         case .filters:
             FiltersSettingsPage()
         case .fileOperations:
@@ -102,6 +104,8 @@ struct SettingsView: View {
             LibraryIndexSettingsPage()
         case .ingest:
             IngestSettingsPage()
+        case .generators:
+            GeneratorsSettingsPage()
         case .organize:
             OrganizeSettingsPage()
         case .data:

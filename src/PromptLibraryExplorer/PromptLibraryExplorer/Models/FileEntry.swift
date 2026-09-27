@@ -17,6 +17,9 @@ struct FileEntry: Identifiable, Hashable {
     /// Finder tag names (`URLResourceKey.tagNamesKey`, colour labels included) as read
     /// by `FileSystemService.readDirectory`; nil when not read.
     var tagNames: [String]?
+    /// Online-only cloud placeholder (dataless File Provider / iCloud file) when the
+    /// entry was read; see `CloudFileStatus`. Files only.
+    var isCloudOnly = false
 
     var path: String { url.path }
 
@@ -48,7 +51,7 @@ struct FileEntry: Identifiable, Hashable {
         guard let values = try? url.resourceValues(forKeys: keys),
               let isDir = values.isDirectory
         else { return nil }
-        return FileEntry(
+        var entry = FileEntry(
             url: url,
             isDirectory: isDir,
             children: isDir ? [] : nil,
@@ -57,6 +60,8 @@ struct FileEntry: Identifiable, Hashable {
             fileSize: isDir ? nil : values.fileSize.map(Int64.init),
             labelNumber: values.labelNumber
         )
+        entry.isCloudOnly = CloudFileStatus.isCloudOnly(path: url.path, isDirectory: isDir)
+        return entry
     }
 }
 

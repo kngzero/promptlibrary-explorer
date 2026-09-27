@@ -87,6 +87,8 @@ struct LightboxView: View {
     var body: some View {
         HStack(spacing: 0) {
             lightboxViewport
+                // Online-only cloud file: "Download to view" (CloudFileViews.swift).
+                .overlay { LightboxCloudOverlay(item: currentItem) }
             detailsSidebar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -193,6 +193,9 @@ actor VisualIndexService {
         logStart: Int,
         progress: (@Sendable (VisualIndexProgress) -> Void)?
     ) async -> Bool {
+        // Online-only cloud files are skipped (reading them would download them); they
+        // have no row yet, so a later pass picks them up once downloaded.
+        let candidates = candidates.filter { CloudFileStatus.isLocallyAvailable(path: $0.path) }
         let total = candidates.count
         progress?(VisualIndexProgress(done: 0, total: total, currentName: nil))
         guard total > 0 else { return true }
@@ -272,6 +275,20 @@ actor VisualIndexService {
                 if let row = Self.row(from: stmt, withFeature: true), let signature = row.signature {
                     result[raw] = signature
                 }
+            }
+        }
+        return result
+    }
+
+    /// dHash and pixel size only (no feature prints): what version-stack detection needs
+    /// for upscale lineage. Unindexed paths are missing from the result.
+    func stackSignatures(forPaths paths: [String]) async -> [String: (dHash: UInt64, width: Int?, height: Int?)] {
+        guard openIfNeeded() else { return [:] }
+        var result: [String: (dHash: UInt64, width: Int?, height: Int?)] = [:]
+        for raw in paths {
+            query("SELECT dhash, width, height FROM signatures WHERE path = ?", [.text(Self.normalizedPath(raw))]) { stmt in
+                guard sqlite3_column_type(stmt, 0) != SQLITE_NULL else { return }
+                result[raw] = (UInt64(bitPattern: sqlite3_column_int64(stmt, 0)), Self.columnInt(stmt, 1), Self.columnInt(stmt, 2))
             }
         }
         return result

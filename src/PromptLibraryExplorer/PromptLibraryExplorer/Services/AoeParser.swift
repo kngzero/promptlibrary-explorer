@@ -10,6 +10,8 @@ actor AoeParser {
     private var cache = LRUCache<ParsedFileCacheEntry<PromptEntry>>(capacity: 64)
 
     func parse(at url: URL) async -> PromptEntry? {
+        // Never download an online-only cloud file just to parse it.
+        guard CloudFileStatus.isLocallyAvailable(url) else { return nil }
         let path = url.path
         let signature = ParsedFileCacheEntry<PromptEntry>.signature(of: url)
         if let cached = cache.value(forKey: path) {

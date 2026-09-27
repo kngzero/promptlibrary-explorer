@@ -16,6 +16,7 @@ enum CurationStoreKind: String, CaseIterable, Sendable {
     case collections
     case collectionSets
     case snippets
+    case stacks
 }
 
 /// Every curation store posts this after it writes, so the curation controller can
@@ -47,6 +48,8 @@ struct CurationStores {
     let recents: RecentHistoryService
     /// Where the app's own preferences (`CurationSettingsKeys.all`) are read and restored.
     let settingsDefaults: UserDefaults
+    /// Manual version stacks and automatic-stack exclusions.
+    var stacks: StackStore = StackStore()
 
     static var live: CurationStores {
         CurationStores(
@@ -58,7 +61,8 @@ struct CurationStores {
             collections: .shared,
             snippets: .shared,
             recents: .shared,
-            settingsDefaults: .standard
+            settingsDefaults: .standard,
+            stacks: StackStore()
         )
     }
 
@@ -73,7 +77,8 @@ struct CurationStores {
             collections: CollectionService(directory: directory),
             snippets: SnippetService(directory: directory),
             recents: RecentHistoryService(defaults: defaults),
-            settingsDefaults: defaults
+            settingsDefaults: defaults,
+            stacks: StackStore(defaults: defaults)
         )
     }
 }
@@ -89,6 +94,7 @@ enum CurationSettingsKeys {
         "cullingMode", "cullAutoAdvance", "previewPaneCollapsed", "searchMode",
         "browserViewMode", "browserGroupBy", "sidebarVisible", "visualIndex.enabled",
         CurationPreferences.librarySyncKey, CurationPreferences.finderTagsKey, CurationPreferences.xmpKey,
+        "imageText.recognizeText", "imageText.suggestTags",
     ]
 }
 

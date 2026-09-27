@@ -74,6 +74,9 @@ final class ThumbnailService {
             return diskImage
         }
 
+        // Online-only cloud file: generating would download it (CloudFileController).
+        guard CloudFileStatus.isLocallyAvailable(url) else { return nil }
+
         if FileHelpers.isImageFile(url.lastPathComponent) {
             let scale = NSScreen.main?.backingScaleFactor ?? 2.0
             return await rasterImage(for: url, maxPixelSize: size * scale, key: key, cache: memoryCache)
@@ -123,6 +126,9 @@ final class ThumbnailService {
             store(diskImage, key: key, in: previewCache)
             return diskImage
         }
+
+        // Online-only cloud file: the lightbox offers "Download to view" instead.
+        guard CloudFileStatus.isLocallyAvailable(url) else { return nil }
 
         if FileHelpers.isImageFile(url.lastPathComponent) {
             return await rasterImage(for: url, maxPixelSize: maxPixelSize, key: key, cache: previewCache)

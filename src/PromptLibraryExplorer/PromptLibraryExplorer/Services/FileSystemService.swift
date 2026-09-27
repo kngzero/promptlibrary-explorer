@@ -46,6 +46,8 @@ enum FileSystemService {
             )
             // For the Finder tag mirror (CurationController).
             entry.tagNames = values.tagNames ?? []
+            // Online-only cloud placeholders (one lstat; never reads contents).
+            entry.isCloudOnly = CloudFileStatus.isCloudOnly(path: itemURL.path, isDirectory: isDir)
             return entry
         }
     }

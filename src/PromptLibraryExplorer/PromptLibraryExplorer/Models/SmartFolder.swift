@@ -42,6 +42,10 @@ struct SmartFolderCriteria: Codable, Hashable {
     var labels: Set<Int> = []
     /// Dominant colours near this palette (from the visual index). Nil = no rule.
     var dominantColor: ColorFilter?
+    /// Text recognised in the image (OCR) contains this. Empty = no rule.
+    var imageTextContains = ""
+    /// The image has any recognised text.
+    var requiresImageText = false
     var matchMode: SmartFolderMatchMode = .all
 
     typealias MatchMode = SmartFolderMatchMode
@@ -59,6 +63,8 @@ struct SmartFolderCriteria: Codable, Hashable {
             || flag != .all
             || !labels.isEmpty
             || dominantColor != nil
+            || !imageTextContains.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || requiresImageText
     }
 
     enum CodingKeys: String, CodingKey {
@@ -66,6 +72,7 @@ struct SmartFolderCriteria: Codable, Hashable {
         case tagIDs, favoritesOnly, modelContains, requiresPrompt, requiresNegativePrompt, matchMode
         case flag, labels
         case dominantColor
+        case imageTextContains, requiresImageText
     }
 }
 
@@ -99,6 +106,8 @@ extension SmartFolderCriteria {
         }
         // A malformed palette drops the rule rather than the whole folder.
         dominantColor = (try? c.decodeIfPresent(ColorFilter.self, forKey: .dominantColor)) ?? nil
+        imageTextContains = (try? c.decodeIfPresent(String.self, forKey: .imageTextContains)) ?? ""
+        requiresImageText = (try? c.decodeIfPresent(Bool.self, forKey: .requiresImageText)) ?? false
     }
 }
 

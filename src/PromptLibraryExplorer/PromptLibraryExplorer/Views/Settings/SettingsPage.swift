@@ -8,11 +8,13 @@ import SwiftUI
 /// Declaration order is the order pages appear within their group.
 enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     case appearance
+    case integrations
     case filters
     case fileOperations
     case export
     case libraryIndex
     case ingest
+    case generators
     case organize
     case data
     case storage
@@ -21,9 +23,9 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
 
     var group: SettingsPageGroup {
         switch self {
-        case .appearance:
+        case .appearance, .integrations:
             return .general
-        case .filters, .fileOperations, .export, .libraryIndex, .ingest:
+        case .filters, .fileOperations, .export, .libraryIndex, .ingest, .generators:
             return .library
         case .organize, .data, .storage:
             return .maintenance
@@ -34,6 +36,8 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .appearance:
             return "Appearance"
+        case .integrations:
+            return "Integrations"
         case .filters:
             return "Filters"
         case .fileOperations:
@@ -44,6 +48,8 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
             return "Search Index"
         case .ingest:
             return "Ingest"
+        case .generators:
+            return "Generators"
         case .organize:
             return "Organize"
         case .data:
@@ -57,6 +63,8 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .appearance:
             return "circle.lefthalf.filled"
+        case .integrations:
+            return "puzzlepiece.extension"
         case .filters:
             return "line.3.horizontal.decrease.circle"
         case .fileOperations:
@@ -67,6 +75,8 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
             return "text.magnifyingglass"
         case .ingest:
             return "tray.and.arrow.down"
+        case .generators:
+            return "paperplane"
         case .organize:
             return "calendar.badge.clock"
         case .data:
@@ -81,6 +91,8 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .appearance:
             return "Theme and colour behaviour across the whole app."
+        case .integrations:
+            return "Spotlight search, Shortcuts and promptlibrary:// links, and online-only cloud files."
         case .filters:
             return "Which files the explorer shows you, in every folder."
         case .fileOperations:
@@ -91,6 +103,8 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
             return "The full-text prompt index behind library search and the command palette."
         case .ingest:
             return "Live folder updates, and watched folders whose new files are sorted, renamed and tagged into your library."
+        case .generators:
+            return "ComfyUI and Automatic1111 / Forge servers for Re-run in ComfyUI and Send to A1111 / Forge."
         case .organize:
             return "Reshape the current folder into dated subfolders, or flatten it back out."
         case .data:

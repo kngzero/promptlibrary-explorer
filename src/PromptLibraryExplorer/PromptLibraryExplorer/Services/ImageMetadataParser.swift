@@ -46,6 +46,8 @@ actor ImageMetadataParser {
         if let cached = cache[path] {
             return cached
         }
+        // Online-only cloud file: nothing to show until it's downloaded (not cached).
+        guard CloudFileStatus.isLocallyAvailable(url) else { return .empty }
 
         let parsed = Self.readMetadata(at: url)
         cache[path] = parsed
@@ -64,7 +66,8 @@ actor ImageMetadataParser {
     /// Parses a file's embedded metadata without touching the actor's cache. Safe to call from
     /// any thread; used by whole-library indexing.
     static func readMetadataUncached(at url: URL) -> Metadata {
-        readMetadata(at: url)
+        guard CloudFileStatus.isLocallyAvailable(url) else { return .empty }
+        return readMetadata(at: url)
     }
 
     private static func readMetadata(at url: URL) -> Metadata {

@@ -1,4 +1,5 @@
 import AppKit
+import CoreSpotlight
 import SwiftUI
 
 extension Notification.Name {
@@ -13,14 +14,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Set once the window's view model exists; URLs that arrive earlier
     /// (e.g. the app was launched by opening a file) are queued.
     @MainActor weak var viewModel: ExplorerViewModel? {
-        didSet { flushPendingURLs() }
+        didSet {
+            // Spotlight, Shortcuts, promptlibrary:// links, cloud files (idempotent).
+            viewModel?.configureSystemIntegration()
+            flushPendingURLs()
+            flushPendingAutomation()
+        }
     }
     @MainActor private var pendingURLs: [URL] = []
+    /// promptlibrary:// links and Spotlight results that arrived before the window.
+    @MainActor private var pendingAutomationURLs: [URL] = []
+    @MainActor private var pendingActivities: [NSUserActivity] = []
 
     @MainActor
     func application(_ application: NSApplication, open urls: [URL]) {
         pendingURLs.append(contentsOf: urls.filter(\.isFileURL))
+        pendingAutomationURLs.append(contentsOf: urls.filter(AutomationURL.isAutomationURL))
         flushPendingURLs()
+        flushPendingAutomation()
+    }
+
+    /// promptlibrary:// links arrive as a GetURL Apple Event; handling it here (rather
+    /// than leaving it to SwiftUI's scene routing) never opens a second window.
+    @MainActor
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+    }
+
+    @MainActor @objc
+    func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+        guard let string = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+              let url = URL(string: string)
+        else { return }
+        if url.isFileURL {
+            pendingURLs.append(url)
+            flushPendingURLs()
+        } else if AutomationURL.isAutomationURL(url) {
+            pendingAutomationURLs.append(url)
+            flushPendingAutomation()
+        }
+    }
+
+    /// Spotlight result (CSSearchableItemActionType): reveal the file.
+    @MainActor
+    func application(
+        _ application: NSApplication,
+        continue userActivity: NSUserActivity,
+        restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void
+    ) -> Bool {
+        guard userActivity.activityType == CSSearchableItemActionType else { return false }
+        pendingActivities.append(userActivity)
+        flushPendingAutomation()
+        return true
+    }
+
+    @MainActor
+    private func flushPendingAutomation() {
+        guard let viewModel, !(pendingAutomationURLs.isEmpty && pendingActivities.isEmpty) else { return }
+        let urls = pendingAutomationURLs
+        let activities = pendingActivities
+        pendingAutomationURLs = []
+        pendingActivities = []
+        NSApp.activate(ignoringOtherApps: true)
+        for activity in activities { viewModel.handleSpotlightActivity(activity) }
+        Task {
+            for url in urls { await viewModel.handleAutomationURL(url) }
+        }
     }
 
     /// Edit ▸ Select All (⌘A). The system menu item sends `selectAll:` down the
@@ -77,10 +141,16 @@ struct PromptLibraryExplorerApp: App {
                 .exportSheetsHost()
                 .ingestSheetsHost()
                 .mediaSheetsHost()
+                .promptSheetsHost()
                 .environment(explorerVM)
                 .frame(minWidth: 900, minHeight: 600)
                 .preferredColorScheme(explorerVM.appearanceMode.preferredColorScheme)
                 .onAppear { appDelegate.viewModel = explorerVM }
+                // Spotlight results, when SwiftUI routes the activity to the scene
+                // instead of the delegate (deduplicated in handleSpotlightActivity).
+                .onContinueUserActivity(CSSearchableItemActionType) { activity in
+                    explorerVM.handleSpotlightActivity(activity)
+                }
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1280, height: 800)
@@ -172,6 +242,12 @@ struct PromptLibraryExplorerApp: App {
                 .disabled(isBlocked || (browserHidden
                     ? explorerVM.similarPageTargetPath == nil
                     : (!hasSelection && explorerVM.selectedFolderPath == nil)))
+
+                // Online-only cloud files in the selection (no key equivalent).
+                Button("Download from Cloud") {
+                    run { explorerVM.downloadCloudFiles(explorerVM.selectedItems) }
+                }
+                .disabled(isBlocked || browserHidden || explorerVM.cloudOnlyItems(in: explorerVM.selectedItems).isEmpty)
 
                 Divider()
 
@@ -393,6 +469,57 @@ struct PromptLibraryExplorerApp: App {
                 }
                 .disabled(isBlocked || browserHidden)
 
+                // Version stacks (per folder / collection). No key equivalents.
+                Group {
+                    Divider()
+
+                    Toggle("Stack Variants", isOn: Binding(
+                        get: { explorerVM.isStackingEnabled },
+                        set: { _ in run { explorerVM.toggleStackingForCurrentListing() } }
+                    ))
+                    .disabled(isBlocked || browserHidden || explorerVM.stackScope == nil)
+
+                    Menu("Stacks") {
+                        Button("Stack Selected") {
+                            runInMainWindow(allowInLightbox: false) { explorerVM.stackSelection() }
+                        }
+                        .disabled(!explorerVM.canStackSelection)
+
+                        Button("Unstack") {
+                            runInMainWindow(allowInLightbox: false) { explorerVM.unstackSelection() }
+                        }
+                        .disabled(explorerVM.selectedStack == nil)
+
+                        Button("Set as Cover") {
+                            runInMainWindow(allowInLightbox: false) { explorerVM.setSelectionAsStackCover() }
+                        }
+                        .disabled(!explorerVM.canSetSelectionAsStackCover)
+
+                        Button("Remove from Stack") {
+                            runInMainWindow(allowInLightbox: false) { explorerVM.removeSelectionFromStack() }
+                        }
+                        .disabled(!explorerVM.canRemoveSelectionFromStack)
+
+                        Divider()
+
+                        Button(explorerVM.selectedStack.map { explorerVM.stackController.isExpanded($0.id) } == true ? "Collapse Stack" : "Expand Stack") {
+                            runInMainWindow(allowInLightbox: false) { explorerVM.toggleSelectedStackExpansion() }
+                        }
+                        .disabled(explorerVM.selectedStack == nil)
+
+                        Button("Expand All Stacks") {
+                            run { explorerVM.stackController.setAllExpanded(true) }
+                        }
+                        .disabled(!explorerVM.isStackingEnabled || explorerVM.stackController.stacks.isEmpty)
+
+                        Button("Collapse All Stacks") {
+                            run { explorerVM.stackController.setAllExpanded(false) }
+                        }
+                        .disabled(!explorerVM.isStackingEnabled || explorerVM.stackController.expanded.isEmpty)
+                    }
+                    .disabled(isBlocked || browserHidden || explorerVM.lightboxOpen)
+                }
+
                 Divider()
             }
             CommandGroup(after: .toolbar) {
@@ -572,6 +699,38 @@ struct PromptLibraryExplorerApp: App {
                 }
                 .disabled(isBlocked)
 
+                // Prompt workflows (Views/Prompts). No key equivalents.
+                Group {
+                    Button("Prompt Builder…") {
+                        run { explorerVM.openPromptBuilderForTarget() }
+                    }
+                    .disabled(isBlocked)
+
+                    Button("Show Prompt Lineage") {
+                        run { explorerVM.showPromptLineage() }
+                    }
+                    .disabled(isBlocked || !explorerVM.canShowPromptLineage)
+
+                    Menu("Send to Generator") {
+                        Button("Re-run in ComfyUI…") {
+                            run { explorerVM.sendTargetToGenerator(.comfyUI) }
+                        }
+                        .disabled(!explorerVM.canSendToGenerator(.comfyUI, item: explorerVM.promptActionTarget))
+                        Button("Send to A1111 / Forge…") {
+                            run { explorerVM.sendTargetToGenerator(.a1111) }
+                        }
+                        .disabled(!explorerVM.canSendToGenerator(.a1111, item: explorerVM.promptActionTarget))
+                        Divider()
+                        Button("Generator Settings…") { explorerVM.openGeneratorSettings() }
+                    }
+                    .disabled(isBlocked)
+
+                    Button("Prompt Statistics…") {
+                        run { explorerVM.openPromptStatistics() }
+                    }
+                    .disabled(isBlocked || explorerVM.explorerRootPath == nil)
+                }
+
                 Divider()
 
                 // Visual search. Inspection only — nothing here removes files.
@@ -628,6 +787,12 @@ struct PromptLibraryExplorerApp: App {
                     runInMainWindow { explorerVM.writeXMPSidecarsNow() }
                 }
                 .disabled(isBlocked || explorerVM.explorerRootPath == nil)
+
+                // Review sheet; nothing is applied without confirmation.
+                Button("Apply Suggested Tags…") {
+                    runInMainWindow(allowInLightbox: false) { explorerVM.openApplySuggestedTags() }
+                }
+                .disabled(isBlocked || explorerVM.lightboxOpen || !explorerVM.canApplySuggestedTags)
 
                 // Ingest inbox (Settings ▸ Ingest has the watched folders). No key equivalents.
                 Group {
@@ -742,7 +907,7 @@ struct PromptLibraryExplorerApp: App {
     // MARK: - Command helpers
 
     /// Observable "a sheet/modal is up" state used to disable menu items.
-    private var isBlocked: Bool { explorerVM.isAnyModalOpen || ExportController.shared.isPresenting }
+    private var isBlocked: Bool { explorerVM.isAnyModalOpen || ExportController.shared.isPresenting || PromptWorkflowController.shared.isPresenting }
 
     private var hasSelection: Bool { !explorerVM.selectedIndices.isEmpty }
 

@@ -258,6 +258,9 @@ struct MetadataPanelView: View {
                     }
                 }
 
+                // Prompt Builder, Lineage, Re-run in ComfyUI, Send to A1111 (Views/Prompts).
+                PromptWorkflowDetailCard(entry: entry)
+
                 if entry.generationInfo.model != "N/A" {
                     detailCard(title: "Generation Info") {
                         genInfoGrid(entry.generationInfo)
@@ -377,6 +380,12 @@ struct MetadataPanelView: View {
                             DominantColorsSection(path: path)
                                 .id(path)
                         }
+                    }
+
+                    // Version stack, text in image and suggested tags (Views/Stacks).
+                    if let path = entry.sourcePath {
+                        ImageAnalysisDetailsSection(path: path)
+                            .id(path)
                     }
 
                     fileInfoCard(meta)

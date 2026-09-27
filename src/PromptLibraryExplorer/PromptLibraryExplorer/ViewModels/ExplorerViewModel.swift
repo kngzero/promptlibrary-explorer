@@ -339,6 +339,8 @@ final class ExplorerViewModel {
             }
             // A lightbox the Similar Images page opened hands the browser back.
             if !lightboxOpen, oldValue { similarPageLightboxDidClose() }
+            // Version stacks: a lightbox opened on a stack walks its members.
+            if lightboxOpen != oldValue { stacksLightboxDidChange(isOpen: lightboxOpen) }
         }
     }
     var lightboxIndex: Int = 0 {
@@ -623,6 +625,8 @@ final class ExplorerViewModel {
 
         installCurationHooks()
         installIngestHooks()
+        installStackHooks()
+        installImageTextHooks()
 
         let mode = appearanceMode
         DispatchQueue.main.async { mode.applyToApp() }
@@ -681,6 +685,9 @@ final class ExplorerViewModel {
         // Filtering preserves order, so filters run on top of the cached sort.
         var items = sortedFolderContents
         let query = searchQuery.lowercased()
+        // Text recognised in images (ExplorerViewModel+Suggestions).
+        let imageTextHits: Set<String> = (searchMode == .imageText || searchMode == .all) && !query.isEmpty
+            ? imageTextMatchingPaths(for: query) : []
 
         // Filter
         items = items.filter { item in
@@ -693,7 +700,10 @@ final class ExplorerViewModel {
                 case .prompt:
                     if !contentSearchMatches.contains(item.path) { return false }
                 case .all:
-                    if !name.contains(query) && !contentSearchMatches.contains(item.path) { return false }
+                    if !name.contains(query) && !contentSearchMatches.contains(item.path)
+                        && !imageTextHits.contains(item.path) { return false }
+                case .imageText:
+                    if !imageTextHits.contains(item.path) { return false }
                 }
             }
 
@@ -735,6 +745,9 @@ final class ExplorerViewModel {
                 context: smartFolderContext()
             )
         }
+
+        // Version stacks (ExplorerViewModel+Stacks): collapsed stacks list only their cover.
+        items = applyingStacks(to: items)
 
         if groupBy != .none {
             items = groupedContiguously(items)
@@ -798,7 +811,8 @@ final class ExplorerViewModel {
     }
 
     var hiddenItemCount: Int {
-        max(0, listingSourceContents.count - processedFolderContents.count)
+        // Variants tucked behind a collapsed stack's cover aren't "hidden" by a filter.
+        max(0, listingSourceContents.count - processedFolderContents.count - collapsedStackMemberCount)
     }
 
     /// Unsorted, unfiltered entries behind the listing: the active collection's
@@ -1907,7 +1921,7 @@ final class ExplorerViewModel {
     func updateContentSearch() {
         contentSearchTask?.cancel()
 
-        guard !searchQuery.isEmpty, searchMode != .filename else {
+        guard !searchQuery.isEmpty, searchMode != .filename, searchMode != .imageText else {
             if !contentSearchMatches.isEmpty {
                 contentSearchMatches = []
             }
@@ -2623,7 +2637,7 @@ final class ExplorerViewModel {
     private func refreshPromptSearchIfNeeded() {
         contentSearchTask?.cancel()
 
-        guard !searchQuery.isEmpty, searchMode != .filename else {
+        guard !searchQuery.isEmpty, searchMode != .filename, searchMode != .imageText else {
             if !contentSearchMatches.isEmpty {
                 contentSearchMatches = []
             }
@@ -2635,6 +2649,12 @@ final class ExplorerViewModel {
 
     private func invalidateSortedFolderContents() {
         sortedFolderContentsRevision &+= 1
+        invalidateProcessedFolderContents()
+    }
+
+    /// Listing inputs owned by other controllers (version stacks, text in images)
+    /// changed: re-run the filters.
+    func externalListingInputsDidChange() {
         invalidateProcessedFolderContents()
     }
 
@@ -3388,6 +3408,7 @@ final class ExplorerViewModel {
         guard oldPath != newPath else { return }
         // Sidecars and the Finder tag mirror follow the item.
         CurationController.shared.itemDidMove(from: oldPath, to: newPath)
+        stacksItemDidMove(from: oldPath, to: newPath)
         IngestController.shared.itemDidMove(from: oldPath, to: newPath)
 
         CollectionService.shared.migratePaths(from: oldPath, to: newPath)
@@ -3892,12 +3913,15 @@ enum SearchMode: String, CaseIterable {
     case filename
     case prompt
     case all
+    /// Text recognised in images (OCR, see ImageTextService). "All" includes it too.
+    case imageText
 
     var displayName: String {
         switch self {
         case .filename: return "Filename"
         case .prompt: return "Prompt"
         case .all: return "All"
+        case .imageText: return "Text in Image"
         }
     }
 
@@ -3906,6 +3930,7 @@ enum SearchMode: String, CaseIterable {
         case .filename: return "doc.text"
         case .prompt: return "text.quote"
         case .all: return "magnifyingglass"
+        case .imageText: return "text.viewfinder"
         }
     }
 }
@@ -4119,7 +4144,8 @@ extension ExplorerViewModel {
             negativeByPath: negativePromptByPath,
             modelByPath: modelByPath,
             flags: flagBook.flags,
-            dominantColorsByPath: dominantColorsByPath
+            dominantColorsByPath: dominantColorsByPath,
+            imageTextByPath: imageTextByPathForListing
         )
     }
 

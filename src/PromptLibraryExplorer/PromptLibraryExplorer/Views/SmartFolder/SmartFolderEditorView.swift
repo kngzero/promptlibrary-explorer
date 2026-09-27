@@ -135,6 +135,17 @@ struct SmartFolderEditorView: View {
                         EditorCheckbox(title: "Favorites only", isOn: $folder.criteria.favoritesOnly)
                     }
 
+                    // Text recognised in images (Settings ▸ Search Index ▸ Text in Images).
+                    VStack(alignment: .leading, spacing: AppSpacing.md) {
+                        Text("Text in Image")
+                            .font(.appHeadline)
+                            .foregroundStyle(Color.appMuted)
+                        TextField("Text in image contains…", text: $folder.criteria.imageTextContains)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Text in image contains")
+                        EditorCheckbox(title: "Has text in image", isOn: $folder.criteria.requiresImageText)
+                    }
+
                     // Minimum Rating
                     VStack(alignment: .leading, spacing: AppSpacing.sm) {
                         Text("Minimum Rating")

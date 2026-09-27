@@ -393,6 +393,8 @@ enum MediaScrubStripService {
             }
         }
         guard !Task.isCancelled else { return nil }
+        // Hover scrub never downloads an online-only cloud file.
+        guard CloudFileStatus.isLocallyAvailable(url) else { return nil }
 
         let images: [CGImage]? = try? await MediaWorkLimiter.frames.run {
             let info = try await MediaFrameExtractor.info(for: url)

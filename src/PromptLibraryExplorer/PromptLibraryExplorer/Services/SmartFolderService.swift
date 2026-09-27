@@ -159,6 +159,19 @@ final class SmartFolderService {
             }
         }
 
+        let imageText = criteria.imageTextContains.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !imageText.isEmpty {
+            // Files not analysed yet have no text and don't match.
+            rules.append { entry in
+                guard let text = context.imageTextByPath[entry.path] else { return false }
+                return ImageTextSearch.matches(text, query: imageText)
+            }
+        }
+
+        if criteria.requiresImageText {
+            rules.append { entry in hasText(context.imageTextByPath[entry.path]) }
+        }
+
         return rules
     }
 
@@ -192,6 +205,8 @@ struct SmartFolderFilterContext {
     var flags: [String: FileFlag]
     /// Dominant colours from the visual index (unindexed files have no entry).
     var dominantColorsByPath: [String: [DominantColor]]
+    /// Text recognised in images (unanalysed files and files without text have no entry).
+    var imageTextByPath: [String: String]
 
     init(
         tagsByPath: [String: Set<UUID>] = [:],
@@ -201,7 +216,8 @@ struct SmartFolderFilterContext {
         negativeByPath: [String: String] = [:],
         modelByPath: [String: String] = [:],
         flags: [String: FileFlag] = [:],
-        dominantColorsByPath: [String: [DominantColor]] = [:]
+        dominantColorsByPath: [String: [DominantColor]] = [:],
+        imageTextByPath: [String: String] = [:]
     ) {
         self.tagsByPath = tagsByPath
         self.favorites = favorites
@@ -211,6 +227,7 @@ struct SmartFolderFilterContext {
         self.modelByPath = modelByPath
         self.flags = flags
         self.dominantColorsByPath = dominantColorsByPath
+        self.imageTextByPath = imageTextByPath
     }
 }
 

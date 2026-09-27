@@ -249,6 +249,16 @@ struct FolderStatisticsView: View {
 
     private var footer: some View {
         HStack {
+            // Words, models, samplers and ratings live on the Prompt Statistics page.
+            Button("Prompt Statistics…") {
+                vm.statisticsOpen = false
+                dismiss()
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(350))
+                    vm.openPromptStatistics(scope: .folder)
+                }
+            }
+            .buttonStyle(AppLabeledButtonStyle())
             Spacer()
             Button("Close") { dismiss() }
                 .keyboardShortcut(.defaultAction)

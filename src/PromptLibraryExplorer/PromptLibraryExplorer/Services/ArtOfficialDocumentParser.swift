@@ -14,6 +14,8 @@ actor ArtOfficialDocumentParser {
     private var cache = LRUCache<ParsedFileCacheEntry<ArtOfficialDocument>>(capacity: 12)
 
     func parse(at url: URL) async -> ArtOfficialDocument? {
+        // Never download an online-only cloud file just to parse it.
+        guard CloudFileStatus.isLocallyAvailable(url) else { return nil }
         let path = url.path
         // URL instances cache resource values; read a fresh signature every time.
         var freshURL = url

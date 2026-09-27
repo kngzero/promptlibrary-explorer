@@ -77,6 +77,21 @@ enum CurationLibraryAdapter {
                 tagNames: names
             )
         }
+        let stackBook = stores.stacks.load()
+        for stack in stackBook.stacks {
+            let inside = stack.paths.compactMap { CurationPaths.relative($0, to: root) }.filter { !$0.isEmpty }
+            // Stacks of files in other libraries stay out of this file.
+            guard inside.count >= 2 else { continue }
+            state.stacks[stack.id.uuidString] = LibraryStackValue(
+                createdAt: CurationDateFormat.wholeSecondString(from: stack.createdAt),
+                items: inside,
+                cover: stack.coverPath.flatMap { CurationPaths.relative($0, to: root) }
+            )
+        }
+        for path in stackBook.excludedPaths {
+            guard let relative = CurationPaths.relative(path, to: root), !relative.isEmpty else { continue }
+            state.stackExclusions[relative] = true
+        }
         return state
     }
 
@@ -219,6 +234,7 @@ enum CurationLibraryAdapter {
         if ordersChanged { stores.settings.saveCustomOrders(orders) }
 
         applied += applyCollections(target: target, base: base, fresh: fresh, root: root, stores: stores)
+        applied += applyStacks(target: target, base: base, fresh: fresh, root: root, stores: stores)
         applied += applySmartFolders(target: target, base: base, fresh: fresh, stores: stores, tagID: { name in
             // Smart folders can name tags nobody has yet.
             let key = name.lowercased()
@@ -290,6 +306,54 @@ enum CurationLibraryAdapter {
 
         if applied > 0 {
             stores.collections.replaceAll(collections: collections, sets: sets)
+        }
+        return applied
+    }
+
+    private static func applyStacks(
+        target: CurationPortableState,
+        base: CurationPortableState,
+        fresh: CurationPortableState,
+        root: String,
+        stores: CurationStores
+    ) -> Int {
+        var book = stores.stacks.load()
+        var applied = 0
+        for key in Set(target.stacks.keys).union(base.stacks.keys) {
+            let wanted = target.stacks[key], was = base.stacks[key]
+            guard wanted != was, fresh.stacks[key] == was, let id = UUID(uuidString: key) else { continue }
+            let index = book.stacks.firstIndex(where: { $0.id == id })
+            // Members in other libraries are this Mac's business; keep them.
+            let outside = index.map { book.stacks[$0].paths.filter { CurationPaths.relative($0, to: root) == nil } } ?? []
+            if let wanted {
+                let paths = wanted.items.map { CurationPaths.absolute($0, in: root) } + outside
+                let cover = wanted.cover.map { CurationPaths.absolute($0, in: root) }
+                if let index {
+                    book.stacks[index].paths = paths
+                    book.stacks[index].coverPath = cover
+                } else {
+                    let created = CurationDateFormat.date(from: wanted.createdAt) ?? Date()
+                    book.stacks.append(ManualStack(id: id, paths: paths, coverPath: cover, createdAt: created))
+                }
+            } else if let index {
+                if outside.count >= 2 {
+                    book.stacks[index].paths = outside
+                } else {
+                    book.stacks.remove(at: index)
+                }
+            }
+            applied += 1
+        }
+        for key in Set(target.stackExclusions.keys).union(base.stackExclusions.keys) {
+            let wanted = target.stackExclusions[key], was = base.stackExclusions[key]
+            guard wanted != was, fresh.stackExclusions[key] == was else { continue }
+            let path = CurationPaths.absolute(key, in: root)
+            if wanted == true { book.excludedPaths.insert(path) } else { book.excludedPaths.remove(path) }
+            applied += 1
+        }
+        if applied > 0 {
+            book.normalize()
+            stores.stacks.save(book)
         }
         return applied
     }

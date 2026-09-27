@@ -389,7 +389,7 @@ private struct FileListRow: View {
         .accessibilityAction {
             ContentItemActions.open(item, at: index, vm: vm)
         }
-        .task(id: item.id) {
+        .task(id: "\(item.id)|\(CloudFileController.shared.isCloudOnly(item))") {
             thumbnail = nil
             let loaded = await ContentThumbnailLoader.load(for: item, maxPixelSize: FileListColumns.thumbnailWidth * 2)
             guard !Task.isCancelled else { return }
@@ -452,12 +452,14 @@ private struct FileListRow: View {
                     .foregroundStyle(Color.appPrimaryText)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                StackListBadge(path: item.path)
                 if vm.isFavorite(path: item.path) {
                     Image(systemName: "pin.fill")
                         .font(.appFootnote)
                         .foregroundStyle(Color.favoriteGoldText)
                         .accessibilityLabel("Pinned")
                 }
+                CloudFileInlineIcon(item: item)
             }
         }
     }

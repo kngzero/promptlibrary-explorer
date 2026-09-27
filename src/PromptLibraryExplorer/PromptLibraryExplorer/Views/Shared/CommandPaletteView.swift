@@ -87,6 +87,17 @@ struct CommandPaletteView: View {
             actions.append(("Start Slideshow", "play.rectangle", { vm.startSlideshow() }))
         }
 
+        // Version stacks and suggested tags (Views/Stacks).
+        if vm.stackScope != nil {
+            actions.append((vm.isStackingEnabled ? "Turn Off Stack Variants" : "Stack Variants", "square.stack.3d.up", { vm.toggleStackingForCurrentListing() }))
+        }
+        if vm.canStackSelection {
+            actions.append(("Stack Selected", "square.stack.3d.up.fill", { vm.stackSelection() }))
+        }
+        if vm.canApplySuggestedTags {
+            actions.append(("Apply Suggested Tags…", "tag.circle", { vm.openApplySuggestedTags() }))
+        }
+
         // Ingest inbox (only with a watched folder).
         if IngestController.shared.hasSources {
             actions += [
@@ -110,6 +121,21 @@ struct CommandPaletteView: View {
         }
         if vm.canTrimVideo {
             actions.append(("Trim & Export Clip…", "timeline.selection", { vm.openTrimForTarget() }))
+        }
+
+        // Prompt workflows (Views/Prompts).
+        actions += [
+            ("Prompt Builder…", "hammer", { vm.openPromptBuilderForTarget() }),
+            ("Prompt Statistics…", "chart.bar.xaxis", { vm.openPromptStatistics() }),
+        ]
+        if vm.canShowPromptLineage {
+            actions.append(("Show Prompt Lineage", "point.topleft.down.to.point.bottomright.curvepath", { vm.showPromptLineage() }))
+        }
+        if vm.promptActionTargets.count == 1, vm.canSendToGenerator(.comfyUI, item: vm.promptActionTarget) {
+            actions.append(("Re-run in ComfyUI…", "point.3.connected.trianglepath.dotted", { vm.sendTargetToGenerator(.comfyUI) }))
+        }
+        if vm.promptActionTargets.count == 1, vm.canSendToGenerator(.a1111, item: vm.promptActionTarget) {
+            actions.append(("Send to A1111 / Forge…", "paperplane", { vm.sendTargetToGenerator(.a1111) }))
         }
 
         for (name, icon, action) in actions where q.isEmpty || name.lowercased().contains(q) {

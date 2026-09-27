@@ -29,8 +29,13 @@ import Foundation
 //     "collectionSets":[ { "id", "name", "createdAt", "parentID" } ],
 //     "snippets":      [ { "id", "title", "text", "category", "createdAt" } ],
 //     "recentFolders": [ { "path", "name", "timestamp" } ],
-//     "settings":      { "thumbnailSize": 5, "appearanceMode": "dark", ... }
+//     "settings":      { "thumbnailSize": 5, "appearanceMode": "dark", ... },
+//     "stacks":        [ { "id", "createdAt", "items": [PathRef], "cover": PathRef? } ],   // manual version stacks
+//     "stackExclusions": [PathRef]           // files kept out of automatic stacks
 //   }
+//
+// "stacks" / "stackExclusions" were added without a schema bump: older readers ignore
+// them, and bundles without them read as having none.
 //
 // PathRef = { "path": absolute, "root": index into roots (optional), "relativePath": optional }.
 // Every path is stored both ways, so a bundle made on one Mac can be imported on another
@@ -62,6 +67,8 @@ struct CurationBundle: Codable, Equatable {
     var snippets: [PromptSnippet] = []
     var recentFolders: [RecentItem] = []
     var settings: [String: CurationSettingValue] = [:]
+    var stacks: [CurationBundleStack] = []
+    var stackExclusions: [CurationPathRef] = []
 
     init(
         appVersion: String,
@@ -83,6 +90,7 @@ struct CurationBundle: Codable, Equatable {
         case format, schemaVersion, appVersion, createdAt, machineName, deviceID, reason, counts
         case roots, files, tags, customOrders, smartFolders, collections, collectionSets
         case snippets, recentFolders, settings
+        case stacks, stackExclusions
     }
 
     init(from decoder: Decoder) throws {
@@ -109,6 +117,8 @@ struct CurationBundle: Codable, Equatable {
         snippets = try c.decodeIfPresent([PromptSnippet].self, forKey: .snippets) ?? []
         recentFolders = try c.decodeIfPresent([RecentItem].self, forKey: .recentFolders) ?? []
         settings = try c.decodeIfPresent([String: CurationSettingValue].self, forKey: .settings) ?? [:]
+        stacks = (try? c.decodeIfPresent([CurationBundleStack].self, forKey: .stacks)) ?? []
+        stackExclusions = (try? c.decodeIfPresent([CurationPathRef].self, forKey: .stackExclusions)) ?? []
     }
 
     // MARK: Coding
@@ -236,6 +246,14 @@ struct CurationBundleOrder: Codable, Equatable {
     var items: [CurationPathRef]
 }
 
+/// A manual version stack (members + optional cover, both as path refs).
+struct CurationBundleStack: Codable, Equatable {
+    var id: UUID
+    var createdAt: Date
+    var items: [CurationPathRef]
+    var cover: CurationPathRef?
+}
+
 struct CurationBundleCollection: Codable, Equatable {
     var id: UUID
     var name: String
@@ -258,6 +276,7 @@ struct CurationCounts: Codable, Equatable, Sendable {
     var snippets = 0
     var recentFolders = 0
     var settings = 0
+    var stacks = 0
 
     init() {}
 
@@ -276,6 +295,7 @@ struct CurationCounts: Codable, Equatable, Sendable {
         snippets = value(.snippets)
         recentFolders = value(.recentFolders)
         settings = value(.settings)
+        stacks = value(.stacks)
     }
 
     /// "12 ratings · 3 flags · …", skipping zeros.
@@ -286,6 +306,7 @@ struct CurationCounts: Codable, Equatable, Sendable {
             (favorites, "favorite", "favorites"), (collections, "collection", "collections"),
             (collectionSets, "set", "sets"), (smartFolders, "smart folder", "smart folders"),
             (snippets, "snippet", "snippets"), (customOrders, "custom order", "custom orders"),
+            (stacks, "stack", "stacks"),
         ]
         let text = parts.filter { $0.0 > 0 }.map { "\($0.0) \($0.0 == 1 ? $0.1 : $0.2)" }
         return text.isEmpty ? "No curation data" : text.joined(separator: " · ")
@@ -293,7 +314,7 @@ struct CurationCounts: Codable, Equatable, Sendable {
 
     var total: Int {
         ratings + flags + taggedFiles + tags + favorites + customOrders + smartFolders
-            + collections + collectionSets + snippets
+            + collections + collectionSets + snippets + stacks
     }
 }
 
@@ -375,6 +396,11 @@ enum CurationBundleBuilder {
                 bundle.settings[key] = value
             }
         }
+        let stackBook = stores.stacks.load()
+        bundle.stacks = stackBook.stacks.map {
+            CurationBundleStack(id: $0.id, createdAt: $0.createdAt, items: $0.paths.map(ref), cover: $0.coverPath.map(ref))
+        }
+        bundle.stackExclusions = stackBook.excludedPaths.sorted().map(ref)
 
         var counts = CurationCounts()
         counts.ratings = ratings.count
@@ -389,6 +415,7 @@ enum CurationBundleBuilder {
         counts.snippets = bundle.snippets.count
         counts.recentFolders = bundle.recentFolders.count
         counts.settings = bundle.settings.count
+        counts.stacks = bundle.stacks.count
         bundle.counts = counts
         return bundle
     }
@@ -469,6 +496,8 @@ struct CurationResolvedBundle {
     var snippets: [PromptSnippet] = []
     var recents: [RecentItem] = []
     var settings: [String: CurationSettingValue] = [:]
+    var stacks: [ManualStack] = []
+    var stackExclusions: Set<String> = []
 
     init(_ bundle: CurationBundle, resolver: CurationPathResolver) {
         func path(_ ref: CurationPathRef) -> String { resolver.resolve(ref, roots: bundle.roots) }
@@ -491,6 +520,10 @@ struct CurationResolvedBundle {
         snippets = bundle.snippets
         recents = bundle.recentFolders
         settings = bundle.settings
+        stacks = bundle.stacks.map {
+            ManualStack(id: $0.id, paths: $0.items.map(path), coverPath: $0.cover.map(path), createdAt: $0.createdAt)
+        }
+        stackExclusions = Set(bundle.stackExclusions.map(path))
     }
 }
 
@@ -560,6 +593,7 @@ enum CurationImporter {
             identified("collections", "Collections", local: stores.collections.all(), new: incoming.collections),
             identified("collectionSets", "Collection sets", local: stores.collections.allSets(), new: incoming.sets),
             identified("snippets", "Snippets", local: stores.snippets.all(), new: incoming.snippets),
+            identified("stacks", "Stacks", local: stores.stacks.load().stacks, new: incoming.stacks),
         ]
         changes[2].incoming = incoming.assignments.count
         if includeSettings {
@@ -649,6 +683,15 @@ enum CurationImporter {
             recents.append(contentsOf: stores.recents.loadAllRecentFolders().filter { !known.contains($0.path) })
         }
         stores.recents.replaceRecentFolders(recents)
+
+        // Stacks: by id; exclusions union (replace: exactly the export's).
+        let localStacks = replace ? StackBook() : stores.stacks.load()
+        var stackBook = StackBook(
+            stacks: mergedByID(local: localStacks.stacks, incoming: incoming.stacks),
+            excludedPaths: localStacks.excludedPaths.union(incoming.stackExclusions)
+        )
+        stackBook.normalize()
+        if stackBook != stores.stacks.load() || replace { stores.stacks.save(stackBook) }
 
         if includeSettings {
             for (key, value) in incoming.settings where CurationSettingsKeys.all.contains(key) {
