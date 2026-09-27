@@ -30,7 +30,6 @@ final class RenameTemplateServiceTests: TempDirectoryTestCase {
 
     func testMissingValuesAndEmptyResultFallBack() {
         XCTAssertEqual(render("{seed}", ctx("orig.png")), "orig.png", "empty result falls back to the original name")
-        XCTExpectFailure("cleanModelName strips everything up to the last '/' before its N/A check, so \"N/A\" renders as \"A\"")
         XCTAssertEqual(render("{model}", ctx("orig.png", model: "N/A")), "orig.png")
     }
 

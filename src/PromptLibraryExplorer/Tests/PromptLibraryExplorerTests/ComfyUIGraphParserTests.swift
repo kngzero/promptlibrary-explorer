@@ -193,7 +193,6 @@ final class ComfyUIGraphParserTests: TempDirectoryTestCase {
         let url = try writeFile("quoted.png", PNGFixture.png(with: [PNGFixture.tEXt("parameters", text)]))
         let parsed = ImageMetadataParser.readMetadataUncached(at: url)
         XCTAssertEqual(parsed.generationParameters.seed, "3")
-        XCTExpectFailure("ImageMetadataParser.parseParameterPairs ignores quotes and splits quoted values at \", key:\"")
         XCTAssertEqual(parsed.fields.first { $0.label == "Lora hashes" }?.value, #""detail: 111aaa, style: 222bbb""#)
         XCTAssertNil(parsed.fields.first { $0.label == "style" }, "a fake `style` field was split out of the quoted value")
     }

@@ -108,17 +108,19 @@ struct FileTreeView: View {
         .environment(\.defaultMinListRowHeight, 24)
         .scrollContentBackground(.hidden)
         .background(Color.appBackground)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+        // Same toolbar id as the browser toolbar, so the window keeps a single
+        // customizable toolbar (see BrowserToolbarItemID).
+        .toolbar(id: BrowserToolbarItemID.toolbar) {
+            ToolbarItem(id: BrowserToolbarItemID.openFolder, placement: .primaryAction) {
                 Button {
                     Task { await vm.openFolder() }
                 } label: {
-                    Image(systemName: "folder.badge.plus")
+                    Label("Open Folder", systemImage: "folder.badge.plus")
                 }
                 .help("Open Folder")
                 .accessibilityLabel("Open Folder")
             }
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItem(id: BrowserToolbarItemID.appearance, placement: .primaryAction) {
                 AppearanceToggleButton()
             }
         }
@@ -245,7 +247,7 @@ private struct AppearanceToggleButton: View {
         Button {
             set(isDark ? .light : .dark)
         } label: {
-            Image(systemName: isDark ? "sun.max" : "moon")
+            Label("Appearance", systemImage: isDark ? "sun.max" : "moon")
         }
         .help(isDark ? "Switch to Light Mode" : "Switch to Dark Mode")
         .accessibilityLabel(isDark ? "Switch to Light Mode" : "Switch to Dark Mode")

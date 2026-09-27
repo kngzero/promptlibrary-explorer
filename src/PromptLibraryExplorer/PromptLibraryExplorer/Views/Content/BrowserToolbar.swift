@@ -19,6 +19,12 @@ enum BrowserToolbarItemID {
     static let settings = "browser.settings"
     static let searchMode = "browser.searchMode"
     static let search = "browser.search"
+    // Declared by other views, but in the same customizable toolbar: every
+    // `.toolbar` on the window must share this id, or AppKit turns off
+    // "Customize Toolbar…" for the whole window.
+    static let identity = "browser.identity"
+    static let openFolder = "browser.openFolder"
+    static let appearance = "browser.appearance"
 
     /// Kept visible longest when the window narrows.
     static let highPriority: Set<String> = [navigation, breadcrumbs, search]

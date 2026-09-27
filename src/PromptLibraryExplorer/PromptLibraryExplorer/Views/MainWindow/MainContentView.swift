@@ -108,10 +108,12 @@ struct MainContentView: View {
         } message: {
             Text("Enter a name for the new folder.")
         }
-        .toolbar {
-            ToolbarItem(placement: .principal) {
+        .toolbar(id: BrowserToolbarItemID.toolbar) {
+            ToolbarItem(id: BrowserToolbarItemID.identity, placement: .principal) {
                 TitlebarIdentityView()
             }
+            // The app name stays put; everything else can be customized.
+            .customizationBehavior(.disabled)
         }
         .toolbar(vm.lightboxOpen ? .hidden : .automatic, for: .windowToolbar)
         .animation(.easeInOut(duration: 0.2), value: vm.toastMessage?.message)
