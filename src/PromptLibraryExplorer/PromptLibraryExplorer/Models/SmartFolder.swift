@@ -99,6 +99,8 @@ extension SmartFolderCriteria {
 enum SmartFolderFileType: String, Codable, CaseIterable, Hashable {
     case plib
     case aoe
+    case moodboard
+    case story
     case png
     case jpg
     case webp
@@ -109,6 +111,8 @@ enum SmartFolderFileType: String, Codable, CaseIterable, Hashable {
         switch self {
         case .plib: return ".plib"
         case .aoe: return ".aoe"
+        case .moodboard: return "Mood"
+        case .story: return "Story"
         case .png: return "PNG"
         case .jpg: return "JPEG"
         case .webp: return "WebP"
@@ -122,6 +126,8 @@ enum SmartFolderFileType: String, Codable, CaseIterable, Hashable {
         switch self {
         case .plib: return lower.hasSuffix(".plib")
         case .aoe: return lower.hasSuffix(".aoe")
+        case .moodboard: return FileHelpers.isMoodboardFile(lower)
+        case .story: return FileHelpers.isStoryFile(lower)
         case .png: return lower.hasSuffix(".png")
         case .jpg: return lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg")
         case .webp: return lower.hasSuffix(".webp")

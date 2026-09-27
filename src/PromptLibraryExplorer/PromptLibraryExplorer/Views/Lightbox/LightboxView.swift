@@ -1,3 +1,4 @@
+import ArtOfficialFormats
 import AVKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -19,6 +20,12 @@ struct LightboxView: View {
     @State private var isHandToolEnabled = true
     @State private var videoPlayer = AVPlayer()
     @State private var isVideoPictureInPictureActive = false
+    /// Mood / Story sub-navigation: nil = the whole board / contact sheet, otherwise an
+    /// index into `documentSteps` (board images, storyboard shots).
+    @State private var documentStep: Int?
+    /// Rendered image for the current document view (board at window size, one image, one shot).
+    @State private var documentImage: NSImage?
+    @State private var documentImageKey = ""
 
     private let detailsSidebarWidth: CGFloat = 320
     private let viewportPadding: CGFloat = 18
@@ -36,8 +43,29 @@ struct LightboxView: View {
     }
 
     private var currentImage: NSImage? {
+        if currentDocument != nil {
+            if documentImageKey == documentImageTaskKey, let documentImage { return documentImage }
+            // Overview: the panel's preview render until the window-sized one lands.
+            return documentStep == nil ? currentEntry?.images.first : nil
+        }
         guard let entry = currentEntry, currentImageIndex >= 0, currentImageIndex < entry.images.count else { return nil }
         return entry.images[currentImageIndex]
+    }
+
+    /// The Mood board / Story project shown, once its entry has loaded for this item.
+    private var currentDocument: ArtOfficialDocument? {
+        guard let entry = currentEntry, let item = currentItem, entry.sourcePath == item.path else { return nil }
+        return entry.artOfficialDocument
+    }
+
+    private var documentSteps: [LightboxDocumentStep] {
+        currentDocument.map(LightboxDocumentStep.steps(for:)) ?? []
+    }
+
+    private var currentDocumentStep: LightboxDocumentStep? {
+        guard let documentStep else { return nil }
+        let steps = documentSteps
+        return steps.indices.contains(documentStep) ? steps[documentStep] : nil
     }
 
     private var currentVideoURL: URL? {
@@ -75,6 +103,8 @@ struct LightboxView: View {
                 if !event.isARepeat { applyCullKey(action) }
                 return true
             }
+            // Mood / Story: ←/→ step inside the document; ↑/↓ or ⌥←/⌥→ move between files.
+            if currentDocument != nil, handleDocumentKey(event) { return true }
             switch event.keyCode {
             case KeyCode.escape.rawValue:
                 closeLightbox()
@@ -94,6 +124,12 @@ struct LightboxView: View {
             case KeyCode.rightArrow.rawValue:
                 navigateToNext()
                 return true
+            case KeyCode.upArrow.rawValue:
+                navigateToPrevious()
+                return true
+            case KeyCode.downArrow.rawValue:
+                navigateToNext()
+                return true
             default:
                 return false
             }
@@ -106,7 +142,14 @@ struct LightboxView: View {
         }
         .onChange(of: vm.lightboxIndex) { _, _ in
             currentImageIndex = 0
+            documentStep = nil
             resetViewport(animated: false)
+        }
+        .onChange(of: documentStep) { _, _ in
+            resetViewport(animated: false)
+        }
+        .task(id: documentImageTaskKey) {
+            await loadDocumentImage()
         }
         .onChange(of: currentImageIndex) { _, _ in
             resetViewport(animated: false)
@@ -207,6 +250,16 @@ struct LightboxView: View {
                     }
                 }
 
+                if currentDocument != nil {
+                    if currentImage == nil {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    documentStepBar
+                        .padding(.top, AppSpacing.xl)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
+
                 if vm.cullingModeEnabled, let item = currentItem {
                     CullingHUD(item: item)
                         .padding(.horizontal, 56)
@@ -280,6 +333,14 @@ struct LightboxView: View {
                                     .foregroundStyle(Color.appPrimaryText)
                                     .textSelection(.enabled)
                             }
+                        }
+
+                        if let document = currentDocument, let item = currentItem {
+                            if let step = currentDocumentStep {
+                                documentStepCard(step)
+                            }
+                            ArtOfficialDocumentDetailView(document: document, fileURL: item.url, compact: true)
+                                .id(item.path)
                         }
 
                         if let meta = entry.fileMetadata {
@@ -370,6 +431,12 @@ struct LightboxView: View {
                     if entry.videoURL != nil {
                         actionButton(icon: "arrow.down.circle", label: "Save Video") {
                             saveCurrentVideo(entry: entry)
+                        }
+                    } else if currentDocument != nil {
+                        if currentImage != nil {
+                            actionButton(icon: "arrow.down.circle", label: documentStep == nil ? "Save Rendered Image" : "Save Image") {
+                                saveCurrentImage(entry: entry)
+                            }
                         }
                     } else if !entry.images.isEmpty {
                         actionButton(
@@ -829,6 +896,201 @@ struct LightboxView: View {
         }
     }
 
+    // MARK: - Mood / Story sub-navigation
+
+    /// ←/→ step through the board's images or the storyboard's shots (from the overview
+    /// into the first/last step and back); Esc returns to the overview. ⌥←/⌥→ fall
+    /// through to file navigation. Returns false for keys this doesn't own.
+    private func handleDocumentKey(_ event: NSEvent) -> Bool {
+        let hasOption = event.modifierFlags.contains(.option)
+        switch event.keyCode {
+        case KeyCode.leftArrow.rawValue where !hasOption:
+            stepDocument(by: -1)
+            return true
+        case KeyCode.rightArrow.rawValue where !hasOption:
+            stepDocument(by: 1)
+            return true
+        case KeyCode.escape.rawValue where documentStep != nil:
+            documentStep = nil
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func stepDocument(by offset: Int) {
+        let count = documentSteps.count
+        guard count > 0 else { return }
+        switch documentStep {
+        case nil:
+            documentStep = offset > 0 ? 0 : nil
+        case let step?:
+            let next = step + offset
+            if next < 0 {
+                documentStep = nil
+            } else if next < count {
+                documentStep = next
+            }
+        }
+    }
+
+    /// Re-render when the file, the step or the (bucketed) viewport size changes.
+    private var documentImageTaskKey: String {
+        guard currentDocument != nil, let item = currentItem else { return "none" }
+        let longest = max(viewportSize.width, viewportSize.height)
+        let bucket = Int((longest / 512).rounded(.up)) * 512
+        return "\(item.path)|\(documentStep.map(String.init) ?? "overview")|\(bucket)"
+    }
+
+    private func loadDocumentImage() async {
+        let key = documentImageTaskKey
+        guard currentDocument != nil, let item = currentItem else {
+            documentImage = nil
+            documentImageKey = ""
+            return
+        }
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let longest = max(viewportSize.width, viewportSize.height, 800)
+        let pixels = min(4096, max(1024, Int(longest * scale)))
+
+        let image: NSImage?
+        if let step = currentDocumentStep {
+            let rendered = await Task.detached(priority: .userInitiated) { step.render(maxPixelSize: pixels) }.value
+            image = rendered.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
+        } else {
+            image = await ThumbnailService.shared.previewImage(for: item.url, maxPixelSize: CGFloat(pixels))
+        }
+        guard !Task.isCancelled, key == documentImageTaskKey else { return }
+        documentImage = image
+        documentImageKey = key
+    }
+
+    /// Position pill over the viewport: "Board" / "Image 3 of 12" / "Scene 1 · Shot 2", with
+    /// step buttons for the mouse.
+    @ViewBuilder
+    private var documentStepBar: some View {
+        let steps = documentSteps
+        if !steps.isEmpty, let document = currentDocument {
+            HStack(spacing: AppSpacing.md) {
+                zoomToolbarButton(systemName: "chevron.left", label: "Previous (←)", isActive: false) {
+                    stepDocument(by: -1)
+                }
+                .disabled(documentStep == nil)
+
+                VStack(spacing: AppSpacing.xxs) {
+                    Text(documentPositionTitle(document: document, steps: steps))
+                        .font(.appCalloutEmphasis)
+                        .foregroundStyle(Color.appPrimaryText)
+                        .monospacedDigit()
+                    Text(documentStep == nil
+                         ? "→ to step through · ↑↓ or ⌥←→ change file"
+                         : currentDocumentStep?.subtitle ?? "")
+                        .font(.appFootnote)
+                        .foregroundStyle(Color.appMuted)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 320)
+                }
+
+                zoomToolbarButton(systemName: "chevron.right", label: "Next (→)", isActive: false) {
+                    stepDocument(by: 1)
+                }
+                .disabled((documentStep ?? -1) >= steps.count - 1)
+
+                if documentStep != nil {
+                    Rectangle()
+                        .fill(Color.appOverlayDivider)
+                        .frame(width: 1, height: 18)
+                    zoomToolbarButton(
+                        systemName: document.kind == .moodboard ? "square.grid.3x3" : "rectangle.grid.2x2",
+                        label: document.kind == .moodboard ? "Whole Board (Esc)" : "Contact Sheet (Esc)",
+                        isActive: false
+                    ) {
+                        documentStep = nil
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, AppSpacing.sm)
+            .background(Color.appOverlaySurface, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.appOverlayStroke, lineWidth: 1))
+            .shadow(color: Color.appShadowColor, radius: 14, y: 6)
+        }
+    }
+
+    private func documentPositionTitle(document: ArtOfficialDocument, steps: [LightboxDocumentStep]) -> String {
+        guard let documentStep, let step = currentDocumentStep else {
+            switch document.kind {
+            case .moodboard: return "Board · \(steps.count) image\(steps.count == 1 ? "" : "s")"
+            case .story: return "Contact Sheet · \(steps.count) shot\(steps.count == 1 ? "" : "s")"
+            }
+        }
+        switch step {
+        case .moodImage: return "Image \(documentStep + 1) of \(steps.count)"
+        case .shot(let shot, _, _): return shot.positionLabel
+        }
+    }
+
+    @ViewBuilder
+    private func documentStepCard(_ step: LightboxDocumentStep) -> some View {
+        switch step {
+        case .moodImage(let asset):
+            cardSection(title: "Image") {
+                Text(asset.name.isEmpty ? "Untitled image" : asset.name)
+                    .font(.appBody)
+                    .foregroundStyle(Color.appPrimaryText)
+                    .textSelection(.enabled)
+            }
+        case .shot(let step, let project, let showsProject):
+            cardSection(title: step.positionLabel) {
+                if showsProject {
+                    Text(project.title)
+                        .font(.appFootnote)
+                        .foregroundStyle(Color.appMuted)
+                }
+                Text(step.shot.name.isEmpty ? "Untitled shot" : step.shot.name)
+                    .font(.appHeadline)
+                    .foregroundStyle(Color.appPrimaryText)
+                    .textSelection(.enabled)
+                let types = step.shot.types.filter { !$0.isEmpty }
+                Text((types + [ArtOfficialTextExport.formatDuration(step.shot.estDurationSec), step.shot.status])
+                        .filter { !$0.isEmpty }
+                        .joined(separator: " · "))
+                    .font(.appCaption)
+                    .foregroundStyle(Color.badgeStoryText)
+                if !step.shot.description.isEmpty {
+                    HStack(alignment: .top) {
+                        Text(step.shot.description)
+                            .font(.appBody)
+                            .foregroundStyle(Color.appPrimaryText.opacity(0.9))
+                            .textSelection(.enabled)
+                        Spacer(minLength: 0)
+                        copyButton(step.shot.description)
+                    }
+                }
+                if !step.shot.detailedNotes.isEmpty {
+                    Text("Notes")
+                        .font(.appFootnote)
+                        .foregroundStyle(Color.appMuted)
+                    Text(step.shot.detailedNotes)
+                        .font(.appCaption)
+                        .foregroundStyle(Color.appPrimaryText)
+                        .textSelection(.enabled)
+                }
+                if !step.shot.tags.isEmpty {
+                    Text(step.shot.tags.map { "#\($0)" }.joined(separator: " "))
+                        .font(.appCaption)
+                        .foregroundStyle(Color.appMuted)
+                }
+                if !step.scene.isUnassigned {
+                    Text(step.scene.location.isEmpty ? step.scene.name : "\(step.scene.name) — \(step.scene.slugline)")
+                        .font(.appFootnote)
+                        .foregroundStyle(Color.appMuted)
+                }
+            }
+        }
+    }
+
     // MARK: - Navigation
 
     private func navigateToPrevious() {
@@ -1051,12 +1313,16 @@ struct LightboxView: View {
     // MARK: - Save Actions
 
     private func saveCurrentImage(entry: PromptEntry) {
-        guard currentImageIndex < entry.images.count else { return }
-        let image = entry.images[currentImageIndex]
+        guard let image = currentImage else { return }
 
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png, .jpeg]
-        panel.nameFieldStringValue = currentItem?.name ?? "image.png"
+        if currentDocument != nil {
+            let base = exportBaseName(from: currentItem?.name ?? "image")
+            panel.nameFieldStringValue = "\(base)\(currentDocumentStep.map { " - \($0.fileNameSuffix)" } ?? "").png"
+        } else {
+            panel.nameFieldStringValue = currentItem?.name ?? "image.png"
+        }
         panel.canCreateDirectories = true
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -1243,5 +1509,68 @@ struct LightboxAnalysisCard: View {
             RoundedRectangle(cornerRadius: AppRadius.lg)
                 .strokeBorder(accentColor.opacity(0.22), lineWidth: 1)
         )
+    }
+}
+
+// MARK: - Mood / Story lightbox steps
+
+/// One stop when stepping through a document in the lightbox.
+enum LightboxDocumentStep: Sendable {
+    case moodImage(MoodboardAsset)
+    /// Shot, its project, and whether the file has several projects (show the title).
+    case shot(StoryboardStep, StoryProject, Bool)
+
+    /// Board images in tile order (assets without a tile follow), or every shot of every
+    /// project in outline order.
+    static func steps(for document: ArtOfficialDocument) -> [LightboxDocumentStep] {
+        switch document {
+        case .moodboard(let board):
+            var seen = Set<String>()
+            var assets: [MoodboardAsset] = []
+            for tile in board.tiles {
+                if let id = tile.assetId, seen.insert(id).inserted, let asset = board.asset(id: id) {
+                    assets.append(asset)
+                }
+            }
+            for asset in board.assets where asset.kind == .image && seen.insert(asset.id).inserted {
+                assets.append(asset)
+            }
+            return assets.map { .moodImage($0) }
+        case .story(let story):
+            let multiple = story.projects.filter { $0.shotCount > 0 }.count > 1
+            return story.projects.flatMap { project in
+                project.storyboardSteps.map { .shot($0, project, multiple) }
+            }
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .moodImage(let asset): return asset.name
+        case .shot(let step, let project, let showsProject):
+            let name = step.shot.name.isEmpty ? "Untitled shot" : step.shot.name
+            return showsProject ? "\(project.title) — \(name)" : name
+        }
+    }
+
+    var fileNameSuffix: String {
+        switch self {
+        case .moodImage(let asset):
+            return ArtOfficialExtraction.sanitizedBaseName(asset.name, fallback: "image")
+        case .shot(let step, _, _):
+            return step.scene.isUnassigned
+                ? String(format: "U-SH%02d", step.shotNumber)
+                : String(format: "S%02d-SH%02d", step.sceneNumber, step.shotNumber)
+        }
+    }
+
+    /// Call off the main actor.
+    func render(maxPixelSize: Int) -> CGImage? {
+        switch self {
+        case .moodImage(let asset):
+            return asset.image.cgImage(maxPixelSize: maxPixelSize)
+        case .shot(let step, let project, _):
+            return ArtOfficialRenderer.renderStoryShot(step.shot, project: project, maxPixelSize: maxPixelSize)
+        }
     }
 }

@@ -65,6 +65,10 @@ struct ContentItemContextMenu: View {
             }
         }
 
+        if !item.isDirectory, let kind = ExplorerViewModel.artOfficialKind(forName: item.name) {
+            ArtOfficialItemMenuItems(item: item, kind: kind)
+        }
+
         Divider()
 
         // Copy
@@ -136,6 +140,11 @@ struct ContentItemContextMenu: View {
             Button("Batch Edit Metadata", action: onSelection { vm.openBatchMetadataEditor() })
         }
 
+        if targets.contains(where: { !$0.isDirectory && ArtOfficialSendBuilder.isSendable($0.name) }) {
+            Button("Send to Mood…", action: onSelection { vm.sendToArtOfficial(.mood) })
+            Button("Send to Story…", action: onSelection { vm.sendToArtOfficial(.story) })
+        }
+
         Divider()
 
         Button("Rename") {
@@ -155,6 +164,35 @@ struct ContentItemContextMenu: View {
 
         Button("Delete Permanently") {
             vm.requestPermanentDelete(for: targets)
+        }
+    }
+}
+
+/// Context-menu items for a Mood board / Story project file.
+private struct ArtOfficialItemMenuItems: View {
+    @Environment(ExplorerViewModel.self) private var vm
+    let item: FileEntry
+    let kind: ArtOfficialDocument.Kind
+
+    var body: some View {
+        Button("Open in \(kind.ownerAppName)") { vm.openInOwnerApp(item) }
+        switch kind {
+        case .moodboard:
+            Button("Extract Images…") { vm.extractEmbeddedImages(from: item) }
+            Button("Export Board as PNG…") { vm.exportRenderedImage(of: item) }
+            Menu("Copy Palette") {
+                ForEach(PaletteCopyFormat.allCases) { format in
+                    Button(format.title) { vm.copyPalette(of: item, format: format) }
+                }
+            }
+        case .story:
+            Button("Extract Shot Thumbnails…") { vm.extractEmbeddedImages(from: item) }
+            Button("Export Contact Sheet…") { vm.exportRenderedImage(of: item) }
+            Menu("Copy Shot List") {
+                ForEach(ShotListFormat.allCases) { format in
+                    Button(format.title) { vm.copyShotList(of: item, format: format) }
+                }
+            }
         }
     }
 }

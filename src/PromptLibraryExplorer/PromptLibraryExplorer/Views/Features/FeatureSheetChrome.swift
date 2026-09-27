@@ -163,6 +163,8 @@ struct FeatureThumbnail: View {
         if FileHelpers.isVideoFile(name) { return "film" }
         if FileHelpers.isAudioFile(name) { return "waveform" }
         if FileHelpers.isPromptSnapshotFile(name) { return "doc.richtext" }
+        if FileHelpers.isMoodboardFile(name) { return "square.grid.3x3.square" }
+        if FileHelpers.isStoryFile(name) { return "film.stack" }
         if FileHelpers.isImageFile(name) { return "photo" }
         return "doc"
     }

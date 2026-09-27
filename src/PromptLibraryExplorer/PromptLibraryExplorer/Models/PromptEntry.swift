@@ -185,4 +185,6 @@ struct PromptEntry: Identifiable {
     var comfyPromptJSON: String? = nil
     /// Raw ComfyUI UI workflow JSON from the PNG `workflow` chunk, when present.
     var comfyWorkflowJSON: String? = nil
+    /// Set for Mood boards and Story projects; `images` then holds the rendered overview.
+    var artOfficialDocument: ArtOfficialDocument? = nil
 }

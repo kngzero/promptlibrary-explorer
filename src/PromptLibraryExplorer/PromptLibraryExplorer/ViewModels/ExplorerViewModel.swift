@@ -389,6 +389,9 @@ final class ExplorerViewModel {
     @ObservationIgnored private var contentGroupsCacheKey: (processed: Int, groups: Int) = (-1, -1)
     @ObservationIgnored private var contentGroupsCache: [ContentGroup] = []
 
+    /// Send to Mood / Send to Story in progress (drives the progress capsule).
+    var artOfficialSendProgress: ArtOfficialSendProgress?
+
     // Feature sheets (UI lives in the views; these just drive presentation)
     var batchRenameOpen = false
     var librarySearchOpen = false
@@ -1941,6 +1944,13 @@ final class ExplorerViewModel {
                 from: entry.embeddedMetadata,
                 model: entry.generationInfo.model
             )
+        } else if FileHelpers.isArtOfficialDocumentFile(item.name) {
+            // Mood / Story: title + body (names, notes, shot descriptions, palette hex)
+            // go into the content search; they have no positive prompt of their own.
+            if let document = await ArtOfficialDocumentParser.shared.parse(at: item.url) {
+                let text = document.indexText
+                result.searchText = text.isEmpty ? nil : text
+            }
         } else if FileHelpers.isImageFile(item.name) {
             let meta = await ImageMetadataParser.shared.parse(at: item.url)
             if !meta.prompt.isEmpty {
@@ -2207,6 +2217,31 @@ final class ExplorerViewModel {
             return entry
         }
 
+        if FileHelpers.isArtOfficialDocumentFile(item.name) {
+            async let metadata = FileSystemService.getMetadataAsync(for: item.url)
+            guard let document = await ArtOfficialDocumentParser.shared.parse(at: item.url) else { return nil }
+            guard !Task.isCancelled else { return nil }
+            // Rendered board / contact sheet, disk-cached by ThumbnailService.
+            let overview = await ThumbnailService.shared.previewImage(for: item.url, maxPixelSize: 2048)
+            guard !Task.isCancelled else { return nil }
+            var entry = PromptEntry(
+                prompt: "",
+                blindPrompt: nil,
+                hint: nil,
+                generationInfo: GenerationInfo(aspectRatio: .notAvailable, model: "N/A", timestamp: "", numberOfImages: 0),
+                images: overview.map { [$0] } ?? [],
+                referenceImages: [],
+                rawImages: [],
+                rawReferenceImages: [],
+                sourcePath: item.path,
+                analysis: nil,
+                embeddedMetadata: [],
+                fileMetadata: await metadata
+            )
+            entry.artOfficialDocument = document
+            return entry
+        }
+
         if FileHelpers.isImageFile(item.name) {
             async let metadata = FileSystemService.getMetadataAsync(for: item.url)
             async let image = ThumbnailService.shared.previewImage(for: item.url)
@@ -2323,6 +2358,9 @@ final class ExplorerViewModel {
     }
 
     private func searchIndexText(for entry: PromptEntry) -> String {
+        if let document = entry.artOfficialDocument {
+            return document.indexText
+        }
         let prompt = entry.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if !prompt.isEmpty {
             return prompt
@@ -2362,6 +2400,7 @@ final class ExplorerViewModel {
         for path in Set(changes.allPaths) {
             await PlibParser.shared.invalidate(path: path)
             await AoeParser.shared.invalidate(path: path)
+            await ArtOfficialDocumentParser.shared.invalidate(path: path)
         }
         // These two only support clear-all.
         await ImageMetadataParser.shared.clearCache()
@@ -2443,6 +2482,7 @@ final class ExplorerViewModel {
         cancelPromptIndexBuild()
         await PlibParser.shared.clearCache()
         await AoeParser.shared.clearCache()
+        await ArtOfficialDocumentParser.shared.clearCache()
         await ImageMetadataParser.shared.clearCache()
         await AudioMetadataParser.shared.clearCache()
         await PromptIndexService.shared.clearIndex()

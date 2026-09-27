@@ -73,6 +73,8 @@ enum FileKindDescriber {
         let ext = item.url.pathExtension.lowercased()
         if ext == "plib" { return "Prompt Library" }
         if ext == "aoe" { return "Art Official Elements" }
+        if ext == "mlmboard" { return "Mood Board" }
+        if ext == "stry" || ext == "mlseq" { return "Story Project" }
         if ext.isEmpty { return "Document" }
         if let cached = cache[ext] { return cached }
         let description = UTType(filenameExtension: ext)?.localizedDescription ?? "\(ext.uppercased()) File"
@@ -87,7 +89,11 @@ enum ContentThumbnailLoader {
     /// Thumbnail for an image / video / .plib / .aoe entry, or nil for anything else.
     static func load(for item: FileEntry, maxPixelSize: CGFloat) async -> NSImage? {
         guard !item.isDirectory else { return nil }
-        if FileHelpers.isImageFile(item.name) || FileHelpers.isVideoFile(item.name) {
+        if FileHelpers.isImageFile(item.name) || FileHelpers.isVideoFile(item.name)
+            || FileHelpers.isArtOfficialDocumentFile(item.name)
+        {
+            // Mood boards / Story projects render through ThumbnailService's
+            // Art Official hook (memory + disk cache, off the main actor).
             return await ThumbnailService.shared.thumbnail(for: item.url, size: maxPixelSize)
         }
         if FileHelpers.isPlibFile(item.name) || FileHelpers.isAoeFile(item.name) {
@@ -122,6 +128,8 @@ enum ContentThumbnailLoader {
         let name = item.name
         if FileHelpers.isPlibFile(name) { return "doc.text" }
         if FileHelpers.isAoeFile(name) { return "doc.richtext" }
+        if FileHelpers.isMoodboardFile(name) { return "square.grid.3x3.square" }
+        if FileHelpers.isStoryFile(name) { return "film.stack" }
         if FileHelpers.isVideoFile(name) { return "film" }
         if FileHelpers.isAudioFile(name) { return "waveform" }
         if FileHelpers.isImageFile(name) { return "photo" }

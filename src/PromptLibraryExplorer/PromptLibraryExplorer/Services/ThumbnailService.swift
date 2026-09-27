@@ -1,4 +1,5 @@
 import AppKit
+import ArtOfficialFormats
 import CryptoKit
 import Foundation
 import ImageIO
@@ -78,6 +79,11 @@ final class ThumbnailService {
             return await rasterImage(for: url, maxPixelSize: size * scale, key: key, cache: memoryCache)
         }
 
+        if FileHelpers.isArtOfficialDocumentFile(url.lastPathComponent) {
+            let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+            return await artOfficialImage(for: url, maxPixelSize: size * scale, key: key, cache: memoryCache)
+        }
+
         // Tier 3: Generate via QLThumbnailGenerator
         let request = QLThumbnailGenerator.Request(
             fileAt: url,
@@ -114,6 +120,10 @@ final class ThumbnailService {
 
         if FileHelpers.isImageFile(url.lastPathComponent) {
             return await rasterImage(for: url, maxPixelSize: maxPixelSize, key: key, cache: previewCache)
+        }
+
+        if FileHelpers.isArtOfficialDocumentFile(url.lastPathComponent) {
+            return await artOfficialImage(for: url, maxPixelSize: maxPixelSize, key: key, cache: previewCache)
         }
 
         let request = QLThumbnailGenerator.Request(
@@ -178,7 +188,7 @@ final class ThumbnailService {
             return nil
         }
         return [
-            cacheVersion,
+            cacheVersion + kindTag(for: url),
             url.standardizedFileURL.path,
             values.contentModificationDate?.timeIntervalSinceReferenceDate.description ?? "nil",
             values.fileSize.map(String.init) ?? "nil",
@@ -187,7 +197,13 @@ final class ThumbnailService {
     }
 
     nonisolated private static func missingFileSignature(for url: URL, size: CGFloat) -> String {
-        [cacheVersion, url.standardizedFileURL.path, "nil", "nil", String(Int(size))].joined(separator: "|")
+        [cacheVersion + kindTag(for: url), url.standardizedFileURL.path, "nil", "nil", String(Int(size))].joined(separator: "|")
+    }
+
+    /// Art Official documents are rendered by this app; the tag keeps them from
+    /// reusing a generic icon cached before the renderer existed.
+    nonisolated private static func kindTag(for url: URL) -> String {
+        FileHelpers.isArtOfficialDocumentFile(url.lastPathComponent) ? "-aodoc1" : ""
     }
 
     // MARK: - Memory
@@ -222,6 +238,26 @@ final class ThumbnailService {
         if persist {
             Self.persistToDisk(cgImage, key: key)
         }
+        return image
+    }
+
+    /// Mood board: the rendered board. Story project: the default project's cover or
+    /// contact sheet. Parsed via `ArtOfficialDocumentParser`, rendered off the main actor.
+    private func artOfficialImage(
+        for url: URL,
+        maxPixelSize: CGFloat,
+        key: String,
+        cache: NSCache<NSString, NSImage>
+    ) async -> NSImage? {
+        guard let document = await ArtOfficialDocumentParser.shared.parse(at: url) else { return nil }
+        let pixels = Int(max(maxPixelSize, 64).rounded())
+        let rendered = await Task.detached(priority: .userInitiated) {
+            ArtOfficialRendering.overview(of: document, maxPixelSize: pixels)
+        }.value
+        guard let rendered else { return nil }
+        let image = NSImage(cgImage: rendered, size: NSSize(width: rendered.width, height: rendered.height))
+        store(image, key: key, in: cache)
+        Self.persistToDisk(rendered, key: key)
         return image
     }
 

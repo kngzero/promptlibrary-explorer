@@ -122,6 +122,8 @@ struct SortConfig: Equatable {
 enum FileTypeFilter: String, CaseIterable, Hashable {
     case plib
     case aoe
+    case moodboard
+    case story
     case png
     case jpg
     case webp
@@ -135,6 +137,8 @@ enum FileTypeFilter: String, CaseIterable, Hashable {
         switch self {
         case .plib: return "Prompt Library (.plib)"
         case .aoe: return "Art Official Elements (.aoe)"
+        case .moodboard: return "Mood Boards (.mlmboard)"
+        case .story: return "Story Projects (.stry)"
         case .png: return "PNG Images"
         case .jpg: return "JPEG Images"
         case .webp: return "WebP Images"

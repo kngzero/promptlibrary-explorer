@@ -282,6 +282,8 @@ struct BrowserToolbar: CustomizableToolbarContent {
 
             Toggle(FileTypeFilter.plib.displayName, isOn: filterBinding(for: .plib))
             Toggle(FileTypeFilter.aoe.displayName, isOn: filterBinding(for: .aoe))
+            Toggle(FileTypeFilter.moodboard.displayName, isOn: filterBinding(for: .moodboard))
+            Toggle(FileTypeFilter.story.displayName, isOn: filterBinding(for: .story))
 
             Divider()
 

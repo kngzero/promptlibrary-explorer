@@ -629,6 +629,11 @@ private struct CollectionSidebarRow: View {
             }
         }
         Divider()
+        Button("Send to Mood…") { vm.sendCollection(collection.id, to: .mood) }
+            .disabled(collection.paths.isEmpty || vm.artOfficialSendProgress != nil)
+        Button("Send to Story…") { vm.sendCollection(collection.id, to: .story) }
+            .disabled(collection.paths.isEmpty || vm.artOfficialSendProgress != nil)
+        Divider()
         Button("Rename") { onBeginRename() }
         CollectionMoveMenu(currentParentID: collection.parentID, excluding: []) { target in
             vm.moveCollection(collection.id, toSet: target)

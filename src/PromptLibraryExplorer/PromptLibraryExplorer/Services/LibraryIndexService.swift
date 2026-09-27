@@ -572,7 +572,7 @@ actor LibraryIndexService {
         guard let rowID else { return }
         exec("DELETE FROM prompts WHERE rowid = ?", [.int(rowID)])
         exec("INSERT INTO prompts(rowid, path, name, prompt, negative) VALUES(?, ?, ?, ?, ?)",
-             [.int(rowID), .text(record.path), .text(Self.searchableName(record.name)),
+             [.int(rowID), .text(record.path), .text(Self.searchableNameColumn(for: record)),
               .text(record.prompt), .text(record.negative)])
     }
 
@@ -602,6 +602,14 @@ actor LibraryIndexService {
     static func descendantRange(_ path: String) -> (String, String) {
         if path == "/" { return ("/", "0") }
         return (path + "/", path + "0")
+    }
+
+    /// The FTS `name` column: the searchable file name, plus a document title (Mood /
+    /// Story) so titles get the name column's weight.
+    static func searchableNameColumn(for record: LibraryIndexRecord) -> String {
+        let name = searchableName(record.name)
+        let title = record.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? name : name + "\n" + title
     }
 
     /// Filenames like "portrait_of-a_cat.png" become searchable words.
@@ -756,6 +764,7 @@ actor LibraryIndexService {
     static func isIndexable(_ name: String) -> Bool {
         FileHelpers.isPlibFile(name)
             || FileHelpers.isAoeFile(name)
+            || FileHelpers.isArtOfficialDocumentFile(name)
             || FileHelpers.isImageFile(name)
             || FileHelpers.isVideoFile(name)
             || FileHelpers.isAudioFile(name)
@@ -802,6 +811,8 @@ struct LibraryIndexRecord: Sendable {
     let size: Int64
     var prompt: String = ""
     var negative: String = ""
+    /// Document title (Mood / Story); indexed with the file name.
+    var title: String = ""
     var parameters = GenerationParameters()
 }
 
@@ -845,6 +856,11 @@ enum LibraryIndexExtractor {
                     record.parameters.model = model
                 }
             }
+        } else if FileHelpers.isArtOfficialDocumentFile(name) {
+            // Uncached read: whole-library scans must not churn the browsing cache.
+            if let document = ArtOfficialDocument.read(from: url) {
+                apply(document, to: &record)
+            }
         } else if FileHelpers.isImageFile(name) {
             let meta = ImageMetadataParser.readMetadataUncached(at: url)
             record.prompt = meta.prompt
@@ -864,5 +880,13 @@ enum LibraryIndexExtractor {
             record.prompt = meta.searchText
         }
         return record
+    }
+
+    /// Mood / Story search text: the title goes into the name column (weighted) and,
+    /// with the body (names, notes, descriptions, script text, palette hex), into `prompt`.
+    static func apply(_ document: ArtOfficialDocument, to record: inout LibraryIndexRecord) {
+        let text = document.searchText
+        record.title = text.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        record.prompt = document.indexText
     }
 }

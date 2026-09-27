@@ -46,6 +46,11 @@ struct StorageSettingsPage: View {
                         value: entryLabel(stats.plibEntries + stats.aoeEntries)
                     )
                     SettingsStatRow(
+                        label: "Parsed Art Official documents",
+                        detail: "Mood boards and Story projects",
+                        value: entryLabel(stats.artOfficialDocumentEntries)
+                    )
+                    SettingsStatRow(
                         label: "Media metadata",
                         detail: "images and audio",
                         value: entryLabel(stats.imageMetadataEntries + stats.audioMetadataEntries)

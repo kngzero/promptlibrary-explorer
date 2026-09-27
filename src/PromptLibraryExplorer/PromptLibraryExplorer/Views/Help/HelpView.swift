@@ -12,7 +12,7 @@ struct HelpView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     sectionCard(
                         title: "File Types",
-                        description: "Understand the two primary snapshot formats supported by the app.",
+                        description: "The Art Official formats the app reads: prompt snapshots (.plib, .aoe), Mood boards and Story projects, plus sending images to Mood and Story.",
                         icon: "doc.text.magnifyingglass",
                         accent: Color.appAccent
                     ) {

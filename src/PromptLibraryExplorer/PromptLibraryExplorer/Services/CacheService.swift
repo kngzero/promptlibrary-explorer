@@ -6,13 +6,14 @@ struct CacheStatistics: Equatable {
     var thumbnailDiskBytes: Int64 = 0
     var plibEntries: Int = 0
     var aoeEntries: Int = 0
+    var artOfficialDocumentEntries: Int = 0
     var imageMetadataEntries: Int = 0
     var audioMetadataEntries: Int = 0
     var promptIndexEntries: Int = 0
 
     /// Total number of parsed records held in memory across every parser and the search index.
     var memoryEntryCount: Int {
-        plibEntries + aoeEntries + imageMetadataEntries + audioMetadataEntries + promptIndexEntries
+        plibEntries + aoeEntries + artOfficialDocumentEntries + imageMetadataEntries + audioMetadataEntries + promptIndexEntries
     }
 
     var isEmpty: Bool {
@@ -40,6 +41,7 @@ enum CacheService {
 
         stats.plibEntries = await PlibParser.shared.cachedCount
         stats.aoeEntries = await AoeParser.shared.cachedCount
+        stats.artOfficialDocumentEntries = await ArtOfficialDocumentParser.shared.cachedCount
         stats.imageMetadataEntries = await ImageMetadataParser.shared.cachedCount
         stats.audioMetadataEntries = await AudioMetadataParser.shared.cachedCount
         stats.promptIndexEntries = await PromptIndexService.shared.count
@@ -51,6 +53,7 @@ enum CacheService {
     static func clearAll() async {
         await PlibParser.shared.clearCache()
         await AoeParser.shared.clearCache()
+        await ArtOfficialDocumentParser.shared.clearCache()
         await ImageMetadataParser.shared.clearCache()
         await AudioMetadataParser.shared.clearCache()
         await PromptIndexService.shared.clearIndex()

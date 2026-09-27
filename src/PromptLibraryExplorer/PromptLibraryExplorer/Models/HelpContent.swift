@@ -51,6 +51,43 @@ enum HelpContent {
                 "May include reference images resolved from base64, absolute paths, or relative paths.",
                 "Supports prompt, blind prompt, hint, and analysis metadata."
             ]
+        ),
+        HelpFileTypeDescription(
+            id: "mlmboard",
+            extensionLabel: ".mlmboard",
+            title: "Mood Board",
+            description: "A board made in Art Official Mood: embedded images, colour and text tiles, a layout (auto, grid or mosaic), and branding with a title, subtitle and palette. Older boards stored as ZIP archives are read too.",
+            highlights: [
+                "The grid tile and preview show the rendered board; the lightbox renders it at window size and ← / → step through its images.",
+                "The details panel lists the layout, asset and tile counts, the palette (click a swatch to copy its hex, or copy the whole palette as HEX, CSS variables or JSON) and every embedded image.",
+                "Open in Mood, Extract Images…, Export Board as PNG… and Copy Palette are in the context menu and the details panel.",
+                "Title, subtitle, image names, captions and palette hex values are searchable."
+            ]
+        ),
+        HelpFileTypeDescription(
+            id: "stry",
+            extensionLabel: ".stry / .mlseq",
+            title: "Story Project",
+            description: "A storyboard made in Art Official Story: one or more projects with scenes, shots (thumbnail, type, description, notes, tags, duration) and Fountain scripts. .mlseq is the older web format.",
+            highlights: [
+                "The grid tile shows the project cover or a contact sheet of the first shots.",
+                "The details panel shows credits, dates, counts, estimated runtime, a scene → shot outline and the scripts; files with several projects get a project picker.",
+                "In the lightbox, ← / → step shot by shot (\"Scene 1 · Shot 2\") with the shot's type, description and notes beside it.",
+                "Open in Story, Extract Shot Thumbnails…, Export Contact Sheet… and Copy Shot List (text or CSV) are in the context menu and the details panel.",
+                "Loglines, scene names, locations, shot descriptions, notes, tags and script text are searchable."
+            ]
+        ),
+        HelpFileTypeDescription(
+            id: "send-to",
+            extensionLabel: "Send to",
+            title: "Send to Mood / Send to Story",
+            description: "File ▸ Send to Mood… or Send to Story… (also in the grid and collection context menus) builds a new board or storyboard from the selected images — or the whole folder or collection when nothing is selected — in display order.",
+            highlights: [
+                "Only images are sent; anything else is skipped and reported.",
+                "Mood boards get the images (large ones scaled to 2560 px) and a palette taken from them, titled after the folder or collection.",
+                "Story projects get one shot per image, named after the file, with the file's prompt as the description and its tags.",
+                "When it's done you can open the new file in Mood or Story, or reveal it in Finder."
+            ]
         )
     ]
 
@@ -137,7 +174,9 @@ enum HelpContent {
             items: [
                 HelpShortcutItem(id: "lightbox-close-esc", keys: ["Esc"], description: "Close the lightbox."),
                 HelpShortcutItem(id: "lightbox-close-space", keys: ["Space"], description: "Play or pause video and audio; otherwise close the lightbox."),
-                HelpShortcutItem(id: "lightbox-nav", keys: ["←", "→"], description: "Move to the previous or next previewable item.")
+                HelpShortcutItem(id: "lightbox-nav", keys: ["←", "→"], description: "Move to the previous or next previewable item. On a Mood board or Story project they step through its images or shots instead."),
+                HelpShortcutItem(id: "lightbox-nav-files", keys: ["↑", "↓"], description: "Move to the previous or next previewable item, including from inside a Mood board or Story project. Option ← / Option → do the same."),
+                HelpShortcutItem(id: "lightbox-doc-back", keys: ["Esc"], description: "While stepping through a Mood board or Story project, return to the whole board or contact sheet (press again to close).")
             ]
         ),
         HelpShortcutGroup(

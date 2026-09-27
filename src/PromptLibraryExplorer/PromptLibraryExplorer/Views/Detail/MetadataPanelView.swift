@@ -178,6 +178,11 @@ struct MetadataPanelView: View {
     private func metadataPane(entry: PromptEntry) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppSpacing.lg) {
+                if let document = entry.artOfficialDocument, let path = entry.sourcePath {
+                    ArtOfficialDocumentDetailView(document: document, fileURL: URL(fileURLWithPath: path))
+                        .id(path)
+                }
+
                 if !entry.prompt.isEmpty {
                     detailCard(title: nil) {
                         HStack(alignment: .top, spacing: AppSpacing.sm) {

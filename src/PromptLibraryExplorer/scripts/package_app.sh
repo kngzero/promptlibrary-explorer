@@ -34,6 +34,13 @@ cd "$ROOT"
 
 echo "==> Building ($EXEC_NAME, release) with DEVELOPER_DIR=$DEVELOPER_DIR"
 swift build -c release --product "$EXEC_NAME"
+# Quick Look extensions (Extensions/README.md): plain executables linked with
+# -e _NSExtensionMain, wrapped into PLX*.appex bundles below.
+QL_EXTENSIONS=(PLXQuickLookPreview PLXQuickLookThumbnail)
+for ext in "${QL_EXTENSIONS[@]}"; do
+    echo "==> Building ($ext, release)"
+    swift build -c release --product "$ext"
+done
 BUILD_DIR="$(swift build -c release --show-bin-path)"
 
 plutil -lint "$RES/Info.plist" >/dev/null
@@ -60,17 +67,27 @@ for b in "$BUILD_DIR"/*.bundle; do
 done
 
 # ---------------------------------------------------------------------------
-# HOOK: Quick Look / app extensions (currently a no-op).
-# A future step will build PLX*.appex (e.g. into $BUILD_DIR or an Extensions/
-# staging dir in the package root). Any found are embedded in Contents/PlugIns/
-# and signed below before the app itself.
+# Quick Look app extensions -> Contents/PlugIns/<Name>.appex
+#   Contents/Info.plist     <- Extensions/<Name>/Info.plist (XPC!, NSExtension dict)
+#   Contents/MacOS/<Name>   <- SwiftPM executable product
+# Any prebuilt PLX*.appex dropped in $BUILD_DIR or Extensions/ is embedded too.
 # ---------------------------------------------------------------------------
+mkdir -p "$STAGED_APP/Contents/PlugIns"
+for ext in "${QL_EXTENSIONS[@]}"; do
+    SRC="$ROOT/Extensions/$ext"
+    plutil -lint "$SRC/Info.plist" >/dev/null
+    plutil -lint "$SRC/$ext.entitlements" >/dev/null
+    APPEX="$STAGED_APP/Contents/PlugIns/$ext.appex"
+    mkdir -p "$APPEX/Contents/MacOS"
+    cp "$SRC/Info.plist" "$APPEX/Contents/Info.plist"
+    cp "$BUILD_DIR/$ext" "$APPEX/Contents/MacOS/$ext"
+    echo "    plugin: $ext.appex"
+done
 APPEXES=("$BUILD_DIR"/PLX*.appex "$ROOT"/Extensions/*.appex)
 shopt -u nullglob
 if (( ${#APPEXES[@]} > 0 )); then
-    mkdir -p "$STAGED_APP/Contents/PlugIns"
     for ext in "${APPEXES[@]}"; do
-        echo "    plugin: $(basename "$ext")"
+        echo "    plugin (prebuilt): $(basename "$ext")"
         cp -R "$ext" "$STAGED_APP/Contents/PlugIns/"
     done
 fi
@@ -79,7 +96,14 @@ echo "==> Ad-hoc signing"
 # Nested code first (inside-out), then the app.
 if [[ -d "$STAGED_APP/Contents/PlugIns" ]]; then
     for ext in "$STAGED_APP/Contents/PlugIns"/*.appex; do
-        codesign --force --sign - "$ext"
+        # Quick Look only loads sandboxed extensions; sign each with its entitlements.
+        name="$(basename "$ext" .appex)"
+        ENT="$ROOT/Extensions/$name/$name.entitlements"
+        if [[ -f "$ENT" ]]; then
+            codesign --force --sign - --entitlements "$ENT" --generate-entitlement-der "$ext"
+        else
+            codesign --force --sign - "$ext"
+        fi
     done
 fi
 codesign --force --sign - "$STAGED_APP/Contents/MacOS/PromptLibrary Explorer"
@@ -96,6 +120,15 @@ echo "==> Signature OK"
 
 "$LSREGISTER" -f "$APP"
 echo "==> Registered with LaunchServices: $APP"
+
+# Register the embedded extensions with PlugInKit right away (LaunchServices would
+# pick them up eventually) and drop stale Quick Look thumbnails.
+for ext in "$APP/Contents/PlugIns"/*.appex; do
+    pluginkit -a "$ext" 2>/dev/null || echo "    pluginkit -a failed for $(basename "$ext")" >&2
+done
+qlmanage -r >/dev/null 2>&1 || true
+qlmanage -r cache >/dev/null 2>&1 || true
+echo "==> Registered Quick Look extensions (pluginkit -mAvvv -p com.apple.quicklook.preview)"
 
 if (( LAUNCH )); then
     echo "==> Relaunching"

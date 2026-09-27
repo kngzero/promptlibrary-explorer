@@ -526,6 +526,18 @@ struct ContentStatusBarView: View {
                 Divider().frame(height: 10)
             }
 
+            if stats.moodCount > 0 {
+                statusBadge(icon: "square.grid.3x3.square", value: "\(stats.moodCount)", color: .badgeMoodText)
+                    .help(stats.moodCount == 1 ? "1 mood board" : "\(stats.moodCount) mood boards")
+                Divider().frame(height: 10)
+            }
+
+            if stats.storyCount > 0 {
+                statusBadge(icon: "film.stack", value: "\(stats.storyCount)", color: .badgeStoryText)
+                    .help(stats.storyCount == 1 ? "1 story project" : "\(stats.storyCount) story projects")
+                Divider().frame(height: 10)
+            }
+
             if stats.imageCount > 0 {
                 statusBadge(icon: "photo", value: "\(stats.imageCount)", color: .badgeImageText)
                 Divider().frame(height: 10)
@@ -663,6 +675,10 @@ struct ContentStatusBarView: View {
                 s.folderCount += 1
             } else if FileHelpers.isPromptSnapshotFile(item.name) {
                 s.promptCount += 1
+            } else if FileHelpers.isMoodboardFile(item.name) {
+                s.moodCount += 1
+            } else if FileHelpers.isStoryFile(item.name) {
+                s.storyCount += 1
             } else if FileHelpers.isImageFile(item.name) {
                 s.imageCount += 1
             } else if FileHelpers.isVideoFile(item.name) {
@@ -699,6 +715,8 @@ struct ContentStatusBarView: View {
 
 private struct FolderStats {
     var promptCount = 0
+    var moodCount = 0
+    var storyCount = 0
     var imageCount = 0
     var videoCount = 0
     var audioCount = 0
@@ -762,6 +780,10 @@ private struct ExplorerItemView: View {
             return .plib
         } else if name.hasSuffix(".aoe") {
             return .aoe
+        } else if FileHelpers.isMoodboardFile(name) {
+            return .mood
+        } else if FileHelpers.isStoryFile(name) {
+            return .story
         } else if name.hasSuffix(".png") {
             return .png
         } else if name.hasSuffix(".jpg") || name.hasSuffix(".jpeg") {
@@ -1005,6 +1027,8 @@ private struct ExplorerItemView: View {
     private func iconForFile(_ name: String) -> String {
         if FileHelpers.isPlibFile(name) { return "doc.text" }
         if FileHelpers.isAoeFile(name) { return "doc.richtext" }
+        if FileHelpers.isMoodboardFile(name) { return "square.grid.3x3.square" }
+        if FileHelpers.isStoryFile(name) { return "film.stack" }
         if FileHelpers.isVideoFile(name) { return "film" }
         if FileHelpers.isAudioFile(name) { return "waveform" }
         if FileHelpers.isImageFile(name) { return "photo" }
@@ -1122,6 +1146,8 @@ enum SnapshotThumbnailCache {
 private enum PreviewBadgeKind {
     case plib
     case aoe
+    case mood
+    case story
     case png
     case jpg
     case webp
@@ -1140,6 +1166,8 @@ private struct PreviewBadgeView: View {
         switch kind {
         case .plib: return .badgePlib
         case .aoe: return .badgeAoe
+        case .mood: return .badgeMood
+        case .story: return .badgeStory
         case .png: return .badgePng
         case .jpg: return .badgeJpg
         case .webp: return .badgeWebp
@@ -1171,6 +1199,12 @@ private struct PreviewBadgeView: View {
             PlibPreviewGlyph()
         case .aoe:
             AoePreviewGlyph()
+        case .mood:
+            Image(systemName: "square.grid.3x3.square")
+                .font(.system(size: side * 0.54, weight: .semibold))
+        case .story:
+            Image(systemName: "film.stack")
+                .font(.system(size: side * 0.54, weight: .semibold))
         case .png, .jpg, .webp, .gif, .image:
             Image(systemName: "photo.fill")
                 .font(.system(size: side * 0.54, weight: .semibold))

@@ -52,6 +52,8 @@ These do not switch between dark and light mode. Use them for fills, tints and s
 | `segmentMood` | Analysis segment | `#A6CC8C` |
 | `badgePlib` | `.plib` preview badge fill | `#D900D9` |
 | `badgeAoe` | `.aoe` preview badge fill | `#8B5CF6` |
+| `badgeMood` | `.mlmboard` (Mood board) preview badge fill | `#CA8A04` |
+| `badgeStory` | `.stry` / `.mlseq` (Story project) preview badge fill | `#6366F1` |
 | `badgePng` | PNG badge fill | `#06B6D4` |
 | `badgeJpg` | JPEG badge fill | `#F97316` |
 | `badgeWebp` | WebP badge fill | `#22C55E` |
@@ -83,6 +85,8 @@ Same hue, adjusted per mode so text and thin glyphs reach at least 4.5:1 against
 | `segmentMoodText` | `#A6CC8C` | `#426B2C` |
 | `badgePlibText` | `#E860E8` | `#A000A0` |
 | `badgeAoeText` | `#A388F9` | `#6A3CD6` |
+| `badgeMoodText` | `#EAB308` | `#7A5C00` |
+| `badgeStoryText` | `#8B8FF8` | `#3F42C9` |
 | `badgePngText` | `#06B6D4` | `#0B6A7B` |
 | `badgeJpgText` | `#F97316` | `#A84600` |
 | `badgeWebpText` | `#22C55E` | `#18733A` |

@@ -201,6 +201,10 @@ extension Color {
     static let badgePlib = Color(red: 0xD9 / 255.0, green: 0x00 / 255.0, blue: 0xD9 / 255.0)
     /// .aoe badge: electric purple
     static let badgeAoe = Color(red: 0x8B / 255.0, green: 0x5C / 255.0, blue: 0xF6 / 255.0)
+    /// .mlmboard (Mood board) badge: deep gold
+    static let badgeMood = Color(red: 0xCA / 255.0, green: 0x8A / 255.0, blue: 0x04 / 255.0)
+    /// .stry / .mlseq (Story project) badge: indigo
+    static let badgeStory = Color(red: 0x63 / 255.0, green: 0x66 / 255.0, blue: 0xF1 / 255.0)
     /// PNG badge: teal
     static let badgePng = Color(red: 0x06 / 255.0, green: 0xB6 / 255.0, blue: 0xD4 / 255.0)
     /// JPEG badge: amber
@@ -259,6 +263,8 @@ extension Color {
 
     static let badgePlibText = ThemePalette.color(dark: (0xE8, 0x60, 0xE8), light: (0xA0, 0x00, 0xA0))
     static let badgeAoeText = ThemePalette.color(dark: (0xA3, 0x88, 0xF9), light: (0x6A, 0x3C, 0xD6))
+    static let badgeMoodText = ThemePalette.color(dark: (0xEA, 0xB3, 0x08), light: (0x7A, 0x5C, 0x00))
+    static let badgeStoryText = ThemePalette.color(dark: (0x8B, 0x8F, 0xF8), light: (0x3F, 0x42, 0xC9))
     static let badgePngText = ThemePalette.color(dark: (0x06, 0xB6, 0xD4), light: (0x0B, 0x6A, 0x7B))
     static let badgeJpgText = ThemePalette.color(dark: (0xF9, 0x73, 0x16), light: (0xA8, 0x46, 0x00))
     static let badgeWebpText = ThemePalette.color(dark: (0x22, 0xC5, 0x5E), light: (0x18, 0x73, 0x3A))

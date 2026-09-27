@@ -1,3 +1,4 @@
+import ArtOfficialFormats
 import Foundation
 import UniformTypeIdentifiers
 
@@ -17,7 +18,12 @@ enum FileHelpers {
         "mp3", "wav", "m4a", "flac", "aac", "ogg", "aiff", "aif", "wma", "alac"
     ]
     static let promptExtensions: Set<String> = ["plib", "aoe"]
+    /// Art Official documents owned by other apps: Mood boards and Story projects.
+    static let moodboardExtensions: Set<String> = ["mlmboard"]
+    static let storyExtensions: Set<String> = ["stry", "mlseq"]
+    static let artOfficialDocumentExtensions: Set<String> = moodboardExtensions.union(storyExtensions)
     static let droppableExtensions: Set<String> = promptExtensions
+        .union(artOfficialDocumentExtensions)
         .union(imageExtensions)
         .union(videoExtensions)
         .union(audioExtensions)
@@ -44,6 +50,21 @@ enum FileHelpers {
 
     static func isAoeFile(_ name: String) -> Bool {
         name.lowercased().hasSuffix(".aoe")
+    }
+
+    /// `.mlmboard` (Mood).
+    static func isMoodboardFile(_ name: String) -> Bool {
+        ArtOfficialFileKind.detect(pathExtension: (name as NSString).pathExtension) == .moodboard
+    }
+
+    /// `.stry` or legacy `.mlseq` (Story).
+    static func isStoryFile(_ name: String) -> Bool {
+        ArtOfficialFileKind.detect(pathExtension: (name as NSString).pathExtension)?.isStory == true
+    }
+
+    /// A Mood board or Story project.
+    static func isArtOfficialDocumentFile(_ name: String) -> Bool {
+        isMoodboardFile(name) || isStoryFile(name)
     }
 
     static func isPromptSnapshotFile(_ name: String) -> Bool {
@@ -73,7 +94,7 @@ enum FileHelpers {
 
     static func isPreviewable(_ entry: FileEntry) -> Bool {
         guard !entry.isDirectory else { return false }
-        return isPromptSnapshotFile(entry.name) || isImageFile(entry.name) || isVideoFile(entry.name) || isAudioFile(entry.name)
+        return isPromptSnapshotFile(entry.name) || isArtOfficialDocumentFile(entry.name) || isImageFile(entry.name) || isVideoFile(entry.name) || isAudioFile(entry.name)
     }
 
     static func isDroppable(_ path: String) -> Bool {
@@ -109,6 +130,9 @@ enum FileHelpers {
         case "icns": return "Apple Icon Image"
         case "plib": return "Prompt Library File"
         case "aoe": return "Art Official Elements File"
+        case "mlmboard": return "Mood Board"
+        case "stry": return "Story Project"
+        case "mlseq": return "Story Project (Legacy)"
         case "": return "File"
         default: return "\(ext.uppercased()) File"
         }
@@ -128,6 +152,10 @@ enum FileHelpers {
             return .plib
         case "aoe":
             return .aoe
+        case "mlmboard":
+            return .moodboard
+        case "stry", "mlseq":
+            return .story
         case "png":
             return .png
         case "jpg":
@@ -164,7 +192,7 @@ enum FileHelpers {
         let ext = canonicalTypeExtension(fileExtension(name))
         let rank: Int
 
-        if isPromptSnapshotFile(name) {
+        if isPromptSnapshotFile(name) || isArtOfficialDocumentFile(name) {
             rank = 1
         } else if isImageFile(name) {
             rank = 2

@@ -187,6 +187,29 @@ struct PromptLibraryExplorerApp: App {
                     }
                     .disabled(isBlocked || !hasSelection)
                 }
+
+                Divider()
+
+                // Mood boards / Story projects: open in the owner app. No shortcuts.
+                if let document = explorerVM.selectedArtOfficialItem,
+                   let kind = ExplorerViewModel.artOfficialKind(forName: document.name)
+                {
+                    Button("Open in \(kind.ownerAppName)") {
+                        run { explorerVM.openInOwnerApp(document) }
+                    }
+                    .disabled(isBlocked)
+                }
+
+                // Selection (or the whole listing when nothing is selected), images only.
+                Button("Send to Mood…") {
+                    runInMainWindow { explorerVM.sendToArtOfficial(.mood) }
+                }
+                .disabled(isBlocked || !explorerVM.canSendToArtOfficial)
+
+                Button("Send to Story…") {
+                    runInMainWindow { explorerVM.sendToArtOfficial(.story) }
+                }
+                .disabled(isBlocked || !explorerVM.canSendToArtOfficial)
             }
 
             // MARK: Edit

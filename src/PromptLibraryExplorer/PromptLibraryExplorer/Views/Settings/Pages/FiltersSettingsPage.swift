@@ -6,6 +6,7 @@ struct FiltersSettingsPage: View {
     /// Mirrors the grouping the header filter menu uses.
     private let typeGroups: [(title: String, types: [FileTypeFilter])] = [
         ("Prompt Files", [.plib, .aoe]),
+        ("Art Official Documents", [.moodboard, .story]),
         ("Images", [.png, .jpg, .webp, .gif, .otherImages]),
         ("Media", [.video, .audio]),
         ("Everything Else", [.unsupported])

@@ -169,6 +169,13 @@ struct MainContentView: View {
                     .id(vm.toastID)
             }
         }
+        .overlay(alignment: .bottom) {
+            if let progress = vm.artOfficialSendProgress {
+                ArtOfficialSendProgressView(progress: progress)
+                    .transition(.opacity)
+                    .zIndex(200)
+            }
+        }
         .overlay {
             if vm.commandPaletteOpen {
                 // Dimmed backdrop
