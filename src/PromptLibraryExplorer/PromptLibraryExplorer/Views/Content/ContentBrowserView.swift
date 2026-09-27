@@ -813,6 +813,8 @@ private struct ExplorerItemView: View {
     private var loadKey: String {
         // The cloud state reloads the thumbnail once an online-only file is downloaded.
         "\(item.id)|\(Int(size.rounded()))|\(CloudFileController.shared.isCloudOnly(item))"
+            // A saved / reverted edit re-renders the tile (Views/Editor).
+            + "|\(EditController.shared.token(for: item.path))"
     }
 
     private var badgeKind: PreviewBadgeKind? {
@@ -974,6 +976,11 @@ private struct ExplorerItemView: View {
                 }
                 .overlay(alignment: .bottomLeading) {
                     CloudFileBadge(item: item, side: badgeSide)
+                        .offset(x: 4, y: -4)
+                        .allowsHitTesting(false)
+                }
+                .overlay(alignment: .bottomLeading) {
+                    EditedTileBadge(item: item, side: badgeSide)
                         .offset(x: 4, y: -4)
                         .allowsHitTesting(false)
                 }

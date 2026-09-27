@@ -26,11 +26,12 @@ import Foundation
 //     "collectionSets": { "UUID":   { "v": { "name", "createdAt", "parentID" }, "t", "d" } },
 //     "smartFolders":   { "UUID":   { "v": { "name", "createdAt", "criteria", "tagNames" }, "t", "d" } },
 //     "stacks":         { "UUID":   { "v": { "createdAt", "items": [relative], "cover": relative? }, "t", "d" } },
-//     "stackExclusions": { "Shoot/a.png": { "v": true, "t", "d" } }   // kept out of automatic stacks
+//     "stackExclusions": { "Shoot/a.png": { "v": true, "t", "d" } },  // kept out of automatic stacks
+//     "edits":          { "Shoot/a.png": { "v": EditRecipe, "t", "d" } } // non-destructive image edits
 //   }
 //
-// "stacks" / "stackExclusions" were added without a schema bump (older apps ignore them;
-// the ledger on a Mac that knows them writes them back on its next sync).
+// "stacks" / "stackExclusions" and "edits" were added without a schema bump (older apps
+// ignore them; the ledger on a Mac that knows them writes them back on its next sync).
 //
 // "t" is seconds since 1970 when that Mac changed the value ("t": 0 marks values that
 // existed before sync was first turned on), "d" the device. A record without "v" is a
@@ -121,6 +122,7 @@ struct LibraryCurationDocument: Codable, Equatable {
     var smartFolders: [String: Stamped<LibrarySmartFolderValue>] = [:]
     var stacks: [String: Stamped<LibraryStackValue>] = [:]
     var stackExclusions: [String: Stamped<Bool>] = [:]
+    var edits: [String: Stamped<EditRecipe>] = [:]
 
     init() {}
 
@@ -128,6 +130,7 @@ struct LibraryCurationDocument: Codable, Equatable {
         case format, schemaVersion, updatedAt, updatedBy, updatedByName, appVersion
         case files, customOrders, tags, collections, collectionSets, smartFolders
         case stacks, stackExclusions
+        case edits
     }
 
     init(from decoder: Decoder) throws {
@@ -150,6 +153,7 @@ struct LibraryCurationDocument: Codable, Equatable {
         smartFolders = try c.decodeIfPresent([String: Stamped<LibrarySmartFolderValue>].self, forKey: .smartFolders) ?? [:]
         stacks = (try? c.decodeIfPresent([String: Stamped<LibraryStackValue>].self, forKey: .stacks)) ?? [:]
         stackExclusions = (try? c.decodeIfPresent([String: Stamped<Bool>].self, forKey: .stackExclusions)) ?? [:]
+        edits = (try? c.decodeIfPresent([String: Stamped<EditRecipe>].self, forKey: .edits)) ?? [:]
     }
 
     /// True when the synced content (not the header) is the same.
@@ -158,12 +162,14 @@ struct LibraryCurationDocument: Codable, Equatable {
             && collections == other.collections && collectionSets == other.collectionSets
             && smartFolders == other.smartFolders
             && stacks == other.stacks && stackExclusions == other.stackExclusions
+            && edits == other.edits
     }
 
     var isEmpty: Bool {
         files.isEmpty && customOrders.isEmpty && tags.isEmpty && collections.isEmpty
             && collectionSets.isEmpty && smartFolders.isEmpty
             && stacks.isEmpty && stackExclusions.isEmpty
+            && edits.isEmpty
     }
 
     static func decode(_ data: Data) throws -> LibraryCurationDocument {
@@ -219,6 +225,7 @@ struct CurationPortableState: Equatable {
     var smartFolders: [String: LibrarySmartFolderValue] = [:]
     var stacks: [String: LibraryStackValue] = [:]
     var stackExclusions: [String: Bool] = [:]
+    var edits: [String: EditRecipe] = [:]
 }
 
 extension LibraryCurationDocument {
@@ -241,6 +248,7 @@ extension LibraryCurationDocument {
         state.smartFolders = smartFolders.compactMapValues(\.value)
         state.stacks = stacks.compactMapValues(\.value)
         state.stackExclusions = stackExclusions.compactMapValues(\.value)
+        state.edits = edits.compactMapValues(\.value)
         return state
     }
 }
@@ -343,6 +351,7 @@ enum CurationMergeEngine {
         result.smartFolders = mergeMaps(local.smartFolders, remote.smartFolders, kind: "smart folder", preferLocal: preferLocal, conflicts: &conflicts)
         result.stacks = mergeMaps(local.stacks, remote.stacks, kind: "stack", preferLocal: preferLocal, conflicts: &conflicts)
         result.stackExclusions = mergeMaps(local.stackExclusions, remote.stackExclusions, kind: "stack exclusion", preferLocal: preferLocal, conflicts: &conflicts)
+        result.edits = mergeMaps(local.edits, remote.edits, kind: "image edit", preferLocal: preferLocal, conflicts: &conflicts)
         return result
     }
 
@@ -398,6 +407,7 @@ enum CurationMergeEngine {
         result.smartFolders = stampMap(result.smartFolders, current.smartFolders)
         result.stacks = stampMap(result.stacks, current.stacks)
         result.stackExclusions = stampMap(result.stackExclusions, current.stackExclusions)
+        result.edits = stampMap(result.edits, current.edits)
         return result
     }
 
@@ -424,6 +434,7 @@ enum CurationMergeEngine {
         result.smartFolders = document.smartFolders.compactMapValues { keep($0) }
         result.stacks = document.stacks.compactMapValues { keep($0) }
         result.stackExclusions = document.stackExclusions.compactMapValues { keep($0) }
+        result.edits = document.edits.compactMapValues { keep($0) }
         return result
     }
 

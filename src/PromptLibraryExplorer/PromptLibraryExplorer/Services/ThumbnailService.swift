@@ -54,14 +54,16 @@ final class ThumbnailService {
     /// Returns an in-memory cached thumbnail, or nil for a miss. Never touches the disk cache
     /// synchronously; use `thumbnail(for:size:)` to also consult disk and generate.
     func cachedThumbnail(for url: URL, size: CGFloat) -> NSImage? {
-        guard let signature = Self.fileSignature(for: url, size: size) else { return nil }
+        guard let signature = Self.fileSignature(for: url, size: size, recipe: Self.editRecipe(for: url)) else { return nil }
         let key = memoizedKey(for: signature)
         return memoryCache.object(forKey: key as NSString)
     }
 
     /// Generates a thumbnail asynchronously, populating both caches.
     func thumbnail(for url: URL, size: CGFloat) async -> NSImage? {
-        let key = await resolveKey(for: url, size: size)
+        // Edited images show their edit (the recipe is part of the key).
+        let recipe = Self.editRecipe(for: url)
+        let key = await resolveKey(for: url, size: size, recipe: recipe)
 
         // Check memory cache first
         if let cached = memoryCache.object(forKey: key as NSString) {
@@ -76,6 +78,11 @@ final class ThumbnailService {
 
         // Online-only cloud file: generating would download it (CloudFileController).
         guard CloudFileStatus.isLocallyAvailable(url) else { return nil }
+
+        if let recipe {
+            let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+            return await editedImage(for: url, recipe: recipe, maxPixelSize: size * scale, key: key, cache: memoryCache)
+        }
 
         if FileHelpers.isImageFile(url.lastPathComponent) {
             let scale = NSScreen.main?.backingScaleFactor ?? 2.0
@@ -115,8 +122,10 @@ final class ThumbnailService {
     }
 
     /// Loads the best-available preview image for lightbox/detail display.
-    func previewImage(for url: URL, maxPixelSize: CGFloat = 4096) async -> NSImage? {
-        let key = await resolveKey(for: url, size: maxPixelSize)
+    /// Edited images come back edited unless `ignoringEdits` (the lightbox's Show Original).
+    func previewImage(for url: URL, maxPixelSize: CGFloat = 4096, ignoringEdits: Bool = false) async -> NSImage? {
+        let recipe = ignoringEdits ? nil : Self.editRecipe(for: url)
+        let key = await resolveKey(for: url, size: maxPixelSize, recipe: recipe)
 
         if let cached = previewCache.object(forKey: key as NSString) {
             return cached
@@ -129,6 +138,10 @@ final class ThumbnailService {
 
         // Online-only cloud file: the lightbox offers "Download to view" instead.
         guard CloudFileStatus.isLocallyAvailable(url) else { return nil }
+
+        if let recipe {
+            return await editedImage(for: url, recipe: recipe, maxPixelSize: maxPixelSize, key: key, cache: previewCache)
+        }
 
         if FileHelpers.isImageFile(url.lastPathComponent) {
             return await rasterImage(for: url, maxPixelSize: maxPixelSize, key: key, cache: previewCache)
@@ -179,9 +192,9 @@ final class ThumbnailService {
     // MARK: - Keys
 
     /// Stats the file off the main actor, then hashes (memoized) on it.
-    private func resolveKey(for url: URL, size: CGFloat) async -> String {
+    private func resolveKey(for url: URL, size: CGFloat, recipe: EditRecipe? = nil) async -> String {
         let signature = await Task.detached(priority: .userInitiated) {
-            Self.fileSignature(for: url, size: size) ?? Self.missingFileSignature(for: url, size: size)
+            Self.fileSignature(for: url, size: size, recipe: recipe) ?? Self.missingFileSignature(for: url, size: size)
         }.value
         return memoizedKey(for: signature)
     }
@@ -193,6 +206,21 @@ final class ThumbnailService {
         let key = digest.map { String(format: "%02x", $0) }.joined()
         keyMemo[signature] = key
         return key
+    }
+
+    /// The recipe an image is shown with (edited raster images only).
+    nonisolated static func editRecipe(for url: URL) -> EditRecipe? {
+        EditRecipeIndex.shared.recipe(for: url)
+    }
+
+    /// The cache signature for `url` at `size` as the app would show it now (edits
+    /// included). Exposed for tests.
+    nonisolated static func cacheSignature(for url: URL, size: CGFloat, ignoringEdits: Bool = false) -> String? {
+        fileSignature(for: url, size: size, recipe: ignoringEdits ? nil : editRecipe(for: url))
+    }
+
+    nonisolated private static func fileSignature(for url: URL, size: CGFloat, recipe: EditRecipe?) -> String? {
+        fileSignature(for: url, size: size).map { EditCacheKey.signature($0, recipe: recipe) }
     }
 
     nonisolated private static func fileSignature(for url: URL, size: CGFloat) -> String? {
@@ -251,6 +279,26 @@ final class ThumbnailService {
         if persist {
             Self.persistToDisk(cgImage, key: key)
         }
+        return image
+    }
+
+    /// An edited image: the recipe rendered through Core Image from a downsampled decode.
+    private func editedImage(
+        for url: URL,
+        recipe: EditRecipe,
+        maxPixelSize: CGFloat,
+        key: String,
+        cache: NSCache<NSString, NSImage>
+    ) async -> NSImage? {
+        let rendered = await Task.detached(priority: .userInitiated) {
+            EditRenderer.render(url: url, recipe: recipe, maxPixelSize: max(maxPixelSize, 1))
+        }.value
+        guard let rendered else {
+            return await rasterImage(for: url, maxPixelSize: maxPixelSize, key: key, cache: cache, persist: false)
+        }
+        let image = NSImage(cgImage: rendered, size: NSSize(width: rendered.width, height: rendered.height))
+        store(image, key: key, in: cache)
+        Self.persistToDisk(rendered, key: key)
         return image
     }
 

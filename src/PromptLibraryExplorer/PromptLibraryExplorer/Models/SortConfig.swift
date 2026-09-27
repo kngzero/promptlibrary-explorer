@@ -9,6 +9,9 @@ enum SortField: String, CaseIterable, Identifiable {
     case label
     case dateModified
     case dateCreated
+    /// Capture date (EXIF / QuickTime / PNG / generator), else creation, else
+    /// modification date (GeoMetadata.swift, `CaptureDateResolver`).
+    case captureDate
     case size
 
     var id: String { rawValue }
@@ -23,6 +26,7 @@ enum SortField: String, CaseIterable, Identifiable {
         case .label: return "Label"
         case .dateModified: return "Date Modified"
         case .dateCreated: return "Date Created"
+        case .captureDate: return "Capture Date"
         case .size: return "Size"
         }
     }
@@ -37,6 +41,7 @@ enum SortField: String, CaseIterable, Identifiable {
         case .label: return "circle.fill"
         case .dateModified: return "clock"
         case .dateCreated: return "calendar"
+        case .captureDate: return "camera"
         case .size: return "internaldrive"
         }
     }
@@ -86,6 +91,9 @@ enum GroupByField: String, CaseIterable, Identifiable {
     case sampler
     case seed
     case day
+    /// Month / year of the capture date (else creation, else modification date).
+    case month
+    case year
     case type
     case flag
     case label
@@ -101,6 +109,8 @@ enum GroupByField: String, CaseIterable, Identifiable {
         case .sampler: return "Sampler"
         case .seed: return "Seed"
         case .day: return "Day Modified"
+        case .month: return "Month"
+        case .year: return "Year"
         case .type: return "Kind"
         case .flag: return "Flag"
         case .label: return "Label"

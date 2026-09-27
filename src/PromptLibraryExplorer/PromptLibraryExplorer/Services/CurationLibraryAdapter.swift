@@ -92,6 +92,10 @@ enum CurationLibraryAdapter {
             guard let relative = CurationPaths.relative(path, to: root), !relative.isEmpty else { continue }
             state.stackExclusions[relative] = true
         }
+        for (path, recipe) in stores.edits.load().recipes {
+            guard let relative = CurationPaths.relative(path, to: root), !relative.isEmpty else { continue }
+            state.edits[relative] = recipe
+        }
         return state
     }
 
@@ -235,6 +239,7 @@ enum CurationLibraryAdapter {
 
         applied += applyCollections(target: target, base: base, fresh: fresh, root: root, stores: stores)
         applied += applyStacks(target: target, base: base, fresh: fresh, root: root, stores: stores)
+        applied += applyEdits(target: target, base: base, fresh: fresh, root: root, stores: stores)
         applied += applySmartFolders(target: target, base: base, fresh: fresh, stores: stores, tagID: { name in
             // Smart folders can name tags nobody has yet.
             let key = name.lowercased()
@@ -355,6 +360,25 @@ enum CurationLibraryAdapter {
             book.normalize()
             stores.stacks.save(book)
         }
+        return applied
+    }
+
+    private static func applyEdits(
+        target: CurationPortableState,
+        base: CurationPortableState,
+        fresh: CurationPortableState,
+        root: String,
+        stores: CurationStores
+    ) -> Int {
+        var book = stores.edits.load()
+        var applied = 0
+        for key in Set(target.edits.keys).union(base.edits.keys) {
+            let wanted = target.edits[key], was = base.edits[key]
+            guard wanted != was, fresh.edits[key] == was else { continue }
+            book.set(wanted, for: CurationPaths.absolute(key, in: root))
+            applied += 1
+        }
+        if applied > 0 { stores.edits.save(book) }
         return applied
     }
 

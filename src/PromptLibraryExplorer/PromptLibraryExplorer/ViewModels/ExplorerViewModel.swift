@@ -83,10 +83,12 @@ private struct PathMetadataSnapshot {
     var collectionMemberships: [UUID: [(index: Int, path: String)]] = [:]
     /// XMP sidecars trashed with the item (put back on undo).
     var sidecars: [SidecarTrashRecord] = []
+    /// Non-destructive edit recipes (EditController), put back on undo.
+    var edits: [String: EditRecipe] = [:]
 
     var isEmpty: Bool {
         ratings.isEmpty && flags.isEmpty && tags.isEmpty && favorites.isEmpty && customOrders.isEmpty
-            && collectionMemberships.isEmpty && sidecars.isEmpty
+            && collectionMemberships.isEmpty && sidecars.isEmpty && edits.isEmpty
     }
 }
 
@@ -190,6 +192,8 @@ final class ExplorerViewModel {
             // (Sort ▸ Similarity brings it back).
             if activeVirtualListing != nil, virtualListingRanked { virtualListingRanked = false }
             invalidateSortedFolderContents()
+            // Sort by Capture Date reads capture dates (ExplorerViewModel+MapTimeline).
+            if sortConfig.field == .captureDate, oldValue.field != .captureDate { loadListingCaptureDatesIfNeeded() }
         }
     }
     var filterConfig = FilterConfig() {
@@ -339,6 +343,8 @@ final class ExplorerViewModel {
             }
             // A lightbox the Similar Images page opened hands the browser back.
             if !lightboxOpen, oldValue { similarPageLightboxDidClose() }
+            // Same for a lightbox the Timeline / Map page opened (ExplorerViewModel+MapTimeline).
+            if !lightboxOpen, oldValue { mapTimelineLightboxDidClose() }
             // Version stacks: a lightbox opened on a stack walks its members.
             if lightboxOpen != oldValue { stacksLightboxDidChange(isOpen: lightboxOpen) }
         }
@@ -377,6 +383,8 @@ final class ExplorerViewModel {
                 loadListingPromptDataIfNeeded(force: true)
             }
             if groupBy == .colorFamily { loadListingDominantColorsIfNeeded() }
+            // Group By Month / Year reads capture dates (ExplorerViewModel+MapTimeline).
+            if groupBy.usesCaptureDates { loadListingCaptureDatesIfNeeded() }
         }
     }
     /// Generation parameters for files in the current listing, filled from the
@@ -2652,6 +2660,17 @@ final class ExplorerViewModel {
         invalidateProcessedFolderContents()
     }
 
+    /// Capture dates of the listing arrived (GeoTimelineController): re-sort /
+    /// regroup when Sort by Capture Date or Group By Month / Year uses them.
+    func listingCaptureDatesDidChange() {
+        if groupBy.usesCaptureDates { contentGroupsRevision &+= 1 }
+        if sortConfig.field == .captureDate {
+            invalidateSortedFolderContents()
+        } else if groupBy.usesCaptureDates {
+            invalidateProcessedFolderContents()
+        }
+    }
+
     /// Listing inputs owned by other controllers (version stacks, text in images)
     /// changed: re-run the filters.
     func externalListingInputsDidChange() {
@@ -2924,7 +2943,7 @@ final class ExplorerViewModel {
             return sortedItems
         }
 
-        if config.field == .dateModified || config.field == .dateCreated || config.field == .size {
+        if config.field == .dateModified || config.field == .dateCreated || config.field == .captureDate || config.field == .size {
             // Folders first (like Finder), then by value; missing values sort
             // last in either direction; ties fall back to name.
             let field = config.field
@@ -2932,6 +2951,7 @@ final class ExplorerViewModel {
                 switch field {
                 case .dateModified: return entry.modifiedDate?.timeIntervalSinceReferenceDate
                 case .dateCreated: return entry.creationDate?.timeIntervalSinceReferenceDate
+                case .captureDate: return captureSortDate(for: entry)?.timeIntervalSinceReferenceDate
                 default: return entry.fileSize.map(Double.init)
                 }
             }
@@ -3409,6 +3429,7 @@ final class ExplorerViewModel {
         // Sidecars and the Finder tag mirror follow the item.
         CurationController.shared.itemDidMove(from: oldPath, to: newPath)
         stacksItemDidMove(from: oldPath, to: newPath)
+        EditController.shared.itemDidMove(from: oldPath, to: newPath)
         IngestController.shared.itemDidMove(from: oldPath, to: newPath)
 
         CollectionService.shared.migratePaths(from: oldPath, to: newPath)
@@ -3494,6 +3515,7 @@ final class ExplorerViewModel {
     private func removeMetadata(under path: String) -> PathMetadataSnapshot {
         var snapshot = PathMetadataSnapshot()
         snapshot.sidecars = CurationController.shared.itemWillBeRemoved(at: path)
+        snapshot.edits = EditController.shared.removeAll(under: path)
 
         let ratingKeys = ratingsByPath.keys.filter { MetadataPathKeys.isSameOrDescendant($0, of: path) }
         if !ratingKeys.isEmpty {
@@ -3579,6 +3601,7 @@ final class ExplorerViewModel {
     private func restoreMetadata(_ snapshot: PathMetadataSnapshot, from oldPath: String, to newPath: String) {
         guard !snapshot.isEmpty else { return }
         CurationController.shared.itemWasRestored(snapshot.sidecars, from: oldPath, to: newPath)
+        EditController.shared.restore(snapshot.edits, from: oldPath, to: newPath)
 
         func target(_ key: String) -> String {
             MetadataPathKeys.rewrite(key, from: oldPath, to: newPath) ?? key
@@ -3959,7 +3982,7 @@ extension ExplorerViewModel {
         // `groupedContiguously`), so every group's indices form one ascending run.
         let items = processedFolderContents
         let field = groupBy
-        let keyer = GroupKeyer(field: field, flags: flagBook, colors: dominantColorsByPath)
+        let keyer = GroupKeyer(field: field, flags: flagBook, colors: dominantColorsByPath, captureDates: groupingCaptureDates)
         var order: [String] = []
         var titles: [String: String] = [:]
         var indicesByKey: [String: [Int]] = [:]
@@ -3990,7 +4013,7 @@ extension ExplorerViewModel {
     /// Stable regrouping of `items` for `groupBy`: groups in order of their first
     /// item ("Unknown" last), each group's items together in their sorted order.
     fileprivate func groupedContiguously(_ items: [FileEntry]) -> [FileEntry] {
-        let keyer = GroupKeyer(field: groupBy, flags: flagBook, colors: dominantColorsByPath)
+        let keyer = GroupKeyer(field: groupBy, flags: flagBook, colors: dominantColorsByPath, captureDates: groupingCaptureDates)
         var order: [String] = []
         var buckets: [String: [FileEntry]] = [:]
         for item in items {
@@ -4012,13 +4035,18 @@ extension ExplorerViewModel {
         let field: GroupByField
         let flags: FlagBook
         let colors: [String: [DominantColor]]
+        /// Month / Year grouping: the listing's resolved capture dates.
+        let captureDates: [String: ResolvedCaptureDate]
         let dayFormatter: DateFormatter
         let keyFormatter: DateFormatter
 
-        init(field: GroupByField, flags: FlagBook, colors: [String: [DominantColor]] = [:]) {
+        init(field: GroupByField, flags: FlagBook, colors: [String: [DominantColor]] = [:],
+             captureDates: [String: ResolvedCaptureDate] = [:])
+        {
             self.field = field
             self.flags = flags
             self.colors = colors
+            self.captureDates = captureDates
             dayFormatter = DateFormatter()
             dayFormatter.dateStyle = .medium
             dayFormatter.timeStyle = .none
@@ -4047,6 +4075,17 @@ extension ExplorerViewModel {
                 if let date = item.modifiedDate {
                     groupKey = keyFormatter.string(from: date)
                     title = dayFormatter.string(from: date)
+                }
+            case .month, .year:
+                // Capture date, else creation, else modification date; newest
+                // first follows from the sort, "Unknown" stays last.
+                if !item.isDirectory,
+                   let resolved = captureDates[item.path]
+                    ?? CaptureDateResolver.resolve(capture: nil, created: item.creationDate, modified: item.modifiedDate)
+                {
+                    let (key, label) = ExplorerViewModel.captureGroupKey(for: resolved, byYear: field == .year)
+                    groupKey = key
+                    title = label
                 }
             case .type:
                 let descriptor = FileHelpers.typeSortDescriptor(for: item)
@@ -4101,6 +4140,7 @@ extension ExplorerViewModel {
     /// the per-listing prompt index, which captures prompts and parameters too.
     func loadListingPromptDataIfNeeded(force: Bool) {
         loadListingDominantColorsIfNeeded()
+        loadListingCaptureDatesIfNeeded()
         let paths = listingSourceContents.filter { !$0.isDirectory }.map(\.path)
         guard !paths.isEmpty, let scope = promptIndexScope else { return }
 
@@ -4583,7 +4623,7 @@ extension GroupByField {
     var needsGenerationParameters: Bool {
         switch self {
         case .model, .sampler, .seed: return true
-        case .none, .day, .type, .flag, .label, .colorFamily: return false
+        case .none, .day, .month, .year, .type, .flag, .label, .colorFamily: return false
         }
     }
 }

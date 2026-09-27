@@ -48,6 +48,10 @@ struct LightboxView: View {
             // Overview: the panel's preview render until the window-sized one lands.
             return documentStep == nil ? currentEntry?.images.first : nil
         }
+        // Edited image with "Show Original" on (Views/Editor): the unedited preview.
+        if currentImageIndex == 0, let path = currentItem?.path, let original = EditController.shared.originalPreview(for: path) {
+            return original
+        }
         guard let entry = currentEntry, currentImageIndex >= 0, currentImageIndex < entry.images.count else { return nil }
         return entry.images[currentImageIndex]
     }
@@ -89,6 +93,8 @@ struct LightboxView: View {
             lightboxViewport
                 // Online-only cloud file: "Download to view" (CloudFileViews.swift).
                 .overlay { LightboxCloudOverlay(item: currentItem) }
+                // "Original" tag while Show Original is on (Views/Editor).
+                .overlay(alignment: .topLeading) { LightboxOriginalTag(path: currentItem?.path) }
             detailsSidebar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -277,7 +283,8 @@ struct LightboxView: View {
                 // Viewing tools: loupe + histogram (Views/Viewing). Take no clicks.
                 if let image = currentImage {
                     LightboxViewingOverlays(context: LightboxViewingContext(
-                        filePath: currentDocument == nil && currentImageIndex == 0 && FileHelpers.isImageFile(currentItem?.name ?? "") ? currentItem?.path : nil,
+                        filePath: currentDocument == nil && currentImageIndex == 0 && FileHelpers.isImageFile(currentItem?.name ?? "")
+                            && !EditController.shared.isShowingOriginal(currentItem?.path ?? "") ? currentItem?.path : nil,
                         image: image,
                         imageKey: "\(currentItem?.path ?? "")#\(currentImageIndex)#\(documentImageKey)",
                         viewport: geometry.size,
@@ -332,6 +339,7 @@ struct LightboxView: View {
                     .foregroundStyle(Color.appPrimaryText)
                 Spacer()
                 LightboxViewingChromeButtons()
+                LightboxEditChromeButtons(item: currentItem)
                 cullingChromeButtons
                 Button { closeLightbox() } label: {
                     Image(systemName: "xmark")

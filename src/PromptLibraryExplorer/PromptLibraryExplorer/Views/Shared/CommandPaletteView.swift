@@ -27,6 +27,10 @@ struct CommandPaletteView: View {
             }
         }
         if let current { byTitle.append(current) }
+        let help = helpItems
+        if !help.isEmpty {
+            byTitle.append(("Help", help))
+        }
         if !fileHits.isEmpty {
             byTitle.append(("Files", fileHits.map { CommandPaletteItem.file($0) }))
         }
@@ -35,6 +39,29 @@ struct CommandPaletteView: View {
 
     private var flatItems: [CommandPaletteItem] {
         sections.flatMap(\.items)
+    }
+
+    /// "Help: …" rows: every Help topic and tip is findable by name. Only while
+    /// typing, so the empty palette stays short.
+    private var helpItems: [CommandPaletteItem] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return [] }
+        var items: [CommandPaletteItem] = []
+        let general: [(String, String, () -> Void)] = [
+            ("Help: Welcome Tour", "sparkles", { vm.presentWelcomeTour() }),
+            ("Help: Keyboard Shortcuts", "command", { vm.openHelp(focus: .section(.keyboard)) }),
+            ("Help: All Topics", "questionmark.circle", { vm.openHelp() }),
+            ("Help: Reset Tips", "lightbulb", { vm.resetTips() }),
+        ]
+        for (name, icon, action) in general where HelpPaletteMatch.matches(q, texts: [name]) {
+            items.append(.help(name: name, icon: icon, action: action))
+        }
+        for entry in HelpContent.referenceEntries where HelpPaletteMatch.matches(q, entry: entry) {
+            items.append(.help(name: "Help: \(entry.title)", icon: entry.section.icon) {
+                vm.openHelp(focus: .entry(entry.id))
+            })
+        }
+        return Array(items.prefix(8))
     }
 
     private var results: [CommandPaletteItem] {
@@ -79,12 +106,28 @@ struct CommandPaletteView: View {
                 : ("Similar Images", "square.on.square", { vm.showSimilarImagesPage() }),
         ]
 
+        // Timeline and Map pages (Views/Timeline, Views/Map).
+        actions.append(vm.isTimelinePageActive
+            ? ("Show Browser", "square.grid.2x2", { vm.leaveMapTimelinePage() })
+            : ("Timeline", "calendar.day.timeline.left", { vm.showTimelinePage() }))
+        if !vm.isMapPageActive {
+            actions.append(("Map", "map", { vm.showMapPage() }))
+        }
+
         // Viewing tools (Views/Compare, Views/Viewing).
         if vm.canCompareImages, !vm.isComparePageActive {
             actions.append(("Compare Images", "rectangle.split.2x1", { vm.compareImagesCommand() }))
         }
         if vm.canStartSlideshow {
             actions.append(("Start Slideshow", "play.rectangle", { vm.startSlideshow() }))
+        }
+
+        // Non-destructive image editor (Views/Editor).
+        if vm.canEditImage {
+            actions.append(("Edit Image…", "slider.horizontal.below.rectangle", { vm.openEditImageForTarget() }))
+        }
+        if vm.canSaveEditedCopy {
+            actions.append(("Save Edited Copy…", "doc.badge.plus", { vm.saveEditedCopyForTarget() }))
         }
 
         // Version stacks and suggested tags (Views/Stacks).
@@ -329,6 +372,9 @@ struct CommandPaletteView: View {
             vm.filterByTagID = vm.filterByTagID == tag.id ? nil : tag.id
         case .action(_, _, let action):
             action()
+        case .help(_, _, let action):
+            // Help and the tour are sheets; let the palette's overlay go first.
+            DispatchQueue.main.async { action() }
         case .file(let hit):
             vm.revealLibraryHit(hit)
         }
@@ -340,6 +386,8 @@ enum CommandPaletteItem {
     case smartFolder(SmartFolder)
     case tag(FileTag)
     case action(name: String, icon: String, action: () -> Void)
+    /// "Help: …" — opens Help at a topic (or the tour, tips, shortcuts).
+    case help(name: String, icon: String, action: () -> Void)
     case file(LibrarySearchHit)
 
     var sectionTitle: String {
@@ -348,6 +396,7 @@ enum CommandPaletteItem {
         case .smartFolder: return "Smart Folders"
         case .tag: return "Tags"
         case .action: return "Actions"
+        case .help: return "Help"
         case .file: return "Files"
         }
     }
@@ -359,6 +408,7 @@ enum CommandPaletteItem {
         case .smartFolder(let sf): return sf.name
         case .tag(let t): return t.name
         case .action(let name, _, _): return name
+        case .help(let name, _, _): return name
         }
     }
 }
@@ -418,6 +468,8 @@ private struct CommandPaletteRow: View {
         case .file(let hit):
             let snippet = hit.snippet.replacingOccurrences(of: "«", with: "").replacingOccurrences(of: "»", with: "")
             return "File \(hit.fileName), in \((hit.folderPath as NSString).lastPathComponent). \(snippet)"
+        case .help(let name, _, _):
+            return name
         default:
             return "\(item.sectionTitle.dropLast()) \(item.displayName)"
         }
@@ -446,6 +498,11 @@ private struct CommandPaletteRow: View {
                 .font(.appBody)
                 .foregroundStyle(Color.appMuted)
                 .frame(width: 20)
+        case .help(_, let iconName, _):
+            Image(systemName: iconName)
+                .font(.appBody)
+                .foregroundStyle(Color.appAccent)
+                .frame(width: 20)
         case .file(let hit):
             PaletteThumbnail(path: hit.path)
         }
@@ -459,6 +516,7 @@ private struct CommandPaletteRow: View {
             case .smartFolder: return "Smart Folder"
             case .tag: return "Tag"
             case .action: return "Action"
+            case .help: return "Help"
             case .file: return "File"
             }
         }()
@@ -535,5 +593,22 @@ enum PaletteSnippet {
         }
         result += AttributedString(String(remaining))
         return result
+    }
+}
+
+/// Matching for the palette's "Help: …" rows: by topic title, chip, keywords and
+/// the titles of the tips that point at the topic (not the full text, which would
+/// flood the palette).
+enum HelpPaletteMatch {
+    static func matches(_ query: String, entry: HelpEntry) -> Bool {
+        let tipTitles = OnboardingTip.allCases.filter { $0.helpEntryID == entry.id }.map(\.title)
+        return matches(query, texts: [entry.title, entry.label, entry.section.title] + entry.keywords + tipTitles)
+    }
+
+    static func matches(_ query: String, texts: [String]) -> Bool {
+        let words = HelpSearch.tokens(query)
+        guard !words.isEmpty else { return false }
+        let text = HelpSearch.normalized(texts.joined(separator: " "))
+        return words.allSatisfy { text.contains($0) }
     }
 }

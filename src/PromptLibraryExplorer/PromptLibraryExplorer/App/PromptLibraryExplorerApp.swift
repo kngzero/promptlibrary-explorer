@@ -142,6 +142,8 @@ struct PromptLibraryExplorerApp: App {
                 .ingestSheetsHost()
                 .mediaSheetsHost()
                 .promptSheetsHost()
+                // Welcome tour (Views/Onboarding): first launch, Help ▸ Welcome Tour….
+                .onboardingHost()
                 .environment(explorerVM)
                 .frame(minWidth: 900, minHeight: 600)
                 .preferredColorScheme(explorerVM.appearanceMode.preferredColorScheme)
@@ -408,11 +410,35 @@ struct PromptLibraryExplorerApp: App {
                 // Leaves the Similar Images page (same as its Done button / Esc).
                 Button("Show Browser") {
                     run {
+                        explorerVM.requestCancelEditor()
                         explorerVM.leaveSimilarImagesPage()
                         explorerVM.closeComparePage()
+                        explorerVM.leaveMapTimelinePage()
                     }
                 }
                 .disabled(isBlocked || !browserHidden)
+
+                // Pages of the main window (checked while showing), like
+                // Similar Images. No key equivalents; Esc / Done leave them.
+                Toggle("Timeline", isOn: Binding(
+                    get: { explorerVM.isTimelinePageActive },
+                    set: { show in
+                        run(allowInLightbox: false) {
+                            if show { explorerVM.showTimelinePage() } else { explorerVM.leaveMapTimelinePage() }
+                        }
+                    }
+                ))
+                .disabled(isBlocked || explorerVM.explorerRootPath == nil || explorerVM.lightboxOpen)
+
+                Toggle("Map", isOn: Binding(
+                    get: { explorerVM.isMapPageActive },
+                    set: { show in
+                        run(allowInLightbox: false) {
+                            if show { explorerVM.showMapPage() } else { explorerVM.leaveMapTimelinePage() }
+                        }
+                    }
+                ))
+                .disabled(isBlocked || explorerVM.explorerRootPath == nil || explorerVM.lightboxOpen)
 
                 Divider()
 
@@ -824,9 +850,36 @@ struct PromptLibraryExplorerApp: App {
             Group {
                 cullCommands
 
+                // Edit ▸ Edit Image… / Save Edited Copy… / Revert to Original.
+                editorCommands
+
                 CommandGroup(replacing: .help) {
                     Button("PromptLibrary Explorer Help") {
                         explorerVM.helpOpen = true
+                    }
+                    // A second sheet can't present over the tour or another sheet.
+                    .disabled(isBlocked)
+
+                    // Onboarding (Views/Onboarding, Views/Help). No key equivalents.
+                    Button("Keyboard Shortcuts") {
+                        explorerVM.openHelp(focus: .section(.keyboard))
+                    }
+                    .disabled(isBlocked)
+
+                    Button("Welcome Tour…") {
+                        explorerVM.presentWelcomeTour()
+                    }
+                    .disabled(isBlocked)
+
+                    Divider()
+
+                    Toggle("Show Tips", isOn: Binding(
+                        get: { OnboardingTipsController.shared.tipsEnabled },
+                        set: { OnboardingTipsController.shared.tipsEnabled = $0 }
+                    ))
+
+                    Button("Reset Tips") {
+                        explorerVM.resetTips()
                     }
 
                     Divider()
@@ -904,17 +957,42 @@ struct PromptLibraryExplorerApp: App {
         }
     }
 
+    // MARK: - Image editor commands
+
+    /// Non-destructive image editor (Views/Editor), in the Edit menu. No key equivalents.
+    @CommandsBuilder
+    private var editorCommands: some Commands {
+        CommandGroup(after: .pasteboard) {
+            Divider()
+
+            Button(explorerVM.editImageUnavailableReason.map { "Edit Image — \($0)" } ?? "Edit Image…") {
+                runInMainWindow { explorerVM.openEditImageForTarget() }
+            }
+            .disabled(isBlocked || !explorerVM.canEditImage)
+
+            Button("Save Edited Copy…") {
+                runInMainWindow { explorerVM.saveEditedCopyForTarget() }
+            }
+            .disabled(isBlocked || !explorerVM.canSaveEditedCopy)
+
+            Button("Revert to Original") {
+                runInMainWindow { explorerVM.revertTargetsToOriginal() }
+            }
+            .disabled(isBlocked || explorerVM.isEditorPageActive || explorerVM.editedTargetPaths.isEmpty)
+        }
+    }
+
     // MARK: - Command helpers
 
     /// Observable "a sheet/modal is up" state used to disable menu items.
-    private var isBlocked: Bool { explorerVM.isAnyModalOpen || ExportController.shared.isPresenting || PromptWorkflowController.shared.isPresenting }
+    private var isBlocked: Bool { explorerVM.isAnyModalOpen || ExportController.shared.isPresenting || PromptWorkflowController.shared.isPresenting || OnboardingController.shared.isTourPresented }
 
     private var hasSelection: Bool { !explorerVM.selectedIndices.isEmpty }
 
     /// The Similar Images page covers the browser: browser-only commands are
     /// disabled; Cull, Copy Prompt, Copy Path, Reveal and More Like This act on
     /// the page's focused card instead of the hidden selection.
-    private var browserHidden: Bool { explorerVM.isSimilarImagesPageActive || explorerVM.isComparePageActive }
+    private var browserHidden: Bool { explorerVM.isSimilarImagesPageActive || explorerVM.isComparePageActive || explorerVM.isEditorPageActive || explorerVM.isMapTimelinePageActive }
 
     /// Cull menu actions: the lightbox's item while it's open, else the selection.
     private func cull(_ action: CullAction) {
@@ -1027,14 +1105,18 @@ struct PromptLibraryExplorerApp: App {
     }
 
     private var canUndo: Bool {
-        canNativeUndo || explorerVM.canUndoFolderAction
+        // The image editor's session has its own undo while it's open.
+        if let session = explorerVM.editorSession { return session.canUndo }
+        return canNativeUndo || explorerVM.canUndoFolderAction
     }
 
     private var canRedo: Bool {
-        canNativeRedo || explorerVM.canRedoFolderAction
+        if let session = explorerVM.editorSession { return session.canRedo }
+        return canNativeRedo || explorerVM.canRedoFolderAction
     }
 
     private var undoCommandTitle: String {
+        if explorerVM.editorSession != nil { return "Undo Edit" }
         if let nativeUndoActionName {
             return "Undo \(nativeUndoActionName)"
         }
@@ -1045,6 +1127,7 @@ struct PromptLibraryExplorerApp: App {
     }
 
     private var redoCommandTitle: String {
+        if explorerVM.editorSession != nil { return "Redo Edit" }
         if let nativeRedoActionName {
             return "Redo \(nativeRedoActionName)"
         }
@@ -1055,6 +1138,10 @@ struct PromptLibraryExplorerApp: App {
     }
 
     private func performUndo() {
+        if let session = explorerVM.editorSession, !ModalKeyGuard.isAuxiliaryWindowKey {
+            session.undo()
+            return
+        }
         if canNativeUndo {
             NSApp.sendAction(undoSelector, to: nil, from: nil)
             return
@@ -1065,6 +1152,10 @@ struct PromptLibraryExplorerApp: App {
     }
 
     private func performRedo() {
+        if let session = explorerVM.editorSession, !ModalKeyGuard.isAuxiliaryWindowKey {
+            session.redo()
+            return
+        }
         if canNativeRedo {
             NSApp.sendAction(redoSelector, to: nil, from: nil)
             return

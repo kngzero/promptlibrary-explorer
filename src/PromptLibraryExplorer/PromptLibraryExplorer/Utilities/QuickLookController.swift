@@ -52,6 +52,7 @@ final class QuickLookController: NSResponder, QLPreviewPanelDataSource, QLPrevie
         }
         panel.makeKeyAndOrderFront(nil)
         panel.currentPreviewItemIndex = max(0, min(index, urls.count - 1))
+        prepareEditedPreviews()
     }
 
     /// Updates the items while the panel is open (e.g. selection moved).
@@ -59,6 +60,25 @@ final class QuickLookController: NSResponder, QLPreviewPanelDataSource, QLPrevie
         guard Self.isPanelVisible, !urls.isEmpty, urls != self.urls else { return }
         self.urls = urls
         QLPreviewPanel.shared().reloadData()
+        prepareEditedPreviews()
+    }
+
+    /// Edited images show their edit: a rendered stand-in file (EditPreviewFiles),
+    /// made off the main actor; the panel reloads once they exist.
+    private func prepareEditedPreviews() {
+        let pending = urls.compactMap { url -> (URL, EditRecipe)? in
+            guard let recipe = EditRecipeIndex.shared.recipe(for: url),
+                  EditPreviewFiles.existing(for: url, recipe: recipe) == nil
+            else { return nil }
+            return (url, recipe)
+        }
+        guard !pending.isEmpty else { return }
+        Task {
+            let made = await Task.detached(priority: .userInitiated) {
+                pending.reduce(0) { count, item in EditPreviewFiles.prepare(for: item.0, recipe: item.1) == nil ? count : count + 1 }
+            }.value
+            if made > 0, Self.isPanelVisible { QLPreviewPanel.shared().reloadData() }
+        }
     }
 
     func close() {
@@ -105,7 +125,12 @@ final class QuickLookController: NSResponder, QLPreviewPanelDataSource, QLPrevie
     nonisolated func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
         MainActor.assumeIsolated {
             guard index >= 0, index < urls.count else { return nil }
-            return urls[index] as NSURL
+            let url = urls[index]
+            if let recipe = EditRecipeIndex.shared.recipe(for: url),
+               let edited = EditPreviewFiles.existing(for: url, recipe: recipe) {
+                return edited as NSURL
+            }
+            return url as NSURL
         }
     }
 }

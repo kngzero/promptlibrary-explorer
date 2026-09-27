@@ -49,7 +49,11 @@ struct ExportSheetView: View {
         }
         .frame(minWidth: 800, idealWidth: 880, minHeight: 560, idealHeight: 660)
         .background(Color.appBackground)
-        .onAppear(perform: loadInitialPreset)
+        .onAppear {
+            loadInitialPreset()
+            // Every new sheet starts with edits applied (Views/Editor).
+            controller.useEdits = true
+        }
         .task(id: PreviewKey(preset: draft, count: request.items.count)) {
             isPreviewing = true
             try? await Task.sleep(for: .milliseconds(200))
@@ -162,6 +166,9 @@ struct ExportSheetView: View {
     private var previewColumn: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppSpacing.lg) {
+                if editedCount > 0 {
+                    editsChoice
+                }
                 if let preview {
                     previewSummary(preview)
                 } else {
@@ -176,6 +183,37 @@ struct ExportSheetView: View {
             .padding(AppSpacing.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
             .opacity(isPreviewing ? 0.7 : 1)
+        }
+    }
+
+    /// Sources with a non-destructive edit (EditController).
+    private var editedCount: Int {
+        request.items.filter { EditController.shared.isEdited($0.url.standardizedFileURL.path) }.count
+    }
+
+    /// "Use edits / Export original" for edited images.
+    private var editsChoice: some View {
+        VStack(alignment: .leading, spacing: AppSpacing.xs) {
+            Text("EDITED IMAGES")
+                .font(.appIcon(10, weight: .semibold)).tracking(0.8)
+                .foregroundStyle(Color.appMuted)
+            Picker("Edited images", selection: Binding(
+                get: { controller.useEdits },
+                set: { controller.useEdits = $0 }
+            )) {
+                Text("Use Edits").tag(true)
+                Text("Export Original").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(controller.isRunning)
+            .accessibilityLabel("Edited images")
+            Text(controller.useEdits
+                ? "\(editedCount) edited image\(editedCount == 1 ? " is" : "s are") exported with \(editedCount == 1 ? "its" : "their") crop, rotation and adjustments."
+                : "\(editedCount) edited image\(editedCount == 1 ? " is" : "s are") exported as the original file\(editedCount == 1 ? "" : "s").")
+                .font(.appCaption)
+                .foregroundStyle(Color.appMuted)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

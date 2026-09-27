@@ -31,11 +31,12 @@ import Foundation
 //     "recentFolders": [ { "path", "name", "timestamp" } ],
 //     "settings":      { "thumbnailSize": 5, "appearanceMode": "dark", ... },
 //     "stacks":        [ { "id", "createdAt", "items": [PathRef], "cover": PathRef? } ],   // manual version stacks
-//     "stackExclusions": [PathRef]           // files kept out of automatic stacks
+//     "stackExclusions": [PathRef],          // files kept out of automatic stacks
+//     "edits":         [ { "item": PathRef, "recipe": EditRecipe } ]   // non-destructive image edits
 //   }
 //
-// "stacks" / "stackExclusions" were added without a schema bump: older readers ignore
-// them, and bundles without them read as having none.
+// "stacks" / "stackExclusions" and "edits" were added without a schema bump: older
+// readers ignore them, and bundles without them read as having none.
 //
 // PathRef = { "path": absolute, "root": index into roots (optional), "relativePath": optional }.
 // Every path is stored both ways, so a bundle made on one Mac can be imported on another
@@ -69,6 +70,7 @@ struct CurationBundle: Codable, Equatable {
     var settings: [String: CurationSettingValue] = [:]
     var stacks: [CurationBundleStack] = []
     var stackExclusions: [CurationPathRef] = []
+    var edits: [CurationBundleEdit] = []
 
     init(
         appVersion: String,
@@ -91,6 +93,7 @@ struct CurationBundle: Codable, Equatable {
         case roots, files, tags, customOrders, smartFolders, collections, collectionSets
         case snippets, recentFolders, settings
         case stacks, stackExclusions
+        case edits
     }
 
     init(from decoder: Decoder) throws {
@@ -119,6 +122,7 @@ struct CurationBundle: Codable, Equatable {
         settings = try c.decodeIfPresent([String: CurationSettingValue].self, forKey: .settings) ?? [:]
         stacks = (try? c.decodeIfPresent([CurationBundleStack].self, forKey: .stacks)) ?? []
         stackExclusions = (try? c.decodeIfPresent([CurationPathRef].self, forKey: .stackExclusions)) ?? []
+        edits = (try? c.decodeIfPresent([CurationBundleEdit].self, forKey: .edits)) ?? []
     }
 
     // MARK: Coding
@@ -246,6 +250,12 @@ struct CurationBundleOrder: Codable, Equatable {
     var items: [CurationPathRef]
 }
 
+/// One file's non-destructive edit recipe.
+struct CurationBundleEdit: Codable, Equatable {
+    var item: CurationPathRef
+    var recipe: EditRecipe
+}
+
 /// A manual version stack (members + optional cover, both as path refs).
 struct CurationBundleStack: Codable, Equatable {
     var id: UUID
@@ -277,6 +287,7 @@ struct CurationCounts: Codable, Equatable, Sendable {
     var recentFolders = 0
     var settings = 0
     var stacks = 0
+    var edits = 0
 
     init() {}
 
@@ -296,6 +307,7 @@ struct CurationCounts: Codable, Equatable, Sendable {
         recentFolders = value(.recentFolders)
         settings = value(.settings)
         stacks = value(.stacks)
+        edits = value(.edits)
     }
 
     /// "12 ratings · 3 flags · …", skipping zeros.
@@ -307,6 +319,7 @@ struct CurationCounts: Codable, Equatable, Sendable {
             (collectionSets, "set", "sets"), (smartFolders, "smart folder", "smart folders"),
             (snippets, "snippet", "snippets"), (customOrders, "custom order", "custom orders"),
             (stacks, "stack", "stacks"),
+            (edits, "edited image", "edited images"),
         ]
         let text = parts.filter { $0.0 > 0 }.map { "\($0.0) \($0.0 == 1 ? $0.1 : $0.2)" }
         return text.isEmpty ? "No curation data" : text.joined(separator: " · ")
@@ -314,7 +327,7 @@ struct CurationCounts: Codable, Equatable, Sendable {
 
     var total: Int {
         ratings + flags + taggedFiles + tags + favorites + customOrders + smartFolders
-            + collections + collectionSets + snippets + stacks
+            + collections + collectionSets + snippets + stacks + edits
     }
 }
 
@@ -401,6 +414,9 @@ enum CurationBundleBuilder {
             CurationBundleStack(id: $0.id, createdAt: $0.createdAt, items: $0.paths.map(ref), cover: $0.coverPath.map(ref))
         }
         bundle.stackExclusions = stackBook.excludedPaths.sorted().map(ref)
+        bundle.edits = stores.edits.load().recipes
+            .sorted { $0.key < $1.key }
+            .map { CurationBundleEdit(item: ref($0.key), recipe: $0.value) }
 
         var counts = CurationCounts()
         counts.ratings = ratings.count
@@ -416,6 +432,7 @@ enum CurationBundleBuilder {
         counts.recentFolders = bundle.recentFolders.count
         counts.settings = bundle.settings.count
         counts.stacks = bundle.stacks.count
+        counts.edits = bundle.edits.count
         bundle.counts = counts
         return bundle
     }
@@ -498,6 +515,7 @@ struct CurationResolvedBundle {
     var settings: [String: CurationSettingValue] = [:]
     var stacks: [ManualStack] = []
     var stackExclusions: Set<String> = []
+    var edits: [String: EditRecipe] = [:]
 
     init(_ bundle: CurationBundle, resolver: CurationPathResolver) {
         func path(_ ref: CurationPathRef) -> String { resolver.resolve(ref, roots: bundle.roots) }
@@ -524,6 +542,9 @@ struct CurationResolvedBundle {
             ManualStack(id: $0.id, paths: $0.items.map(path), coverPath: $0.cover.map(path), createdAt: $0.createdAt)
         }
         stackExclusions = Set(bundle.stackExclusions.map(path))
+        for edit in bundle.edits where !edit.recipe.isIdentity {
+            edits[path(edit.item)] = edit.recipe.normalized()
+        }
     }
 }
 
@@ -594,6 +615,7 @@ enum CurationImporter {
             identified("collectionSets", "Collection sets", local: stores.collections.allSets(), new: incoming.sets),
             identified("snippets", "Snippets", local: stores.snippets.all(), new: incoming.snippets),
             identified("stacks", "Stacks", local: stores.stacks.load().stacks, new: incoming.stacks),
+            dictionaryChange("edits", "Image edits", local: stores.edits.load().recipes, new: incoming.edits),
         ]
         changes[2].incoming = incoming.assignments.count
         if includeSettings {
@@ -692,6 +714,11 @@ enum CurationImporter {
         )
         stackBook.normalize()
         if stackBook != stores.stacks.load() || replace { stores.stacks.save(stackBook) }
+
+        // Image edits: by file; the export's recipe wins (replace: exactly the export's).
+        var editBook = replace ? EditBook() : stores.edits.load()
+        for (path, recipe) in incoming.edits { editBook.set(recipe, for: path) }
+        if editBook != stores.edits.load() || replace { stores.edits.save(editBook) }
 
         if includeSettings {
             for (key, value) in incoming.settings where CurationSettingsKeys.all.contains(key) {

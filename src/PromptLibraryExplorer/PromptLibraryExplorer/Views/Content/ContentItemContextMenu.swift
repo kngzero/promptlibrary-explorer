@@ -72,6 +72,9 @@ struct ContentItemContextMenu: View {
             ArtOfficialItemMenuItems(item: item, kind: kind)
         }
 
+        // Non-destructive image edits (Views/Editor); hidden for non-images.
+        EditorItemMenuItems(item: item, index: index, targets: targets)
+
         // Video tools: Save Middle Frame, Trim & Export Clip… (Views/Media).
         if !item.isDirectory, FileHelpers.isVideoFile(item.name) {
             Divider()
@@ -85,6 +88,13 @@ struct ContentItemContextMenu: View {
                 Button("More Like This") { vm.showMoreLikeThis(for: item) }
             }
             Button("Find Images Matching Palette") { vm.findImagesMatchingPalette(of: item) }
+        }
+
+        // Timeline / Map pages (Views/Timeline, Views/Map): the file's day, or its place.
+        if !item.isDirectory, FileHelpers.isImageFile(item.name) || FileHelpers.isVideoFile(item.name) {
+            Divider()
+            Button("Show in Timeline") { vm.showInTimeline(item) }
+            Button("Show on Map") { vm.showOnMap(item) }
         }
 
         Divider()

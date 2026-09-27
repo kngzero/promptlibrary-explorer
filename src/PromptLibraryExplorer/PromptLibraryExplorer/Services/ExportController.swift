@@ -108,6 +108,7 @@ enum ExportJobPlanner {
         items: [ExportSourceItem],
         preset: ExportPreset,
         chosenFolder: URL?,
+        applyEdits: Bool = true,
         existingNames: (URL) -> Set<String> = ExportNamePlanner.existingNames(in:)
     ) -> [ExportJobItem] {
         var requests: [ExportNameRequest] = []
@@ -135,10 +136,15 @@ enum ExportJobPlanner {
             existingNames: existingNames
         )
         return zip(names.indices, names).map { index, name in
-            ExportJobItem(
+            var job = ExportJobItem(
                 source: name.source, kind: kinds[index], destination: name.destination,
                 action: kinds[index] == .unsupported ? .skip : name.action, format: formats[index]
             )
+            // Edited images export edited unless the sheet says "Export original".
+            if applyEdits, kinds[index] == .image {
+                job.edit = EditRecipeIndex.shared.recipe(for: name.source)
+            }
+            return job
         }
     }
 
@@ -252,6 +258,9 @@ final class ExportController {
     var exportRequest: ExportRequest?
     var contactSheetRequest: ContactSheetRequest?
     private(set) var progress: ExportProgress?
+    /// Export sheet: render non-destructive edits into the copies (on by default; the
+    /// sheet's "Use edits / Export original" choice, reset for every new sheet).
+    var useEdits = true
 
     var contactSheetOptions: ContactSheetOptions {
         didSet { persistContactSheetOptions() }
@@ -336,8 +345,9 @@ final class ExportController {
         let folder = chosenFolder
         task = Task { [weak self] in
             let items = await Self.completingTemplateData(request.items, template: preset.filenameTemplate)
+            let applyEdits = self?.useEdits ?? true
             let jobs = await Task.detached(priority: .userInitiated) {
-                ExportJobPlanner.plan(items: items, preset: preset, chosenFolder: folder)
+                ExportJobPlanner.plan(items: items, preset: preset, chosenFolder: folder, applyEdits: applyEdits)
             }.value
             guard let self else { return }
             if Task.isCancelled {

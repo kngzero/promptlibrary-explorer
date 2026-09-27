@@ -171,6 +171,21 @@ enum HelpContent {
             ]
         ),
         HelpFileTypeDescription(
+            id: "timeline-map",
+            extensionLabel: "Timeline & Map",
+            title: "Timeline, Map and Capture Dates",
+            description: "View ▸ Timeline and View ▸ Map (also in the command palette) turn the main window into a page, like Similar Images: the sidebar stays, and the browser and details panel make way. Done, Esc or View ▸ Show Browser returns to the browser exactly as you left it. Nothing on these pages marks or deletes a file.",
+            highlights: [
+                "Every file gets one date: its capture date when the file has one (EXIF date taken, the QuickTime creation date of a video, a PNG time chunk, or a timestamp a generator wrote), else its creation date, else its modification date. The details panel's Date row says which it is — Captured, Created or Modified — and hovering it names the source.",
+                "Timeline: This Folder (the browser's listing, with its filters and search) or Whole Library (every indexed file, with the filters). Years, Months or Days (or pinch) set the grouping; headers stay on top while you scroll and show how many files each period has and how many are placed by file date. The bar on the right shows files per month: click or drag it to jump.",
+                "Click a thumbnail to select it, double-click (or Space) to open the lightbox, where ← / → step through that day. ← / → move the selection, ↑ / ↓ jump a period, P X U 0–9 flag, rate or label it. Right-click for the usual item menu. A header's grid button shows that period in the browser.",
+                "Map: files with a location, clustered by zoom level; each badge shows the newest file and the count. Click a cluster to list its files beside the map, double-click it to zoom in; Show in Browser opens them as a listing. Most AI images have no location — photos and phone videos usually do.",
+                "Privacy: locations are read from the files only (EXIF GPS, QuickTime ISO 6709). The map downloads its tiles from Apple; nothing else is sent unless you click Look Up Place Names, which asks Apple for the names of the places in view one at a time and remembers them.",
+                "Dates and locations are stored in the library index. Files indexed before this existed are read in the background when a page opens (the Dating… progress in the page's bar and in the indexing status popover, with Stop and Resume). Online-only cloud files are skipped rather than downloaded.",
+                "In the browser, Sort By ▸ Capture Date and Group By ▸ Month / Year use the same date. Right-click an image or video for Show in Timeline or Show on Map (they open with This Folder, at the file)."
+            ]
+        ),
+        HelpFileTypeDescription(
             id: "version-stacks",
             extensionLabel: "Stacks",
             title: "Version Stacks",
@@ -283,6 +298,22 @@ enum HelpContent {
                 "Average rating and pick rate by model and by sampler, from your ratings and flags. Click a model or sampler to list its files in the browser.",
                 "View ▸ Folder Statistics still shows file types and sizes for the folder."
             ]
+        ),
+        HelpFileTypeDescription(
+            id: "image-editor",
+            extensionLabel: "Edit",
+            title: "Editing Images (Non-Destructive)",
+            description: "Crop, straighten, rotate, flip and adjust images without ever changing the file. Edit ▸ Edit Image…, right-click ▸ Edit Image…, the details panel's Image Edits card or the lightbox's Edit button open the editor as a page over the browser (the sidebar stays).",
+            highlights: [
+                "Crop & Rotate: drag the corners, edges or the whole crop; pick an aspect ratio (Free, Original, 1:1, 4:5, 3:2, 16:9, 9:16, 2:3); a rule-of-thirds grid helps framing. Straighten (−45° to 45°) shows a finer grid while you drag and shrinks the crop so no empty corners appear. Rotate 90° left / right and flip horizontally / vertically.",
+                "Adjust: exposure, contrast, saturation and temperature. Hold Compare to see the original; Revert to Original removes every edit.",
+                "⌘Z / ⇧⌘Z undo and redo inside the editor. Done saves the edit as one step you can undo from Edit ▸ Undo; Cancel or Esc closes without saving (it asks first when you changed something).",
+                "The original file is never modified. The edit is stored with your curation data, like ratings: it follows renames, moves and Trash / undo, is included in curation exports and backups, and syncs to your other Macs through the library data file.",
+                "Edited images show their edit everywhere in the app: grid and list (with an edit badge), details panel (an Edited badge), lightbox (Show Original toggles back per file), Quick Look, Compare and the slideshow.",
+                "Exports, contact sheets and Send to Mood / Story use the edited version. The export sheet's Use Edits / Export Original switch picks per export.",
+                "Save Edited Copy… writes the edited image as a new file next to the original (\u{201C}Name (edited).png\u{201D}, never replacing anything). It keeps the original's prompt metadata unless you choose Strip AI metadata.",
+                "Videos, audio, Mood boards, Story projects and .plib / .aoe snapshots can't be edited (the menu item says why)."
+            ]
         )
     ]
 
@@ -297,6 +328,7 @@ enum HelpContent {
                 HelpShortcutItem(id: "trash", keys: ["Cmd", "Delete"], description: "Move the selected items to the Trash (undoable)."),
                 HelpShortcutItem(id: "reveal", keys: ["Cmd", "Option", "R"], description: "Reveal the selection in Finder."),
                 HelpShortcutItem(id: "settings", keys: ["Cmd", ","], description: "Open Settings."),
+                HelpShortcutItem(id: "close-window", keys: ["Cmd", "W"], description: "Close the front window (Settings, a slideshow)."),
                 HelpShortcutItem(id: "undo", keys: ["Cmd", "Z"], description: "Undo the last folder action such as move, rename, batch rename, or trash."),
                 HelpShortcutItem(id: "redo", keys: ["Cmd", "Shift", "Z"], description: "Redo the last undone folder action.")
             ]
@@ -321,7 +353,8 @@ enum HelpContent {
                 HelpShortcutItem(id: "view-list", keys: ["Cmd", "2"], description: "Show the folder as a list."),
                 HelpShortcutItem(id: "quick-look", keys: ["Cmd", "Y"], description: "Quick Look the selection. Press again to close."),
                 HelpShortcutItem(id: "compare-prompts", keys: ["Cmd", "D"], description: "Compare the prompts of the two selected files."),
-                HelpShortcutItem(id: "refresh", keys: ["Cmd", "R"], description: "Refresh the current folder and sidebar.")
+                HelpShortcutItem(id: "refresh", keys: ["Cmd", "R"], description: "Refresh the current folder and sidebar."),
+                HelpShortcutItem(id: "toolbar", keys: ["Cmd", "Option", "T"], description: "Show or hide the toolbar. Right-click the toolbar to customise it.")
             ]
         ),
         HelpShortcutGroup(
@@ -344,7 +377,7 @@ enum HelpContent {
                 HelpShortcutItem(id: "content-arrows", keys: ["←", "→", "↑", "↓"], description: "Move selection through the grid. Left from the first column returns to the sidebar."),
                 HelpShortcutItem(id: "content-extend", keys: ["Shift", "Arrows"], description: "Extend the selection from the anchor item."),
                 HelpShortcutItem(id: "content-select-all", keys: ["Cmd", "A"], description: "Select every item in the folder (or collection). In a text field it selects the text instead."),
-                HelpShortcutItem(id: "content-open", keys: ["Return"], description: "Open the selected folder or preview the selected file."),
+                HelpShortcutItem(id: "content-open", keys: ["Return"], description: "Open the selected folder, or open the selected file in the lightbox."),
                 HelpShortcutItem(id: "content-preview", keys: ["Space"], description: "Open the selected previewable item in the lightbox."),
                 HelpShortcutItem(id: "content-parent", keys: ["Delete / Backspace"], description: "Navigate up one folder."),
                 HelpShortcutItem(id: "content-delete", keys: ["Shift", "Delete"], description: "Open permanent delete confirmation for the current selection."),
@@ -363,6 +396,19 @@ enum HelpContent {
                 HelpShortcutItem(id: "similar-more", keys: ["M"], description: "More Like This for the focused file (opens in the browser)."),
                 HelpShortcutItem(id: "similar-cull", keys: ["P", "X", "U", "0 – 9"], description: "Flag, rate or label the focused file (with Culling Mode's auto-advance, focus moves to the next file)."),
                 HelpShortcutItem(id: "similar-leave", keys: ["Esc"], description: "Back to the browser.")
+            ]
+        ),
+        HelpShortcutGroup(
+            id: "timeline-map",
+            title: "Timeline And Map Pages",
+            description: "Keys while View ▸ Timeline or View ▸ Map is showing. They act on the page, never on the browser behind it.",
+            items: [
+                HelpShortcutItem(id: "timeline-move", keys: ["←", "→"], description: "Previous or next file (on the Map: in the selected cluster)."),
+                HelpShortcutItem(id: "timeline-period", keys: ["↑", "↓"], description: "Timeline: previous or next period."),
+                HelpShortcutItem(id: "timeline-open", keys: ["Space / Return"], description: "Open the selected file in the lightbox, walking its day (or its map cluster). Closing it returns to the page."),
+                HelpShortcutItem(id: "timeline-cull", keys: ["P", "X", "U", "0 – 9"], description: "Flag, rate or label the selected file."),
+                HelpShortcutItem(id: "timeline-more", keys: ["M"], description: "More Like This for the selected file (opens in the browser)."),
+                HelpShortcutItem(id: "timeline-leave", keys: ["Esc"], description: "Back to the browser.")
             ]
         ),
         HelpShortcutGroup(
@@ -398,7 +444,9 @@ enum HelpContent {
                 HelpShortcutItem(id: "lightbox-nav", keys: ["←", "→"], description: "Move to the previous or next previewable item. On a Mood board or Story project they step through its images or shots instead."),
                 HelpShortcutItem(id: "lightbox-nav-files", keys: ["↑", "↓"], description: "Move to the previous or next previewable item, including from inside a Mood board or Story project. Option ← / Option → do the same."),
                 HelpShortcutItem(id: "lightbox-doc-back", keys: ["Esc"], description: "While stepping through a Mood board or Story project, return to the whole board or contact sheet (press again to close)."),
-                HelpShortcutItem(id: "lightbox-more-like-this", keys: ["M"], description: "More Like This for the item shown; the lightbox stays on it and ← / → step through the most similar files.")
+                HelpShortcutItem(id: "lightbox-more-like-this", keys: ["M"], description: "More Like This for the item shown; the lightbox stays on it and ← / → step through the most similar files."),
+                HelpShortcutItem(id: "lightbox-cull", keys: ["P", "X", "U", "0 – 9"], description: "Flag, rate or label the item shown (see Culling below)."),
+                HelpShortcutItem(id: "lightbox-zoom", keys: ["Control", "= / −"], description: "Zoom in or out on an image. Scrolling pans a zoomed image.")
             ]
         ),
         HelpShortcutGroup(
@@ -423,8 +471,9 @@ enum HelpContent {
                 HelpShortcutItem(id: "rename-save", keys: ["Return"], description: "Save an inline rename."),
                 HelpShortcutItem(id: "rename-cancel", keys: ["Esc"], description: "Cancel an inline rename."),
                 HelpShortcutItem(id: "palette-close", keys: ["Esc"], description: "Close the command palette."),
-                HelpShortcutItem(id: "settings-cancel", keys: ["Esc"], description: "Close Settings."),
-                HelpShortcutItem(id: "settings-close", keys: ["Return"], description: "Close Settings (Done)."),
+                HelpShortcutItem(id: "settings-cancel", keys: ["Esc"], description: "Close Settings (Cmd W does the same)."),
+                HelpShortcutItem(id: "tour-keys", keys: ["←", "→", "Return", "Esc"], description: "Welcome tour: previous or next page, Return for the next page (or Done), Esc to skip."),
+                HelpShortcutItem(id: "help-close", keys: ["Esc"], description: "Close Help."),
                 HelpShortcutItem(id: "comparison-close", keys: ["Esc"], description: "Close the AoE comparison or prompt diff window.")
             ]
         )
@@ -436,4 +485,666 @@ enum HelpContent {
         buttonTitle: "Visit artofficial.world",
         urlString: "https://artofficial.world"
     )
+}
+
+// MARK: - Sectioned reference (Help window)
+
+/// The Help window's sections, in order.
+enum HelpSectionID: String, CaseIterable, Identifiable, Sendable {
+    case browse
+    case prompts
+    case cull
+    case find
+    case organise
+    case media
+    case export
+    case dataSync
+    case integrations
+    case keyboard
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .browse: return "Browse"
+        case .prompts: return "Prompts"
+        case .cull: return "Cull"
+        case .find: return "Find"
+        case .organise: return "Organise"
+        case .media: return "Media"
+        case .export: return "Export"
+        case .dataSync: return "Data & Sync"
+        case .integrations: return "Integrations"
+        case .keyboard: return "Keyboard"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .browse: return "square.grid.2x2"
+        case .prompts: return "text.quote"
+        case .cull: return "flag.checkered"
+        case .find: return "magnifyingglass"
+        case .organise: return "rectangle.stack"
+        case .media: return "film"
+        case .export: return "square.and.arrow.up"
+        case .dataSync: return "externaldrive.badge.checkmark"
+        case .integrations: return "puzzlepiece.extension"
+        case .keyboard: return "command"
+        }
+    }
+
+    var blurb: String {
+        switch self {
+        case .browse: return "Opening a library, the grid, the details panel, the lightbox and the file types the app reads."
+        case .prompts: return "Copying, comparing, building and re-running prompts."
+        case .cull: return "Flags, ratings and colour labels, from the keyboard."
+        case .find: return "Searching by name, prompt, text in the image, look and colour."
+        case .organise: return "Collections, smart folders, tags, stacks and the ingest Inbox."
+        case .media: return "Video and audio: scrubbing, frames, trimming and waveforms."
+        case .export: return "Converted copies, presets, privacy and contact sheets."
+        case .dataSync: return "Backups, the library sync file, Finder tags and XMP sidecars."
+        case .integrations: return "Spotlight, Shortcuts, links, cloud files and generators."
+        case .keyboard: return "Every keyboard shortcut, grouped by where it applies."
+        }
+    }
+}
+
+/// A direct entry point for a Help entry's "Show Me", a tip's action or a tour
+/// page's "Try it". Each one is a real menu command or Settings page;
+/// `ExplorerViewModel+Onboarding` performs them.
+enum HelpCommand: String, CaseIterable, Identifiable, Sendable {
+    case openFolder
+    case welcomeTour
+    case keyboardShortcuts
+    case togglePreviewPane
+    case compareImages
+    case slideshow
+    case batchRename
+    case folderStatistics
+    case cullingMode
+    case focusSearch
+    case findInLibrary
+    case commandPalette
+    case similarImages
+    case moreLikeThis
+    case similarPrompts
+    case snippets
+    case promptBuilder
+    case promptStatistics
+    case applySuggestedTags
+    case reindexLibrary
+    case newSmartFolder
+    case stackVariants
+    case showInbox
+    case watchedFolders
+    case sendToMood
+    case export
+    case exportForSharing
+    case contactSheet
+    case trimClip
+    case writeXMPSidecars
+    case appearanceSettings
+    case exportSettings
+    case dataSettings
+    case integrationSettings
+    case searchIndexSettings
+    case generatorSettings
+    case organizeSettings
+    case storageSettings
+    case fileOperationsSettings
+
+    var id: String { rawValue }
+
+    /// The menu path of the command, top menu first; the last element is the
+    /// item's title exactly as the App file declares it. nil for Settings pages.
+    var menuPath: [String]? {
+        switch self {
+        case .openFolder: return ["File", "Open Folder…"]
+        case .welcomeTour: return ["Help", "Welcome Tour…"]
+        case .keyboardShortcuts: return ["Help", "Keyboard Shortcuts"]
+        case .togglePreviewPane: return ["View", "Hide Preview Pane"]
+        case .compareImages: return ["View", "Compare Images"]
+        case .slideshow: return ["View", "Start Slideshow"]
+        case .batchRename: return ["File", "Batch Rename…"]
+        case .folderStatistics: return ["View", "Folder Statistics"]
+        case .cullingMode: return ["Cull", "Culling Mode"]
+        case .focusSearch: return ["Edit", "Find"]
+        case .findInLibrary: return ["Edit", "Find in Library…"]
+        case .commandPalette: return ["Go", "Command Palette"]
+        case .similarImages: return ["Library", "Similar Images"]
+        case .moreLikeThis: return ["Library", "More Like This (M)"]
+        case .similarPrompts: return ["Library", "Find Similar Prompts…"]
+        case .snippets: return ["Library", "Prompt Snippets…"]
+        case .promptBuilder: return ["Library", "Prompt Builder…"]
+        case .promptStatistics: return ["Library", "Prompt Statistics…"]
+        case .applySuggestedTags: return ["Library", "Apply Suggested Tags…"]
+        case .reindexLibrary: return ["Library", "Reindex Library"]
+        case .newSmartFolder: return ["View", "New Smart Folder..."]
+        case .stackVariants: return ["View", "Stack Variants"]
+        case .showInbox: return ["Library", "Show Inbox"]
+        case .watchedFolders: return ["Library", "Watched Folders…"]
+        case .sendToMood: return ["File", "Send to Mood…"]
+        case .export: return ["File", "Export…"]
+        case .exportForSharing: return ["File", "Export for Sharing (Strip AI Metadata)…"]
+        case .contactSheet: return ["File", "Export Contact Sheet…"]
+        case .trimClip: return ["File", "Trim & Export Clip…"]
+        case .writeXMPSidecars: return ["Library", "Write XMP Sidecars Now"]
+        case .generatorSettings: return ["Library", "Send to Generator", "Generator Settings…"]
+        case .appearanceSettings, .exportSettings, .dataSettings, .integrationSettings,
+             .searchIndexSettings, .organizeSettings, .storageSettings, .fileOperationsSettings:
+            return nil
+        }
+    }
+
+    /// The Settings page the command opens, for Settings commands.
+    var settingsPage: SettingsPage? {
+        switch self {
+        case .appearanceSettings: return .appearance
+        case .exportSettings: return .export
+        case .dataSettings: return .data
+        case .integrationSettings: return .integrations
+        case .searchIndexSettings: return .libraryIndex
+        case .generatorSettings: return .generators
+        case .organizeSettings: return .organize
+        case .storageSettings: return .storage
+        case .fileOperationsSettings: return .fileOperations
+        default: return nil
+        }
+    }
+
+    /// "Library ▸ Similar Images", "Settings ▸ Data".
+    var locationText: String {
+        if let menuPath {
+            return menuPath.map { $0.replacingOccurrences(of: "...", with: "…") }.joined(separator: " ▸ ")
+        }
+        return "Settings ▸ \(settingsPage?.title ?? "")"
+    }
+
+    /// Button title on a tip card or a tour page.
+    var tryItTitle: String {
+        switch self {
+        case .openFolder: return "Open Folder…"
+        case .welcomeTour: return "Take the Tour"
+        case .keyboardShortcuts: return "Keyboard Shortcuts"
+        case .togglePreviewPane: return "Toggle Details Panel"
+        case .compareImages: return "Compare Now"
+        case .slideshow: return "Start Slideshow"
+        case .batchRename: return "Batch Rename…"
+        case .folderStatistics: return "Folder Statistics"
+        case .cullingMode: return "Turn On Culling Mode"
+        case .focusSearch: return "Search This Folder"
+        case .findInLibrary: return "Find in Library…"
+        case .commandPalette: return "Open the Command Palette"
+        case .similarImages: return "Show Similar Images"
+        case .moreLikeThis: return "More Like This"
+        case .similarPrompts: return "Find Similar Prompts…"
+        case .snippets: return "Prompt Snippets…"
+        case .promptBuilder: return "Open Prompt Builder"
+        case .promptStatistics: return "Prompt Statistics…"
+        case .applySuggestedTags: return "Apply Suggested Tags…"
+        case .reindexLibrary: return "Reindex Library"
+        case .newSmartFolder: return "New Smart Folder…"
+        case .stackVariants: return "Stack Variants"
+        case .showInbox: return "Show Inbox"
+        case .watchedFolders: return "Watched Folders…"
+        case .sendToMood: return "Send to Mood…"
+        case .export: return "Export…"
+        case .exportForSharing: return "Export for Sharing…"
+        case .contactSheet: return "Contact Sheet…"
+        case .trimClip: return "Trim & Export Clip…"
+        case .writeXMPSidecars: return "Write XMP Sidecars"
+        case .appearanceSettings, .exportSettings, .dataSettings, .integrationSettings,
+             .searchIndexSettings, .generatorSettings, .organizeSettings, .storageSettings,
+             .fileOperationsSettings:
+            return "Open Settings ▸ \(settingsPage?.title ?? "")"
+        }
+    }
+}
+
+/// One feature in the Help reference.
+struct HelpEntry: Identifiable, Sendable {
+    let id: String
+    let section: HelpSectionID
+    let title: String
+    /// Short chip beside the title (".plib", "⌘K", "Stacks").
+    let label: String
+    let summary: String
+    let details: [String]
+    /// Extra words people search with ("dedupe", "duplicates").
+    var keywords: [String] = []
+    var showMe: HelpCommand?
+}
+
+extension HelpContent {
+    /// Every feature, in section order. Hand-written entries plus every
+    /// `fileTypes` description (so a description added there shows up here too).
+    static var referenceEntries: [HelpEntry] {
+        let all = curatedEntries + fileTypes.map(entry(from:))
+        return HelpSectionID.allCases.flatMap { section in all.filter { $0.section == section } }
+    }
+
+    static func entry(withID id: String) -> HelpEntry? {
+        referenceEntries.first { $0.id == id }
+    }
+
+    /// Every "Show Me" in Help.
+    static var showMeCommands: [HelpCommand] {
+        referenceEntries.compactMap(\.showMe)
+    }
+
+    static func entry(from fileType: HelpFileTypeDescription) -> HelpEntry {
+        HelpEntry(
+            id: fileType.id,
+            section: fileTypeSections[fileType.id] ?? .browse,
+            title: fileType.title,
+            label: fileType.extensionLabel,
+            summary: fileType.description,
+            details: fileType.highlights,
+            keywords: fileTypeKeywords[fileType.id] ?? [],
+            showMe: fileTypeShowMe[fileType.id]
+        )
+    }
+
+    /// Which section each `fileTypes` description belongs to (unknown ids: Browse).
+    static let fileTypeSections: [String: HelpSectionID] = [
+        "aoe": .browse,
+        "plib": .browse,
+        "mlmboard": .browse,
+        "stry": .browse,
+        "viewing-tools": .browse,
+        "send-to": .organise,
+        "version-stacks": .organise,
+        "ingest": .organise,
+        "export": .export,
+        "privacy-export": .export,
+        "contact-sheet": .export,
+        "video-audio-tools": .media,
+        "visual-search": .find,
+        "image-text": .find,
+        "curation-data": .dataSync,
+        "spotlight-automation": .integrations,
+        "cloud-files": .integrations,
+        "send-to-generator": .integrations,
+        "prompt-lineage-builder": .prompts,
+        "prompt-statistics": .prompts,
+    ]
+
+    static let fileTypeShowMe: [String: HelpCommand] = [
+        "viewing-tools": .compareImages,
+        "send-to": .sendToMood,
+        "version-stacks": .stackVariants,
+        "ingest": .watchedFolders,
+        "export": .export,
+        "privacy-export": .exportForSharing,
+        "contact-sheet": .contactSheet,
+        "video-audio-tools": .trimClip,
+        "visual-search": .similarImages,
+        "image-text": .searchIndexSettings,
+        "curation-data": .dataSettings,
+        "spotlight-automation": .integrationSettings,
+        "cloud-files": .integrationSettings,
+        "send-to-generator": .generatorSettings,
+        "prompt-lineage-builder": .promptBuilder,
+        "prompt-statistics": .promptStatistics,
+    ]
+
+    static let fileTypeKeywords: [String: [String]] = [
+        "viewing-tools": ["compare", "loupe", "histogram", "slideshow", "zoom", "wipe", "side by side"],
+        "visual-search": ["duplicates", "dedupe", "near duplicate", "similar", "colour", "color", "palette"],
+        "version-stacks": ["variants", "re-roll", "upscale", "cover"],
+        "image-text": ["ocr", "text recognition", "suggested tags", "classification"],
+        "curation-data": ["backup", "restore", "sync", "dropbox", "finder tags", "xmp", "sidecar", "lightroom"],
+        "ingest": ["watched folder", "inbox", "comfyui output", "downloads", "live updates"],
+        "export": ["preset", "convert", "resize", "watermark", "jpeg", "png", "heic", "webp"],
+        "privacy-export": ["strip", "metadata", "privacy", "share", "gps", "remove prompt"],
+        "video-audio-tools": ["video", "audio", "scrub", "trim", "gif", "frame", "waveform", "clip"],
+        "spotlight-automation": ["spotlight", "shortcuts", "siri", "url", "link", "automation"],
+        "cloud-files": ["dropbox", "icloud", "google drive", "online only", "download"],
+        "send-to-generator": ["comfyui", "a1111", "forge", "automatic1111", "re-run", "generate"],
+        "prompt-lineage-builder": ["lineage", "builder", "weights", "compose", "history"],
+        "prompt-statistics": ["statistics", "words", "models", "charts"],
+        "send-to": ["mood board", "storyboard", "art official"],
+    ]
+
+    /// Features not described in `fileTypes`.
+    static let curatedEntries: [HelpEntry] = [
+        // Browse
+        HelpEntry(
+            id: "open-library",
+            section: .browse,
+            title: "Opening a Library Folder",
+            label: "⌘O",
+            summary: "Everything starts with a folder: File ▸ Open Folder… (⌘O), dropping a folder on the window or the Dock icon, or File ▸ Open Recent. Files stay where they are.",
+            details: [
+                "The sidebar shows the folder tree, Favorites (right-click ▸ Pin), the Inbox, recent folders, collections and smart folders.",
+                "Drop a folder (or a file) on the breadcrumb bar to go to it; nothing is moved or copied.",
+                "Go ▸ Back / Forward (⌘[ / ⌘]) and Enclosing Folder (⌘↑) move around; Delete goes up one folder from the grid.",
+                "Help ▸ Welcome Tour… shows the short introduction again."
+            ],
+            keywords: ["start", "folder", "root", "recent", "drop", "favorites", "pin", "sidebar"],
+            showMe: .openFolder
+        ),
+        HelpEntry(
+            id: "grid-list",
+            section: .browse,
+            title: "Grid, List, Grouping and Sorting",
+            label: "⌘1 ⌘2",
+            summary: "View as Grid (⌘1) or List (⌘2); Group By and Sort By are in the View menu and the toolbar.",
+            details: [
+                "Sort by type, name, rating, flag, label, date modified, date created, size or a custom order of your own.",
+                "The toolbar's Filter menu narrows the listing by type, minimum rating, flag (Hide Rejects), colour label and colour. Edit ▸ Clear All Filters resets them.",
+                "Right-click the toolbar to customise it; View ▸ Status Bar shows counts and the indexing indicator.",
+                "View ▸ Folder Statistics shows file types and sizes for the folder."
+            ],
+            keywords: ["view", "sort", "group", "filter", "toolbar", "status bar", "custom order"],
+            showMe: .folderStatistics
+        ),
+        HelpEntry(
+            id: "details-panel",
+            section: .browse,
+            title: "The Details Panel",
+            label: "Details",
+            summary: "Select a file to see its prompt, negative prompt, model, seed, sampler, steps and size, any structured analysis, and your rating, flag, label and tags.",
+            details: [
+                "Copy buttons copy each field; Edit ▸ Copy Prompt As… copies it in another format.",
+                "Prompt Tools opens the Prompt Builder, Prompt Lineage and Send to Generator for the file.",
+                "PNG and JPEG metadata can be edited (right-click ▸ Batch Edit Metadata for several files); the change is written into the file.",
+                "View ▸ Hide Preview Pane hides the panel for a wider grid."
+            ],
+            keywords: ["metadata", "inspector", "prompt", "seed", "parameters", "preview pane", "edit metadata"],
+            showMe: .togglePreviewPane
+        ),
+        HelpEntry(
+            id: "lightbox",
+            section: .browse,
+            title: "The Lightbox and Quick Look",
+            label: "Space",
+            summary: "Space or Return opens the selected file large; ← / → move through the listing and Esc closes it. ⌘Y opens Quick Look instead.",
+            details: [
+                "Control = and Control − zoom an image; scroll to pan once zoomed.",
+                "The culling keys, M (More Like This), the loupe and the histogram all work in the lightbox.",
+                "Videos and audio play in place: Space plays and pauses.",
+                "Mood boards and Story projects: ← / → step through their images or shots; ↑ / ↓ move to the next file."
+            ],
+            keywords: ["preview", "full screen", "zoom", "quick look", "viewer"]
+        ),
+        HelpEntry(
+            id: "files-folders",
+            section: .browse,
+            title: "Renaming, Moving and the Trash",
+            label: "Files",
+            summary: "File ▸ New Folder (⇧⌘N), Rename, Batch Rename…, Move to Trash (⌘⌫) and Reveal in Finder (⌥⌘R). Moves, renames and trashing can be undone with ⌘Z.",
+            details: [
+                "Batch Rename uses tokens such as {name}, {date}, {model}, {seed} and {counter:3}, with a live preview.",
+                "Drag files onto a sidebar folder to move them, or out to Finder and other apps to copy.",
+                "Deleting is always your own action: nothing in the app marks or suggests files for deletion."
+            ],
+            keywords: ["rename", "batch rename", "trash", "delete", "move", "new folder", "undo"],
+            showMe: .batchRename
+        ),
+        HelpEntry(
+            id: "tips-tour",
+            section: .browse,
+            title: "Tips and the Welcome Tour",
+            label: "Tips",
+            summary: "Small tips appear once, when a feature first becomes useful. Help ▸ Welcome Tour… replays the introduction; Help ▸ Reset Tips shows every tip again.",
+            details: [
+                "Tips never appear while a sheet is open or while you type, and at most one a minute.",
+                "Don't Show Tips on any tip (or Settings ▸ Appearance ▸ Tips) turns them off."
+            ],
+            keywords: ["onboarding", "tour", "tips", "introduction", "getting started"],
+            showMe: .welcomeTour
+        ),
+
+        // Prompts
+        HelpEntry(
+            id: "prompts-copy",
+            section: .prompts,
+            title: "Copying Prompts",
+            label: "⇧⌘C",
+            summary: "Edit ▸ Copy Prompt (⇧⌘C) copies the prompts of the selection. Copy Prompt As offers other formats, and Copy Path (⌥⌘C) copies file paths.",
+            details: [
+                "Prompts are read from PNG text chunks (A1111 / Forge parameters, ComfyUI graphs), EXIF User Comment, image descriptions and XMP, and from .plib / .aoe snapshots.",
+                "ComfyUI files carry their graph; the prompt is taken from the encoder feeding the sampler.",
+                "Copy As formats: Plain Text, Midjourney, Stable Diffusion, DALL-E and JSON."
+            ],
+            keywords: ["copy", "clipboard", "midjourney", "stable diffusion", "json", "format", "copy as"],
+            showMe: .promptBuilder
+        ),
+        HelpEntry(
+            id: "compare-prompts",
+            section: .prompts,
+            title: "Compare Prompts",
+            label: "⌘D",
+            summary: "Select two files and choose View ▸ Compare Prompts (⌘D) to see a word-by-word diff of their prompts and settings.",
+            details: [
+                "Select two or more .aoe snapshots for View ▸ Compare Selected .aoe Files, which compares their analysis fields side by side."
+            ],
+            keywords: ["diff", "difference", "compare", "aoe"]
+        ),
+        HelpEntry(
+            id: "snippets",
+            section: .prompts,
+            title: "Prompt Snippets",
+            label: "Snippets",
+            summary: "Library ▸ Prompt Snippets… keeps reusable phrases by category. The Prompt Builder inserts them with a click or a drag.",
+            details: [
+                "Snippets are part of your curation data: backed up, exported and synced like ratings and tags."
+            ],
+            keywords: ["phrases", "library", "reuse", "templates"],
+            showMe: .snippets
+        ),
+        HelpEntry(
+            id: "similar-prompts",
+            section: .prompts,
+            title: "Find Similar Prompts",
+            label: "Prompts",
+            summary: "Library ▸ Find Similar Prompts… groups files whose prompts are nearly the same, with a similarity slider, so you can see every render of an idea and make a collection from a group.",
+            details: [
+                "Results are for looking only: nothing is marked or suggested for removal."
+            ],
+            keywords: ["duplicates", "similar", "prompt", "groups"],
+            showMe: .similarPrompts
+        ),
+
+        // Cull
+        HelpEntry(
+            id: "culling",
+            section: .cull,
+            title: "Flags, Ratings and Colour Labels",
+            label: "P X U",
+            summary: "Bare keys in the grid, list or lightbox: P pick, X reject, U unflag, 0–5 stars (0 clears), 6 Red, 7 Yellow, 8 Green, 9 Blue. Every change can be undone.",
+            details: [
+                "Cull ▸ Culling Mode shows the culling bar in the lightbox and flashes each change; Auto-advance moves to the next file after each key.",
+                "Rejects are dimmed; the toolbar's Filter ▸ Flag ▸ Hide Rejects hides them.",
+                "Cull ▸ Select Rejects selects them; Move Rejects to Trash… asks before moving anything.",
+                "Labels are Finder's own colour labels, so Finder shows them too. Other colours are in the Cull menu, the context menu and the details panel."
+            ],
+            keywords: ["flag", "pick", "reject", "rating", "stars", "label", "colour label", "color", "culling mode", "auto advance"],
+            showMe: .cullingMode
+        ),
+
+        // Find
+        HelpEntry(
+            id: "search-field",
+            section: .find,
+            title: "Searching the Folder",
+            label: "⌘F",
+            summary: "Edit ▸ Find (⌘F) focuses the toolbar search field. Its menu picks what to match: All, Filename, Prompt, or Text in Image.",
+            details: [
+                "Prompt matches only prompts (not text painted into the image); Text in Image matches only recognised text; All matches everything.",
+                "Esc in the search field returns to the grid."
+            ],
+            keywords: ["search", "filter", "find", "filename", "search mode", "text in image"],
+            showMe: .focusSearch
+        ),
+        HelpEntry(
+            id: "library-search",
+            section: .find,
+            title: "Find in Library",
+            label: "⇧⌘F",
+            summary: "Edit ▸ Find in Library… (⇧⌘F) searches the prompts, names and recognised text of every file in the library at once, from a full-text index.",
+            details: [
+                "The index builds in the background when a folder opens and follows file changes; Library ▸ Reindex Library rebuilds it.",
+                "Choose a result to go to its folder with the file selected.",
+                "Spotlight finds the same files from anywhere on your Mac (Settings ▸ Integrations)."
+            ],
+            keywords: ["search", "library", "index", "full text", "spotlight", "all folders"],
+            showMe: .findInLibrary
+        ),
+        HelpEntry(
+            id: "command-palette",
+            section: .find,
+            title: "The Command Palette",
+            label: "⌘K",
+            summary: "Go ▸ Command Palette (⌘K) jumps to folders, smart folders, tags, files and actions by typing part of their name. Every Help topic is there too, as \u{201C}Help: …\u{201D}.",
+            details: [
+                "↑ / ↓ move the highlight, Return runs it, Esc closes the palette.",
+                "Typing also searches file names and prompts across the library."
+            ],
+            keywords: ["palette", "quick open", "jump", "actions", "commands", "cmd k"],
+            showMe: .commandPalette
+        ),
+
+        // Organise
+        HelpEntry(
+            id: "collections",
+            section: .organise,
+            title: "Collections and Collection Sets",
+            label: "Collections",
+            summary: "Collections gather files from any folder without moving them. File ▸ New Collection from Selection or the sidebar's + makes one; drag files onto a collection to add them.",
+            details: [
+                "Collection sets group collections (and other sets) in the sidebar: + ▸ New Collection Set…, then drag collections into it.",
+                "A collection's context menu sends it to Mood or Story, exports it or makes a contact sheet.",
+                "Go ▸ Collections opens one; Enclosing Folder (⌘↑) or its close button leaves it."
+            ],
+            keywords: ["collection", "set", "album", "group", "board"]
+        ),
+        HelpEntry(
+            id: "smart-folders",
+            section: .organise,
+            title: "Smart Folders",
+            label: "Smart",
+            summary: "View ▸ New Smart Folder… saves a set of rules — text, file type, rating, flag, label, tags, model, date, dominant colour, text in image — as a live listing in the sidebar.",
+            details: [
+                "Smart folders update as files change; right-click one to edit or delete it."
+            ],
+            keywords: ["smart folder", "rules", "saved search", "query"],
+            showMe: .newSmartFolder
+        ),
+        HelpEntry(
+            id: "tags",
+            section: .organise,
+            title: "Tags and Favorites",
+            label: "Tags",
+            summary: "Right-click ▸ Tags adds tags; the sidebar and the command palette filter by them. Pin folders to Favorites from their context menu.",
+            details: [
+                "Tags are mirrored to Finder tags (Settings ▸ Data).",
+                "Suggested tags under a file's tags come from what the image shows, its colour and its model; Library ▸ Apply Suggested Tags… reviews them for a selection. Nothing is applied without you."
+            ],
+            keywords: ["tag", "keywords", "favorites", "pin", "suggested tags"],
+            showMe: .applySuggestedTags
+        ),
+        HelpEntry(
+            id: "organize-folders",
+            section: .organise,
+            title: "Reorganising a Folder by Date",
+            label: "Organize",
+            summary: "Settings ▸ Organize reshapes the current folder into dated subfolders, or flattens it back out, with a preview first.",
+            details: [
+                "Moves can be undone with Edit ▸ Undo."
+            ],
+            keywords: ["organize", "dated folders", "flatten", "reorganise"],
+            showMe: .organizeSettings
+        ),
+
+        // Data & Sync
+        HelpEntry(
+            id: "storage",
+            section: .dataSync,
+            title: "Caches and Storage",
+            label: "Storage",
+            summary: "Settings ▸ Storage shows the space used by thumbnails and parsed metadata and clears it. Clearing caches never touches your files or your curation data.",
+            details: [],
+            keywords: ["cache", "thumbnails", "disk space", "clear"],
+            showMe: .storageSettings
+        ),
+        HelpEntry(
+            id: "undo",
+            section: .dataSync,
+            title: "Undo and File Safety",
+            label: "⌘Z",
+            summary: "Edit ▸ Undo (⌘Z) reverses moves, renames, batch renames, trashing and culling changes; Redo is ⇧⌘Z. Settings ▸ File Operations sets what happens when names collide.",
+            details: [
+                "Exports, frames and clips are always written as new files; originals are never overwritten.",
+                "Delete Permanently (⇧Delete) always asks first."
+            ],
+            keywords: ["undo", "redo", "safety", "collision", "overwrite"],
+            showMe: .fileOperationsSettings
+        ),
+
+        // Integrations
+        HelpEntry(
+            id: "quick-look-finder",
+            section: .integrations,
+            title: "Finder Quick Look",
+            label: "Finder",
+            summary: "The app adds Quick Look previews and thumbnails for .plib, .aoe, Mood and Story files, so Finder can show them too.",
+            details: [],
+            keywords: ["finder", "quick look", "thumbnail", "preview extension"]
+        ),
+    ]
+}
+
+/// Filters the Help reference by a search query (every word must match).
+enum HelpSearch {
+    /// Lowercased, accent-folded, with ⌘ ⇧ ⌥ spelled out so "⌘K" finds "Cmd K".
+    static func normalized(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "⌘", with: " cmd ")
+            .replacingOccurrences(of: "⇧", with: " shift ")
+            .replacingOccurrences(of: "⌥", with: " option ")
+            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+            .replacingOccurrences(of: "colour", with: "color")
+    }
+
+    static func tokens(_ query: String) -> [String] {
+        normalized(query)
+            .split(whereSeparator: { $0.isWhitespace || $0 == "," })
+            .map(String.init)
+    }
+
+    static func haystack(_ entry: HelpEntry) -> String {
+        normalized(([entry.title, entry.label, entry.summary, entry.section.title, entry.showMe?.locationText ?? ""]
+            + entry.details + entry.keywords).joined(separator: " "))
+    }
+
+    static func matches(_ entry: HelpEntry, query: String) -> Bool {
+        let words = tokens(query)
+        guard !words.isEmpty else { return true }
+        let text = haystack(entry)
+        return words.allSatisfy { text.contains($0) }
+    }
+
+    /// Matching entries, in their original order.
+    static func filter(_ entries: [HelpEntry], query: String) -> [HelpEntry] {
+        entries.filter { matches($0, query: query) }
+    }
+
+    /// Shortcut groups with only their matching items (a matching group title keeps
+    /// the whole group); groups with nothing left are dropped.
+    static func filter(_ groups: [HelpShortcutGroup], query: String) -> [HelpShortcutGroup] {
+        let words = tokens(query)
+        guard !words.isEmpty else { return groups }
+        return groups.compactMap { group in
+            let groupText = normalized(group.title + " " + group.description)
+            if words.allSatisfy({ groupText.contains($0) }) { return group }
+            let items = group.items.filter { item in
+                let text = normalized((item.keys + [item.description, group.title]).joined(separator: " "))
+                return words.allSatisfy { text.contains($0) }
+            }
+            return items.isEmpty ? nil : HelpShortcutGroup(id: group.id, title: group.title, description: group.description, items: items)
+        }
+    }
 }

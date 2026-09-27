@@ -31,6 +31,8 @@ struct ExportJobItem: Sendable {
     var action: ExportWriteAction
     /// Concrete output format for images and rendered documents.
     var format: ExportFormat?
+    /// Non-destructive edit to render into the copy (nil = the original's pixels).
+    var edit: EditRecipe? = nil
 }
 
 struct ExportItemResult: Sendable {
@@ -112,7 +114,7 @@ enum ExportEngine {
             case .image:
                 result.note = try exportImage(
                     source: item.source, to: temp, format: item.format ?? .png,
-                    preset: preset, watermarkImage: watermarkImage
+                    preset: preset, watermarkImage: watermarkImage, edit: item.edit
                 )
             case .document:
                 guard preset.exportRenderedDocuments else {
@@ -168,19 +170,33 @@ enum ExportEngine {
         to temp: URL,
         format: ExportFormat,
         preset: ExportPreset,
-        watermarkImage: CGImage?
+        watermarkImage: CGImage?,
+        edit: EditRecipe? = nil
     ) throws -> String? {
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               CGImageSourceGetCount(source) > 0,
-              let size = ExportImageRenderer.orientedSize(of: source)
+              var size = ExportImageRenderer.orientedSize(of: source)
         else { throw ExportEngineError.unreadable }
+
+        // Edited: render the recipe at full resolution first; everything after works on
+        // those (upright) pixels. The original file is only read.
+        let edit = edit.flatMap { $0.isIdentity ? nil : $0 }
+        var editedPixels: CGImage?
+        if let edit {
+            guard let full = EditRenderer.decodeFull(source),
+                  let rendered = EditRenderer.render(full, recipe: edit)
+            else { throw ExportEngineError.unreadable }
+            editedPixels = rendered
+            size = (rendered.width, rendered.height)
+        }
 
         let policy = preset.metadata
         let plan = ExportGeometry.plan(sourceWidth: size.width, sourceHeight: size.height, sizing: preset.sizing)
         let sourceType = CGImageSourceGetType(source) as String?
         let sameFormat = sourceType == format.utType?.identifier
         let needsPixels = !sameFormat
+            || editedPixels != nil
             || plan.changesPixels
             || preset.watermark.isActive
             || ExportImageRenderer.needsColorConversion(preset.colorProfile, source: source)
@@ -210,7 +226,7 @@ enum ExportEngine {
         }
 
         let isAnimated = CGImageSourceGetCount(source) > 1
-        guard let decoded = ExportImageRenderer.decodeForPlan(
+        guard let decoded = editedPixels ?? ExportImageRenderer.decodeForPlan(
             source, orientedWidth: size.width, orientedHeight: size.height, plan: plan
         ) else { throw ExportEngineError.unreadable }
         let space = ExportImageRenderer.colorSpace(for: preset.colorProfile, sourceImage: decoded)
@@ -446,6 +462,10 @@ enum ExportSourceImages {
             generator.appliesPreferredTrackTransform = true
             generator.maximumSize = CGSize(width: maxPixelSize, height: maxPixelSize)
             return try? await generator.image(at: CMTime(seconds: 0.5, preferredTimescale: 600)).image
+        }
+        // Edited images appear edited (contact sheets).
+        if let recipe = EditRecipeIndex.shared.recipe(for: url) {
+            return EditRenderer.render(url: url, recipe: recipe, maxPixelSize: CGFloat(maxPixelSize))
         }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         return ExportImageRenderer.orientedImage(from: source, maxPixelSize: maxPixelSize)

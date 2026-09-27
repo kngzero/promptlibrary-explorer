@@ -45,5 +45,8 @@ struct AppearanceSettingsPage: View {
                 )
             )
         }
+
+        // Tips and the welcome tour (Views/Onboarding).
+        OnboardingTipsSettingsCard()
     }
 }

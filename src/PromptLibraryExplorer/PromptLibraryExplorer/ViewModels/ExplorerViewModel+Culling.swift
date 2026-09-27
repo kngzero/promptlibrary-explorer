@@ -21,6 +21,10 @@ extension ExplorerViewModel {
         // The Similar Images page: its focused card, never the hidden grid's selection.
         if let path = similarPageTargetPath { return [similarImages.entry(for: path)] }
         if similarPage.isActive, !lightboxOpen { return [] }
+        // The Timeline / Map page: its selected file, never the hidden grid's selection.
+        if isMapTimelinePageActive, !lightboxOpen {
+            return mapTimeline.selectedPath.map { [mapTimelineEntry(for: $0)] } ?? []
+        }
         let items = lightboxOpen ? (lightboxItem.map { [$0] } ?? []) : selectedItems
         return action.appliesToFolders ? items : items.filter { !$0.isDirectory }
     }

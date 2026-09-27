@@ -30,6 +30,11 @@ struct MainContentView: View {
                     .transition(.opacity.animation(.easeInOut(duration: 0.15)))
                     .zIndex(100)
             }
+
+            // Contextual tips (Views/Onboarding), above the browser and the
+            // lightbox. Only the tip card itself takes clicks.
+            OnboardingTipLayer(contentWidth: contentColumnSize.width, detailWidth: detailColumnSize.width)
+                .zIndex(300)
         }
         .background(Color.appBackground)
         .sheet(isPresented: $vm.helpOpen) {
@@ -151,6 +156,14 @@ struct MainContentView: View {
             // The Similar Images page replaces the Compare page.
             if active { vm.closeComparePage() }
         }
+        .onChange(of: vm.isMapTimelinePageActive) { _, _ in
+            // Same for the Timeline / Map page (Views/Timeline, Views/Map).
+            ModalKeyGuard.mainBrowserWindow?.makeFirstResponder(nil)
+        }
+        .onChange(of: vm.isSimilarImagesPageActive || vm.isComparePageActive) { _, covered in
+            // Similar Images and Compare replace the Timeline / Map page.
+            if covered, vm.mapTimeline.page != nil { vm.leaveMapTimelinePage() }
+        }
         .onChange(of: splitViewVisibility) { _, visibility in
             SettingsStore.shared.sidebarVisible = visibility != .doubleColumn && visibility != .detailOnly
         }
@@ -179,11 +192,15 @@ struct MainContentView: View {
                 } content: {
                     ContentBrowserView(collapsedGroups: $collapsedGroups)
                         .coveredBySimilarImagesPage(vm.isSimilarImagesPageActive || vm.isComparePageActive)
+                        .coveredBySimilarImagesPage(vm.isEditorPageActive)   // Views/Editor
+                        .coveredBySimilarImagesPage(vm.isMapTimelinePageActive)   // Views/Timeline, Views/Map
                         .background(SizeReporter(size: $contentColumnSize))
                         .navigationSplitViewColumnWidth(min: 400, ideal: 600)
                 } detail: {
                     MetadataPanelView()
                         .coveredBySimilarImagesPage(vm.isSimilarImagesPageActive || vm.isComparePageActive)
+                        .coveredBySimilarImagesPage(vm.isEditorPageActive)   // Views/Editor
+                        .coveredBySimilarImagesPage(vm.isMapTimelinePageActive)   // Views/Timeline, Views/Map
                         .background(SizeReporter(size: $detailColumnSize))
                         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 400)
                 }
@@ -207,6 +224,25 @@ struct MainContentView: View {
                     if let compare = vm.comparePageModel, !vm.isSimilarImagesPageActive, contentColumnSize.width > 0 {
                         ComparePageView(model: compare)
                             .id(compare.id)
+                            .frame(width: similarPageWidth, height: max(0, contentColumnSize.height))
+                            .transition(.opacity.animation(.easeInOut(duration: 0.12)))
+                    }
+                }
+                // Timeline / Map page (View ▸ Timeline, View ▸ Map): same
+                // footprint and "browser untouched underneath".
+                .overlay(alignment: .bottomTrailing) {
+                    if vm.isMapTimelinePageActive, contentColumnSize.width > 0 {
+                        MapTimelinePageView()
+                            .frame(width: similarPageWidth, height: max(0, contentColumnSize.height))
+                            .transition(.opacity.animation(.easeInOut(duration: 0.12)))
+                    }
+                }
+                // Image editor page (Edit ▸ Edit Image…, Views/Editor): same
+                // footprint, drawn above the other pages while it's open.
+                .overlay(alignment: .bottomTrailing) {
+                    if let session = vm.editorSession, contentColumnSize.width > 0 {
+                        EditorPageView(session: session)
+                            .id(session.id)
                             .frame(width: similarPageWidth, height: max(0, contentColumnSize.height))
                             .transition(.opacity.animation(.easeInOut(duration: 0.12)))
                     }
@@ -321,6 +357,27 @@ struct MainContentView: View {
 
         // No root path = nothing to navigate
         guard vm.explorerRootPath != nil else { return false }
+
+        // The image editor page: Esc cancels (asking when there are changes);
+        // the browser's bare keys stop here.
+        if vm.isEditorPageActive {
+            return vm.handleEditorPageKey(
+                keyCode: event.keyCode,
+                characters: event.charactersIgnoringModifiers,
+                modifiers: event.modifierFlags
+            )
+        }
+
+        // The Timeline / Map page: Esc leaves; its keys act on the page, and
+        // the browser's bare keys never reach the hidden grid.
+        if vm.isMapTimelinePageActive {
+            return vm.handleMapTimelinePageKey(
+                keyCode: event.keyCode,
+                characters: event.charactersIgnoringModifiers,
+                modifiers: event.modifierFlags,
+                isRepeat: event.isARepeat
+            )
+        }
 
         // The Compare page: Esc closes it; the browser's bare keys stop here.
         if vm.isComparePageActive {

@@ -278,6 +278,10 @@ struct VirtualListing: Identifiable, Equatable, Sendable {
         case similarGroup(exact: Bool)
         /// The ingest Inbox (all sources, or one), newest first.
         case inbox(sourceID: UUID?)
+        /// Files from the Map page (a cluster, or everything geotagged), newest first.
+        case geo
+        /// Files from the Timeline page (a day, month or year), newest first.
+        case timeline
     }
 
     /// What closing the listing returns to.
@@ -307,6 +311,8 @@ struct VirtualListing: Identifiable, Equatable, Sendable {
         case .palette: return "paintpalette"
         case .similarGroup: return "square.on.square"
         case .inbox: return "tray.and.arrow.down"
+        case .geo: return "map"
+        case .timeline: return "calendar"
         }
     }
 

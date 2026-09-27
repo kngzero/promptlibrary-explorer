@@ -151,6 +151,11 @@ struct MetadataPanelView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg))
                         .padding(AppSpacing.lg)
+                        .overlay(alignment: .topLeading) {
+                            if let path = entry.sourcePath, EditController.shared.isEdited(path) {
+                                EditedBadge().padding(AppSpacing.xl)
+                            }
+                        }
                 } else {
                     VStack(spacing: 10) {
                         Image(systemName: "photo")
@@ -181,6 +186,11 @@ struct MetadataPanelView: View {
                 if let document = entry.artOfficialDocument, let path = entry.sourcePath {
                     ArtOfficialDocumentDetailView(document: document, fileURL: URL(fileURLWithPath: path))
                         .id(path)
+                }
+
+                // Non-destructive edits: Edited badge, Edit / Save Copy / Revert (Views/Editor).
+                if let path = entry.sourcePath {
+                    EditorDetailsCard(path: path)
                 }
 
                 if !entry.prompt.isEmpty {
@@ -388,7 +398,7 @@ struct MetadataPanelView: View {
                             .id(path)
                     }
 
-                    fileInfoCard(meta)
+                    fileInfoCard(meta, path: entry.sourcePath)
 
                     if !entry.embeddedMetadata.isEmpty {
                         embeddedMetadataCard(entry.embeddedMetadata)
@@ -553,10 +563,15 @@ struct MetadataPanelView: View {
     // MARK: - File Info Card
 
     @ViewBuilder
-    private func fileInfoCard(_ meta: FileMetadata) -> some View {
+    private func fileInfoCard(_ meta: FileMetadata, path: String? = nil) -> some View {
         detailCard(title: "File Info") {
             VStack(alignment: .leading, spacing: AppSpacing.xs) {
                 fileInfoRow(label: "Type", value: meta.fileType)
+                // Capture date (says Captured / Created / Modified) and location (Views/Timeline).
+                if let path {
+                    CaptureDateInfoRows(path: path)
+                        .id(path)
+                }
             if let w = meta.width, let h = meta.height {
                 fileInfoRow(label: "Dimensions", value: "\(w) x \(h)")
             }

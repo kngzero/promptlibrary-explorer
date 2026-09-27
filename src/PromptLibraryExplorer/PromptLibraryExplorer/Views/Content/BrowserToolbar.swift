@@ -45,6 +45,10 @@ struct BrowserToolbar: CustomizableToolbarContent {
     /// disabled (not removed, so a customized toolbar doesn't reflow) and the
     /// page's title stands in for the breadcrumbs.
     private var browserHidden: Bool { vm.isSimilarImagesPageActive }
+    /// The Timeline / Map page (Views/Timeline, Views/Map) also covers the
+    /// browser; its title stands in for the breadcrumbs. The Filter menu and
+    /// search stay enabled: the page honours them.
+    private var mapTimelinePage: Bool { vm.isMapTimelinePageActive }
 
     var body: some CustomizableToolbarContent {
         // Split in two: a toolbar builder takes at most ten items.
@@ -86,13 +90,17 @@ struct BrowserToolbar: CustomizableToolbarContent {
             // (an if/else here left the breadcrumbs on screen over the page).
             ZStack(alignment: .leading) {
                 BreadcrumbBar()
-                    .opacity(browserHidden ? 0 : 1)
-                    .allowsHitTesting(!browserHidden)
-                    .accessibilityHidden(browserHidden)
+                    .opacity(browserHidden || mapTimelinePage ? 0 : 1)
+                    .allowsHitTesting(!browserHidden && !mapTimelinePage)
+                    .accessibilityHidden(browserHidden || mapTimelinePage)
                 SimilarImagesPageCrumb()
                     .opacity(browserHidden ? 1 : 0)
                     .allowsHitTesting(browserHidden)
                     .accessibilityHidden(!browserHidden)
+                MapTimelinePageCrumb()
+                    .opacity(mapTimelinePage && !browserHidden ? 1 : 0)
+                    .allowsHitTesting(mapTimelinePage && !browserHidden)
+                    .accessibilityHidden(!mapTimelinePage || browserHidden)
             }
             .frame(minWidth: 120, idealWidth: 300, maxWidth: 480, alignment: .leading)
         }
@@ -113,7 +121,7 @@ struct BrowserToolbar: CustomizableToolbarContent {
                 }
             }
             .pickerStyle(.segmented)
-            .disabled(browserHidden)
+            .disabled(browserHidden || mapTimelinePage)
             .help("View as Grid (⌘1) or List (⌘2)")
             .accessibilityLabel("View Mode")
             .accessibilityValue(vm.viewMode.title)
@@ -121,12 +129,12 @@ struct BrowserToolbar: CustomizableToolbarContent {
 
         ToolbarItem(id: BrowserToolbarItemID.sort, placement: .primaryAction) {
             sortMenu
-                .disabled(browserHidden)
+                .disabled(browserHidden || mapTimelinePage)
         }
 
         ToolbarItem(id: BrowserToolbarItemID.groupBy, placement: .primaryAction) {
             groupByMenu
-                .disabled(browserHidden)
+                .disabled(browserHidden || mapTimelinePage)
         }
 
         ToolbarItem(id: BrowserToolbarItemID.filter, placement: .primaryAction) {
@@ -464,7 +472,7 @@ struct BrowserToolbar: CustomizableToolbarContent {
             return asc ? "Picks First" : "Rejects First"
         case .label:
             return asc ? "Finder Order" : "Reverse Order"
-        case .dateModified, .dateCreated:
+        case .dateModified, .dateCreated, .captureDate:
             return asc ? "Oldest First" : "Newest First"
         case .size:
             return asc ? "Smallest First" : "Largest First"
@@ -785,6 +793,52 @@ private struct SimilarImagesPageCrumb: View {
         .padding(.leading, AppSpacing.sm)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Similar Images")
+    }
+}
+
+/// Stands in for the breadcrumbs while the Timeline or Map page is up.
+private struct MapTimelinePageCrumb: View {
+    @Environment(ExplorerViewModel.self) private var vm
+
+    private var page: MapTimelinePage { vm.mapTimeline.page ?? .timeline }
+
+    private var scopeText: String {
+        switch vm.mapTimeline.scope {
+        case .folder: return (vm.selectedFolderPath ?? vm.explorerRootPath)?.lastPathComponent ?? ""
+        case .library: return "Whole Library"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: AppSpacing.sm) {
+            Image(systemName: page.systemImage)
+                .font(.appIcon(11, weight: .medium))
+                .foregroundStyle(Color.appAccent)
+                .accessibilityHidden(true)
+            Text(page.title)
+                .font(.appCalloutEmphasis)
+                .foregroundStyle(Color.appPrimaryText)
+                .lineLimit(1)
+            if !scopeText.isEmpty {
+                Text(scopeText)
+                    .font(.appCaption)
+                    .foregroundStyle(Color.appMuted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Button {
+                vm.leaveMapTimelinePage()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.appIcon(9, weight: .semibold))
+            }
+            .buttonStyle(AppSegmentButtonStyle(width: 20, height: 20))
+            .help("Back to the browser (Esc)")
+            .accessibilityLabel("Close \(page.title)")
+        }
+        .padding(.leading, AppSpacing.sm)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(page.title)
     }
 }
 

@@ -229,7 +229,7 @@ private struct FileListHeaderRow: View {
     /// Finder-like first click: newest / largest / best-rated first.
     private static func defaultDirection(for field: SortField) -> SortDirection {
         switch field {
-        case .dateModified, .dateCreated, .size: return .desc
+        case .dateModified, .dateCreated, .captureDate, .size: return .desc
         default: return .asc   // rating's .asc is high-to-low in this app
         }
     }
@@ -389,7 +389,7 @@ private struct FileListRow: View {
         .accessibilityAction {
             ContentItemActions.open(item, at: index, vm: vm)
         }
-        .task(id: "\(item.id)|\(CloudFileController.shared.isCloudOnly(item))") {
+        .task(id: "\(item.id)|\(CloudFileController.shared.isCloudOnly(item))|\(EditController.shared.token(for: item.path))") {
             thumbnail = nil
             let loaded = await ContentThumbnailLoader.load(for: item, maxPixelSize: FileListColumns.thumbnailWidth * 2)
             guard !Task.isCancelled else { return }
@@ -460,6 +460,7 @@ private struct FileListRow: View {
                         .accessibilityLabel("Pinned")
                 }
                 CloudFileInlineIcon(item: item)
+                EditedInlineIcon(path: item.path)
             }
         }
     }

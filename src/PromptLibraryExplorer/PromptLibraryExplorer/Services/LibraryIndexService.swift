@@ -384,7 +384,7 @@ actor LibraryIndexService {
     /// exist lose their rows (and descendants). Unchanged files are skipped.
     func index(paths: [String]) async {
         guard openIfNeeded(), !paths.isEmpty else { return }
-        let keys: Set<URLResourceKey> = [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey, .creationDateKey]
         var candidates: [LibraryIndexCandidate] = []
         var missing: [String] = []
         for raw in Set(paths) {
@@ -406,7 +406,8 @@ actor LibraryIndexService {
             }
             if unchanged { continue }
             candidates.append(LibraryIndexCandidate(
-                path: path, name: name, folder: url.deletingLastPathComponent().path, mtime: mtime, size: size
+                path: path, name: name, folder: url.deletingLastPathComponent().path, mtime: mtime, size: size,
+                ctime: values.creationDate?.timeIntervalSince1970
             ))
         }
         if !missing.isEmpty {
@@ -584,6 +585,199 @@ actor LibraryIndexService {
         return roots
     }
 
+    // MARK: - Capture dates & GPS (Timeline, Map, Sort by Capture Date)
+
+    private static let captureSelect = """
+        SELECT id, path, mtime, ctime, capture_date, capture_origin, capture_offset,
+               latitude, longitude, altitude, geo_version, name, folder, size
+        FROM files
+        """
+
+    private static func captureRow(_ stmt: OpaquePointer) -> CaptureIndexRow? {
+        guard let path = columnText(stmt, 1) else { return nil }
+        var capture = CaptureMetadata()
+        if sqlite3_column_type(stmt, 4) != SQLITE_NULL {
+            capture.captureDate = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
+            capture.origin = columnInt(stmt, 5).flatMap(CaptureDateOrigin.init(rawValue:))
+            capture.utcOffset = columnInt(stmt, 6)
+        }
+        if sqlite3_column_type(stmt, 7) != SQLITE_NULL, sqlite3_column_type(stmt, 8) != SQLITE_NULL {
+            let coordinate = GeoCoordinate(
+                latitude: sqlite3_column_double(stmt, 7),
+                longitude: sqlite3_column_double(stmt, 8),
+                altitude: sqlite3_column_type(stmt, 9) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 9)
+            )
+            capture.coordinate = coordinate.isPlausible ? coordinate : nil
+        }
+        let mtime = sqlite3_column_double(stmt, 2)
+        return CaptureIndexRow(
+            path: path,
+            mtime: mtime > 0 ? Date(timeIntervalSince1970: mtime) : nil,
+            ctime: sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3)),
+            capture: capture,
+            isExtracted: (columnInt(stmt, 10) ?? 0) >= GeoMetadataExtractor.version
+        )
+    }
+
+    /// Capture rows for exactly `paths` (those in the index).
+    func captureRows(forPaths paths: [String]) async -> [String: CaptureIndexRow] {
+        guard openIfNeeded(), !paths.isEmpty else { return [:] }
+        var result: [String: CaptureIndexRow] = [:]
+        var index = 0
+        while index < paths.count {
+            if Task.isCancelled { return result }
+            let chunk = Array(paths[index..<min(index + 400, paths.count)])
+            index += 400
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            queryUncached(Self.captureSelect + " WHERE path IN (\(placeholders))", chunk.map { .text($0) }) { stmt in
+                if let row = Self.captureRow(stmt) { result[row.path] = row }
+            }
+        }
+        return result
+    }
+
+    /// Capture rows for every indexed file under `root` (nil = the whole index),
+    /// in one pass: the Timeline and Map read a whole library from this.
+    func captureRows(under root: URL?) async -> [CaptureIndexRow] {
+        guard openIfNeeded() else { return [] }
+        var rows: [CaptureIndexRow] = []
+        if let root {
+            let (lower, upper) = Self.descendantRange(Self.normalizedPath(root.path))
+            queryUncached(Self.captureSelect + " WHERE path > ? AND path < ?", [.text(lower), .text(upper)]) { stmt in
+                if let row = Self.captureRow(stmt) { rows.append(row) }
+            }
+        } else {
+            queryUncached(Self.captureSelect, []) { stmt in
+                if let row = Self.captureRow(stmt) { rows.append(row) }
+            }
+        }
+        return rows
+    }
+
+    /// Stores capture data read outside indexing (the timeline reading a folder
+    /// that isn't indexed yet, the backfill). Only rows whose mtime still
+    /// matches are touched, so a file that changed meanwhile is re-read by the
+    /// next index instead.
+    func storeCapture(_ updates: [CaptureIndexUpdate]) async {
+        guard openIfNeeded(), !updates.isEmpty else { return }
+        func opt(_ d: Double?) -> SQLValue { d.map { .double($0) } ?? .null }
+        func opt(_ i: Int?) -> SQLValue { i.map { .int(Int64($0)) } ?? .null }
+        transaction {
+            for update in updates {
+                let c = update.capture
+                exec("""
+                     UPDATE files SET ctime = COALESCE(?, ctime), capture_date = ?, capture_origin = ?, capture_offset = ?,
+                            latitude = ?, longitude = ?, altitude = ?, geo_version = ?
+                     WHERE path = ? AND abs(mtime - ?) < 0.0005
+                     """,
+                     [opt(update.ctime), opt(c.captureDate?.timeIntervalSince1970), opt(c.origin?.rawValue), opt(c.utcOffset),
+                      opt(c.coordinate?.latitude), opt(c.coordinate?.longitude), opt(c.coordinate?.altitude),
+                      .int(Int64(GeoMetadataExtractor.version)), .text(update.path), .double(update.mtime)])
+            }
+        }
+    }
+
+    /// Rows under `root` whose capture data hasn't been read (older index rows),
+    /// excluding online-only files (mtime -1), `id` ascending after `afterID`.
+    func captureBackfillCandidates(under root: URL?, afterID: Int64, limit: Int) async -> [(id: Int64, candidate: LibraryIndexCandidate)] {
+        guard openIfNeeded() else { return [] }
+        var sql = "SELECT id, path, name, folder, mtime, size, ctime FROM files WHERE geo_version < ? AND mtime >= 0 AND id > ?"
+        var bindings: [SQLValue] = [.int(Int64(GeoMetadataExtractor.version)), .int(afterID)]
+        if let root {
+            let (lower, upper) = Self.descendantRange(Self.normalizedPath(root.path))
+            sql += " AND path > ? AND path < ?"
+            bindings += [.text(lower), .text(upper)]
+        }
+        sql += " ORDER BY id LIMIT ?"
+        bindings.append(.int(Int64(max(1, limit))))
+        var result: [(id: Int64, candidate: LibraryIndexCandidate)] = []
+        queryUncached(sql, bindings) { stmt in
+            guard let path = Self.columnText(stmt, 1) else { return }
+            result.append((sqlite3_column_int64(stmt, 0), LibraryIndexCandidate(
+                path: path,
+                name: Self.columnText(stmt, 2) ?? (path as NSString).lastPathComponent,
+                folder: Self.columnText(stmt, 3) ?? (path as NSString).deletingLastPathComponent,
+                mtime: sqlite3_column_double(stmt, 4),
+                size: sqlite3_column_int64(stmt, 5),
+                ctime: sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 6)
+            )))
+        }
+        return result
+    }
+
+    /// How many rows under `root` still need their capture data read.
+    func captureBackfillPendingCount(under root: URL?) async -> Int {
+        guard openIfNeeded() else { return 0 }
+        var count = 0
+        var sql = "SELECT COUNT(*) FROM files WHERE geo_version < ? AND mtime >= 0"
+        var bindings: [SQLValue] = [.int(Int64(GeoMetadataExtractor.version))]
+        if let root {
+            let (lower, upper) = Self.descendantRange(Self.normalizedPath(root.path))
+            sql += " AND path > ? AND path < ?"
+            bindings += [.text(lower), .text(upper)]
+        }
+        queryUncached(sql, bindings) { stmt in count = Int(sqlite3_column_int64(stmt, 0)) }
+        return count
+    }
+
+    /// Reads capture dates / GPS for index rows that predate them, in small
+    /// batches, until none are left or the task is cancelled. Returns how many
+    /// rows were updated. Online-only files are skipped (never downloaded).
+    @discardableResult
+    func backfillCaptureMetadata(
+        under root: URL?,
+        batchSize: Int = 48,
+        progress: (@Sendable (_ done: Int, _ total: Int) -> Void)? = nil
+    ) async -> Int {
+        let total = await captureBackfillPendingCount(under: root)
+        guard total > 0 else { return 0 }
+        var afterID: Int64 = 0
+        var done = 0
+        progress?(0, total)
+        while !Task.isCancelled {
+            let batch = await captureBackfillCandidates(under: root, afterID: afterID, limit: batchSize)
+            guard let last = batch.last else { break }
+            afterID = last.id
+            let updates = await Self.readCaptureUpdates(batch.map(\.candidate))
+            if Task.isCancelled { break }
+            await storeCapture(updates)
+            done += batch.count
+            progress?(min(done, total), total)
+            // Stay out of the way of browsing.
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return done
+    }
+
+    /// Capture data for `candidates`, read in parallel off the actor.
+    static func readCaptureUpdates(_ candidates: [LibraryIndexCandidate]) async -> [CaptureIndexUpdate] {
+        await withTaskGroup(of: CaptureIndexUpdate?.self) { group in
+            let width = max(2, min(6, ProcessInfo.processInfo.activeProcessorCount / 2))
+            var next = 0
+            var results: [CaptureIndexUpdate] = []
+            func enqueue() {
+                guard next < candidates.count else { return }
+                let candidate = candidates[next]
+                next += 1
+                group.addTask(priority: .utility) {
+                    let url = URL(fileURLWithPath: candidate.path)
+                    guard CloudFileStatus.isLocallyAvailable(path: candidate.path) else { return nil }
+                    let ctime = candidate.ctime
+                        ?? (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate?.timeIntervalSince1970
+                    let capture = await GeoMetadataExtractor.read(url: url)
+                    return CaptureIndexUpdate(path: candidate.path, mtime: candidate.mtime, ctime: ctime, capture: capture)
+                }
+            }
+            for _ in 0..<width { enqueue() }
+            while let result = await group.next() {
+                if let result { results.append(result) }
+                if Task.isCancelled { group.cancelAll(); break }
+                enqueue()
+            }
+            return results
+        }
+    }
+
     // MARK: - Database plumbing
 
     enum SQLValue {
@@ -643,6 +837,7 @@ actor LibraryIndexService {
             return false
         }
         migratePromptsTableIfNeeded(handle)
+        migrateCaptureColumnsIfNeeded(handle)
         return true
     }
 
@@ -677,6 +872,35 @@ actor LibraryIndexService {
         """
         if sqlite3_exec(handle, rebuild, nil, nil, nil) != SQLITE_OK {
             sqlite3_exec(handle, "ROLLBACK", nil, nil, nil)
+        }
+    }
+
+    /// Capture date + GPS columns (Timeline, Map, Sort by Capture Date). Added in
+    /// place with ALTER TABLE ADD COLUMN, so existing rows (and their prompts)
+    /// keep everything; their `geo_version` is 0 until the backfill reads them.
+    static let captureColumns: [(name: String, definition: String)] = [
+        ("ctime", "REAL"),
+        ("capture_date", "REAL"),
+        ("capture_origin", "INTEGER"),
+        ("capture_offset", "INTEGER"),
+        ("latitude", "REAL"),
+        ("longitude", "REAL"),
+        ("altitude", "REAL"),
+        ("geo_version", "INTEGER NOT NULL DEFAULT 0"),
+    ]
+
+    private func migrateCaptureColumnsIfNeeded(_ handle: OpaquePointer) {
+        var existing = Set<String>()
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(handle, "PRAGMA table_info(files)", -1, &stmt, nil) == SQLITE_OK, let stmt {
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let name = sqlite3_column_text(stmt, 1) { existing.insert(String(cString: name).lowercased()) }
+            }
+            sqlite3_finalize(stmt)
+        }
+        guard !existing.isEmpty else { return }
+        for column in Self.captureColumns where !existing.contains(column.name) {
+            sqlite3_exec(handle, "ALTER TABLE files ADD COLUMN \(column.name) \(column.definition)", nil, nil, nil)
         }
     }
 
@@ -763,17 +987,26 @@ actor LibraryIndexService {
     private func upsert(_ record: LibraryIndexRecord) {
         func opt(_ s: String?) -> SQLValue { s.map { .text($0) } ?? .null }
         func opt(_ i: Int?) -> SQLValue { i.map { .int(Int64($0)) } ?? .null }
+        func opt(_ d: Double?) -> SQLValue { d.map { .double($0) } ?? .null }
         let p = record.parameters
+        let c = record.capture
         exec("""
-             INSERT INTO files(path, folder, name, mtime, size, model, sampler, seed, steps, cfg, width, height)
-             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             INSERT INTO files(path, folder, name, mtime, size, model, sampler, seed, steps, cfg, width, height,
+                               ctime, capture_date, capture_origin, capture_offset, latitude, longitude, altitude, geo_version)
+             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(path) DO UPDATE SET
                 folder = excluded.folder, name = excluded.name, mtime = excluded.mtime, size = excluded.size,
                 model = excluded.model, sampler = excluded.sampler, seed = excluded.seed, steps = excluded.steps,
-                cfg = excluded.cfg, width = excluded.width, height = excluded.height
+                cfg = excluded.cfg, width = excluded.width, height = excluded.height,
+                ctime = excluded.ctime, capture_date = excluded.capture_date, capture_origin = excluded.capture_origin,
+                capture_offset = excluded.capture_offset, latitude = excluded.latitude, longitude = excluded.longitude,
+                altitude = excluded.altitude, geo_version = excluded.geo_version
              """,
              [.text(record.path), .text(record.folder), .text(record.name), .double(record.mtime), .int(record.size),
-              opt(p.model), opt(p.sampler), opt(p.seed), opt(p.steps), opt(p.cfg), opt(p.width), opt(p.height)])
+              opt(p.model), opt(p.sampler), opt(p.seed), opt(p.steps), opt(p.cfg), opt(p.width), opt(p.height),
+              opt(record.ctime), opt(c.captureDate?.timeIntervalSince1970), opt(c.origin?.rawValue), opt(c.utcOffset),
+              opt(c.coordinate?.latitude), opt(c.coordinate?.longitude), opt(c.coordinate?.altitude),
+              .int(Int64(record.captureVersion))])
         var rowID: Int64?
         query("SELECT id FROM files WHERE path = ?", [.text(record.path)]) { stmt in
             rowID = sqlite3_column_int64(stmt, 0)
@@ -930,7 +1163,7 @@ actor LibraryIndexService {
     private static func walk(rootPath: String) -> [LibraryIndexCandidate]? {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isPackageKey, .isSymbolicLinkKey,
-                                      .contentModificationDateKey, .fileSizeKey]
+                                      .contentModificationDateKey, .fileSizeKey, .creationDateKey]
         var result: [LibraryIndexCandidate] = []
         var stack = [rootPath]
         var visitedDirectories = 0
@@ -959,7 +1192,8 @@ actor LibraryIndexService {
                     name: name,
                     folder: directoryPath,
                     mtime: values.contentModificationDate?.timeIntervalSince1970 ?? 0,
-                    size: Int64(values.fileSize ?? 0)
+                    size: Int64(values.fileSize ?? 0),
+                    ctime: values.creationDate?.timeIntervalSince1970
                 ))
             }
         }
@@ -1010,6 +1244,8 @@ struct LibraryIndexCandidate: Sendable {
     let folder: String
     let mtime: Double
     let size: Int64
+    /// File creation date (seconds since 1970), when the walk read it.
+    var ctime: Double? = nil
 }
 
 struct LibraryIndexRecord: Sendable {
@@ -1023,6 +1259,13 @@ struct LibraryIndexRecord: Sendable {
     /// Document title (Mood / Story); indexed with the file name.
     var title: String = ""
     var parameters = GenerationParameters()
+    /// File creation date (seconds since 1970).
+    var ctime: Double? = nil
+    /// Embedded capture date and GPS (GeoMetadata.swift).
+    var capture = CaptureMetadata()
+    /// `GeoMetadataExtractor.version` once `capture` was read; 0 = not read
+    /// (online-only file), so the backfill looks again.
+    var captureVersion = 0
 }
 
 /// Reads the same metadata the app shows for a file, without decoding images or touching the
@@ -1035,9 +1278,13 @@ enum LibraryIndexExtractor {
     static func record(for candidate: LibraryIndexCandidate) async -> LibraryIndexRecord {
         // Online-only cloud file: index the name only, never download it. The -1
         // mtime makes the next pass look at it again (once it's been downloaded).
+        let url = URL(fileURLWithPath: candidate.path)
+        let ctime = candidate.ctime
+            ?? (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate?.timeIntervalSince1970
         guard CloudFileStatus.isLocallyAvailable(path: candidate.path) else {
             return LibraryIndexRecord(
-                path: candidate.path, name: candidate.name, folder: candidate.folder, mtime: -1, size: candidate.size
+                path: candidate.path, name: candidate.name, folder: candidate.folder, mtime: -1, size: candidate.size,
+                ctime: ctime
             )
         }
         var record = LibraryIndexRecord(
@@ -1045,9 +1292,12 @@ enum LibraryIndexExtractor {
             name: candidate.name,
             folder: candidate.folder,
             mtime: candidate.mtime,
-            size: candidate.size
+            size: candidate.size,
+            ctime: ctime
         )
-        let url = URL(fileURLWithPath: candidate.path)
+        // Capture date and GPS (Timeline, Map, Sort by Capture Date): read for
+        // every local file, so the backfill skips it.
+        record.captureVersion = GeoMetadataExtractor.version
         let name = candidate.name
 
         if FileHelpers.isPlibFile(name) {
@@ -1095,12 +1345,15 @@ enum LibraryIndexExtractor {
                 params.height = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue
             }
             record.parameters = params
+            record.capture = GeoMetadataExtractor.imageMetadata(at: url, fields: meta.fields)
             if let lookup = imageTextLookup, let text = await lookup(candidate.path), !text.isEmpty {
                 record.prompt = record.prompt.isEmpty ? text : record.prompt + "\n" + text
             }
         } else if FileHelpers.isAudioFile(name) {
             let meta = await AudioMetadataParser.shared.parse(at: url)
             record.prompt = meta.searchText
+        } else if FileHelpers.isVideoFile(name) {
+            record.capture = await GeoMetadataExtractor.videoMetadata(at: url)
         }
         return record
     }
@@ -1112,6 +1365,30 @@ enum LibraryIndexExtractor {
         record.title = text.title.trimmingCharacters(in: .whitespacesAndNewlines)
         record.prompt = document.indexText
     }
+}
+
+/// One indexed file's dates and location (Timeline, Map, sorting).
+struct CaptureIndexRow: Sendable, Equatable {
+    let path: String
+    /// nil for online-only files (indexed with mtime -1).
+    let mtime: Date?
+    let ctime: Date?
+    let capture: CaptureMetadata
+    /// The capture data has been read (false: an older row the backfill hasn't reached).
+    let isExtracted: Bool
+
+    var resolved: ResolvedCaptureDate? {
+        CaptureDateResolver.resolve(capture: capture, created: ctime, modified: mtime)
+    }
+}
+
+/// Capture data read outside indexing, for `LibraryIndexService.storeCapture`.
+struct CaptureIndexUpdate: Sendable {
+    let path: String
+    /// The row's mtime when it was read (the update only applies if it still matches).
+    let mtime: Double
+    let ctime: Double?
+    let capture: CaptureMetadata
 }
 
 /// One file's searchable data for Core Spotlight (`SpotlightItemBuilder`).

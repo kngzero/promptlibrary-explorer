@@ -11,7 +11,7 @@ struct VisualIndexStatusItem: View {
     private var controller: VisualIndexController { .shared }
 
     private var visualActive: Bool { controller.state == .indexing || controller.state == .paused }
-    private var isVisible: Bool { vm.isLibraryIndexing || visualActive || ingestActive || showsPopover }
+    private var isVisible: Bool { vm.isLibraryIndexing || visualActive || ingestActive || showsPopover || GeoTimelineController.shared.isBackfilling }
     /// Ingest inbox processing new files (its row in the popover).
     private var ingestActive: Bool { IngestController.shared.isBusy }
 
@@ -147,6 +147,9 @@ private struct IndexingStatusPopover: View {
             visualControls
 
             IngestStatusSection()
+
+            // Capture dates / locations of already-indexed files (Views/Timeline).
+            CaptureDateStatusSection()
 
             Divider()
 

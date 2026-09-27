@@ -23,6 +23,10 @@ enum ViewingImageLoader {
             if FileHelpers.isVideoFile(url.lastPathComponent) {
                 return Info(pixelSize: await videoPixelSize(url: url), fileSize: fileSize)
             }
+            // Edited images compare as edited (EditRenderer).
+            if let recipe = EditRecipeIndex.shared.recipe(for: path) {
+                return Info(pixelSize: EditRenderer.editedPixelSize(url: url, recipe: recipe), fileSize: fileSize)
+            }
             return Info(pixelSize: imagePixelSize(url: url), fileSize: fileSize)
         }.value
     }
@@ -64,7 +68,7 @@ enum ViewingImageLoader {
     private static func cacheKey(path: String, longEdge: Int) -> String {
         let url = URL(fileURLWithPath: path)
         let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate?.timeIntervalSince1970 ?? 0
-        return "\(path)|\(mtime)|\(longEdge)"
+        return EditCacheKey.signature("\(path)|\(mtime)|\(longEdge)", recipe: EditRecipeIndex.shared.recipe(for: path))
     }
 
     /// The image at `path` decoded to at most `maxPixelSize` on its long edge
@@ -78,6 +82,9 @@ enum ViewingImageLoader {
             let url = URL(fileURLWithPath: path)
             if FileHelpers.isVideoFile(url.lastPathComponent) {
                 return await posterFrame(url: url, maxPixelSize: CGFloat(longEdge))
+            }
+            if let recipe = EditRecipeIndex.shared.recipe(for: path) {
+                return EditRenderer.render(url: url, recipe: recipe, maxPixelSize: CGFloat(longEdge))
             }
             return downsample(url: url, maxPixelSize: CGFloat(longEdge))
         }.value

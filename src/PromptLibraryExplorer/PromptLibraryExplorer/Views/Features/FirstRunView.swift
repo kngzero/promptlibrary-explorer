@@ -1,8 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Shown when no root folder is open: Open Folder, recent folders, and a drop
-/// target that opens a dragged-in folder.
+/// Shown when no root folder is open: Open Folder, the welcome tour, three
+/// suggested starting actions, recent folders, and a drop target that opens a
+/// dragged-in folder.
 struct FirstRunView: View {
     @Environment(ExplorerViewModel.self) private var vm
     @State private var isDropTargeted = false
@@ -13,37 +14,13 @@ struct FirstRunView: View {
     }
 
     var body: some View {
-        VStack(spacing: AppSpacing.xxl) {
-            VStack(spacing: AppSpacing.lg) {
-                Image(systemName: "folder.badge.plus")
-                    .font(.appIcon(52))
-                    .foregroundStyle(Color.appAccent)
-
-                Text("PromptLibrary Explorer")
-                    .font(.appLargeTitle)
-                    .foregroundStyle(Color.appPrimaryText)
-
-                Text("Open a folder to browse your prompt library")
-                    .font(.appBody)
-                    .foregroundStyle(Color.appMuted)
-
-                // ⌘O is owned by File > Open Folder…
-                Button("Open Folder…") {
-                    Task { await vm.openFolder() }
-                }
-                .buttonStyle(AppPrimaryButtonStyle(font: .appCalloutEmphasis, horizontalPadding: AppSpacing.xl))
-                .padding(.top, AppSpacing.xs)
+        GeometryReader { proxy in
+            ScrollView {
+                content
+                    .frame(maxWidth: .infinity, minHeight: proxy.size.height)
             }
-
-            dropZone
-
-            if !recents.isEmpty {
-                recentList
-            }
+            .scrollBounceBehavior(.basedOnSize)
         }
-        .padding(AppSpacing.xxxl)
-        .frame(maxWidth: 520)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.appBackground)
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             Task {
@@ -59,6 +36,76 @@ struct FirstRunView: View {
                 await vm.openExternalURLs([folder])
             }
             return true
+        }
+    }
+
+    private var content: some View {
+        VStack(spacing: AppSpacing.xxl) {
+            VStack(spacing: AppSpacing.lg) {
+                Image(systemName: "folder.badge.plus")
+                    .font(.appIcon(52))
+                    .foregroundStyle(Color.appAccent)
+
+                Text("PromptLibrary Explorer")
+                    .font(.appLargeTitle)
+                    .foregroundStyle(Color.appPrimaryText)
+
+                Text("A prompt-aware library for your AI images, video and audio")
+                    .font(.appBody)
+                    .foregroundStyle(Color.appMuted)
+                    .multilineTextAlignment(.center)
+
+                // ⌘O is owned by File > Open Folder…
+                Button("Open Folder…") {
+                    Task { await vm.openFolder() }
+                }
+                .buttonStyle(AppPrimaryButtonStyle(font: .appCalloutEmphasis, horizontalPadding: AppSpacing.xl))
+                .padding(.top, AppSpacing.xs)
+
+                Button {
+                    vm.presentWelcomeTour()
+                } label: {
+                    Label("New here? Take the one-minute tour", systemImage: "sparkles")
+                        .font(.appCallout)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.appAccentHover)
+                .help("A short tour of the app (Help ▸ Welcome Tour…)")
+            }
+
+            startingActions
+
+            dropZone
+
+            if !recents.isEmpty {
+                recentList
+            }
+        }
+        .padding(AppSpacing.xxxl)
+        .frame(maxWidth: 600)
+    }
+
+    /// Three suggested ways to start.
+    private var startingActions: some View {
+        HStack(alignment: .top, spacing: AppSpacing.md) {
+            FirstRunActionCard(
+                symbol: "tray.and.arrow.down",
+                title: "Watch a render folder",
+                detail: "New files from ComfyUI or Downloads arrive in the Inbox, renamed and tagged.",
+                isPrimary: true
+            ) { vm.perform(.watchedFolders) }
+
+            FirstRunActionCard(
+                symbol: "arrow.triangle.2.circlepath",
+                title: "Bring your ratings",
+                detail: "Import curation data or restore a backup from another Mac in Settings ▸ Data."
+            ) { vm.perform(.dataSettings) }
+
+            FirstRunActionCard(
+                symbol: "questionmark.circle",
+                title: "Explore features",
+                detail: "Search every feature in Help, with a Show Me for each."
+            ) { vm.openHelp() }
         }
     }
 
@@ -142,5 +189,51 @@ struct FirstRunView: View {
                 }
             }
         }
+    }
+}
+
+/// One suggested starting action on the first-run screen.
+private struct FirstRunActionCard: View {
+    let symbol: String
+    let title: String
+    let detail: String
+    var isPrimary = false
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                Image(systemName: symbol)
+                    .font(.appIcon(18, weight: .medium))
+                    .foregroundStyle(Color.appAccent)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.appCalloutEmphasis)
+                    .foregroundStyle(Color.appPrimaryText)
+                Text(detail)
+                    .font(.appCaption)
+                    .foregroundStyle(Color.appMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .padding(AppSpacing.lg)
+            .frame(maxWidth: .infinity, minHeight: 124, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous)
+                    .fill(isHovered ? Color.appHover : Color.appSurface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous)
+                    .strokeBorder(isPrimary ? Color.appAccent.opacity(0.45) : Color.appBorder, lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .accessibilityLabel(title)
+        .accessibilityHint(detail)
     }
 }

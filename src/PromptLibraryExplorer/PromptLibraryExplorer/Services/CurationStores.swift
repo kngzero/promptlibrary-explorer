@@ -17,6 +17,7 @@ enum CurationStoreKind: String, CaseIterable, Sendable {
     case collectionSets
     case snippets
     case stacks
+    case edits
 }
 
 /// Every curation store posts this after it writes, so the curation controller can
@@ -50,6 +51,8 @@ struct CurationStores {
     let settingsDefaults: UserDefaults
     /// Manual version stacks and automatic-stack exclusions.
     var stacks: StackStore = StackStore()
+    /// Non-destructive image edit recipes (crop, straighten, rotate, flip, adjustments).
+    var edits: EditStore = EditStore()
 
     static var live: CurationStores {
         CurationStores(
@@ -62,7 +65,8 @@ struct CurationStores {
             snippets: .shared,
             recents: .shared,
             settingsDefaults: .standard,
-            stacks: StackStore()
+            stacks: StackStore(),
+            edits: EditStore()
         )
     }
 
@@ -78,7 +82,8 @@ struct CurationStores {
             snippets: SnippetService(directory: directory),
             recents: RecentHistoryService(defaults: defaults),
             settingsDefaults: defaults,
-            stacks: StackStore(defaults: defaults)
+            stacks: StackStore(defaults: defaults),
+            edits: EditStore(defaults: defaults)
         )
     }
 }

@@ -12,6 +12,13 @@ struct ArtOfficialSendItem: Sendable {
     var prompt: String = ""
     /// App tag names (Story shot tags).
     var tags: [String] = []
+    /// Send the edited version of an edited image (the default).
+    var applyEdits = true
+
+    /// The edit recipe to render, when there is one and edits apply.
+    var edit: EditRecipe? {
+        applyEdits ? EditRecipeIndex.shared.recipe(for: url) : nil
+    }
 }
 
 /// The draft plus what went into it.
@@ -53,7 +60,8 @@ enum ArtOfficialSendBuilder {
             defer { progress?(offset + 1, total) }
             guard isSendable(item.name),
                   let source = CGImageSourceCreateWithURL(item.url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-                  let prepared = preparedMoodImage(source: source, url: item.url, name: item.name)
+                  let prepared = item.edit.map({ editedMoodImage(url: item.url, name: item.name, recipe: $0) })
+                    ?? preparedMoodImage(source: source, url: item.url, name: item.name)
             else {
                 skipped.append(item.name)
                 continue
@@ -103,6 +111,16 @@ enum ArtOfficialSendBuilder {
         return MoodboardDraft.Image(name: name, data: data, mimeType: keepsAlpha ? "image/png" : "image/jpeg")
     }
 
+    /// An edited image, rendered at up to `maxMoodImagePixels` (PNG when it has alpha).
+    static func editedMoodImage(url: URL, name: String, recipe: EditRecipe) -> MoodboardDraft.Image? {
+        guard let image = EditRenderer.render(url: url, recipe: recipe, maxPixelSize: CGFloat(maxMoodImagePixels)) else { return nil }
+        // The render is always RGBA; only sources that can carry alpha stay PNG.
+        let keepsAlpha = ["png", "tif", "tiff", "heic", "heif", "webp", "gif", "psd"].contains(url.pathExtension.lowercased())
+        let data = keepsAlpha ? ArtOfficialRendering.pngData(image) : ArtOfficialRendering.jpegData(image, quality: 0.9)
+        guard let data else { return nil }
+        return MoodboardDraft.Image(name: name, data: data, mimeType: keepsAlpha ? "image/png" : "image/jpeg")
+    }
+
     // MARK: Story
 
     static func storyDraft(
@@ -118,7 +136,8 @@ enum ArtOfficialSendBuilder {
             defer { progress?(offset + 1, total) }
             guard isSendable(item.name),
                   let source = CGImageSourceCreateWithURL(item.url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-                  let image = thumbnail(source, maxPixelSize: StoryWriter.maxThumbPixelSize),
+                  let image = item.edit.flatMap({ EditRenderer.render(url: item.url, recipe: $0, maxPixelSize: CGFloat(StoryWriter.maxThumbPixelSize)) })
+                    ?? thumbnail(source, maxPixelSize: StoryWriter.maxThumbPixelSize),
                   let data = ArtOfficialRendering.jpegData(image, quality: 0.9)
             else {
                 skipped.append(item.name)
