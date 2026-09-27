@@ -67,7 +67,7 @@ struct LightboxView: View {
         .onGlobalKeyDown { event in
             // Only handle when lightbox is open
             guard vm.lightboxOpen else { return false }
-            // Save panels, sheets (Settings) and focused text fields own their keys.
+            // Save panels, sheets, other key windows (Settings) and focused text fields own their keys.
             guard !ModalKeyGuard.shouldIgnore(event) else { return false }
             if handleZoomShortcut(event) { return true }
             switch event.keyCode {

@@ -300,8 +300,6 @@ final class ExplorerViewModel {
     var toastMessage: (message: String, type: ToastType)?
     var toastID: Int = 0
     @ObservationIgnored private var toastDismissWorkItem: DispatchWorkItem?
-    /// Settings is a modal sheet, so the main window is blocked while it is up.
-    var settingsOpen = false
     var helpOpen = false
     var statisticsOpen = false
     var isLoadingComparison = false
@@ -1187,8 +1185,10 @@ final class ExplorerViewModel {
         NSWorkspace.shared.open(url)
     }
 
+    /// Opens the Settings window (the app's `Settings` scene, ⌘,). Only a view
+    /// can call `openSettings`, so this posts for MainContentView to act on.
     func openSettings() {
-        settingsOpen = true
+        NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
     }
 
     // MARK: - Selection

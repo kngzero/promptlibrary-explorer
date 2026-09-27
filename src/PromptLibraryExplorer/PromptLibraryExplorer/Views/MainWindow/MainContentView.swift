@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MainContentView: View {
     @Environment(ExplorerViewModel.self) private var vm
+    @Environment(\.openSettings) private var openSettings
     @State private var splitViewVisibility: NavigationSplitViewVisibility =
         SettingsStore.shared.sidebarVisible ? .all : .doubleColumn
     /// Collapsed group sections of the content browser. Owned here so arrow-key
@@ -24,10 +25,6 @@ struct MainContentView: View {
             }
         }
         .background(Color.appBackground)
-        .sheet(isPresented: $vm.settingsOpen) {
-            SettingsView()
-                .environment(vm)
-        }
         .sheet(isPresented: $vm.helpOpen) {
             HelpView()
                 .environment(vm)
@@ -125,6 +122,11 @@ struct MainContentView: View {
         .onChange(of: splitViewVisibility) { _, visibility in
             SettingsStore.shared.sidebarVisible = visibility != .doubleColumn && visibility != .detailOnly
         }
+        // Settings is the app's `Settings` scene; callers outside a view (the
+        // command palette, the toolbar gear via the view model) post this.
+        .onReceive(NotificationCenter.default.publisher(for: .openSettingsWindow)) { _ in
+            openSettings()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .toggleCommandPalette)) { _ in
             if vm.commandPaletteOpen {
                 closeCommandPalette()
@@ -203,10 +205,11 @@ struct MainContentView: View {
     /// owned by the menus in `PromptLibraryExplorerApp`; this monitor must pass
     /// them through, or a single press would run twice.
     private func handleGlobalKey(_ event: NSEvent) -> Bool {
-        // Anything modal (sheets, alerts, save panels, the Quick Look panel)
-        // owns the keyboard until it is dismissed. The monitor is app-wide, so
-        // it would otherwise see those keys before the modal does.
-        guard !ModalKeyGuard.isModalPresentationActive else { return false }
+        // Anything modal (sheets, alerts, save panels, the Quick Look panel) owns
+        // the keyboard until it is dismissed, and any other key window (Settings)
+        // owns its own keys. The monitor is app-wide, so it would otherwise see
+        // those keys first and drive the grid behind them.
+        guard !ModalKeyGuard.shouldMainWindowMonitorStandDown else { return false }
 
         // Lightbox handles its own keys via its own .onGlobalKeyDown
         guard !vm.lightboxOpen else { return false }
@@ -485,6 +488,8 @@ extension Notification.Name {
     static let focusSearchField = Notification.Name("focusSearchField")
     /// Posted by Go > Command Palette (⌘K); MainContentView toggles the palette.
     static let toggleCommandPalette = Notification.Name("toggleCommandPalette")
+    /// Posted by `ExplorerViewModel.openSettings()`; MainContentView opens the Settings window.
+    static let openSettingsWindow = Notification.Name("openSettingsWindow")
 }
 
 // MARK: - Empty State

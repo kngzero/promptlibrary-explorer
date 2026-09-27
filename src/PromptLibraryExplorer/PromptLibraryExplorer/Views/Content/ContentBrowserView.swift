@@ -25,8 +25,6 @@ struct ContentBrowserView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HeaderBarView()
-
             if vm.isLoadingFolder {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -66,6 +64,11 @@ struct ContentBrowserView: View {
             }
         }
         .background(Color.appBackground)
+        // Back/forward, breadcrumbs, view, sort/group/filter, search… live in the
+        // window's native toolbar over this column (user-customizable).
+        .toolbar(id: BrowserToolbarItemID.toolbar) {
+            BrowserToolbar(vm: vm)
+        }
         .onChange(of: vm.selectedFolderPath?.standardizedFileURL.path) { _, _ in
             cancelInlineRename()
         }

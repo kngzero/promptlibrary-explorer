@@ -5,9 +5,10 @@ import Foundation
 
 extension ExplorerViewModel {
     /// True while any sheet, alert or modal owned by the main window is up.
-    /// Menu commands no-op (and are disabled) while this is true.
+    /// Menu commands no-op (and are disabled) while this is true. Settings is a
+    /// separate, non-modal window, so it doesn't count.
     var isAnyModalOpen: Bool {
-        settingsOpen || helpOpen || statisticsOpen || showSmartFolderEditor
+        helpOpen || statisticsOpen || showSmartFolderEditor
             || promptDiffSession != nil || comparisonSession != nil
             || batchMetadataEditorOpen || metadataEditorPath != nil
             || deleteConfirmationRequest != nil || isShowingNewFolderPrompt

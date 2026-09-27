@@ -5,6 +5,26 @@ import Quartz
 /// key event in the app — including keys aimed at sheets, save panels, and text fields —
 /// before those views do, so monitors must stand down in these situations.
 enum ModalKeyGuard {
+    /// The browser window hosting `MainContentView`, recorded by
+    /// `WindowTitleConfigurator` when that view lands in its window. Weak, so a
+    /// closed window doesn't linger.
+    @MainActor static weak var mainBrowserWindow: NSWindow?
+
+    /// True when some other window of ours (Settings, an auxiliary window, a
+    /// popover) is key: the main window's monitors must leave its keys alone.
+    /// False while nothing is recorded yet, so a missing registration never
+    /// disables the keyboard.
+    @MainActor static var isAuxiliaryWindowKey: Bool {
+        guard let mainBrowserWindow, let keyWindow = NSApp.keyWindow else { return false }
+        return keyWindow !== mainBrowserWindow
+    }
+
+    /// Everything the main window's key monitors stand down for: modals,
+    /// sheets, Quick Look, and any key window that isn't the browser window.
+    @MainActor static var shouldMainWindowMonitorStandDown: Bool {
+        isModalPresentationActive || isAuxiliaryWindowKey
+    }
+
     /// True while a modal session (e.g. `NSSavePanel.runModal()`), a sheet, or a window
     /// with an attached sheet owns the keyboard.
     static var isModalPresentationActive: Bool {
@@ -36,9 +56,11 @@ enum ModalKeyGuard {
     }
 
     /// True when a key monitor should ignore `event` entirely: something modal is up,
-    /// a text field is being edited, or the event targets a different window (a panel).
+    /// a text field is being edited, a window other than the browser window is key
+    /// (Settings…), or the event targets a different window (a panel).
+    @MainActor
     static func shouldIgnore(_ event: NSEvent, ownerWindow: NSWindow? = nil) -> Bool {
-        if isModalPresentationActive || isTextInputFocused { return true }
+        if shouldMainWindowMonitorStandDown || isTextInputFocused { return true }
         if let ownerWindow, let eventWindow = event.window, eventWindow !== ownerWindow {
             return true
         }

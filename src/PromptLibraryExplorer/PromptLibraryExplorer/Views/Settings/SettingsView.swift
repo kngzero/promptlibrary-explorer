@@ -1,39 +1,54 @@
 import SwiftUI
 
-/// Settings as a modal sheet with a sidebar + page layout, so sections can be
-/// added without the page growing unreadably long.
+/// The app's Settings window (the `Settings` scene, ⌘,) with a sidebar + page
+/// layout, so sections can be added without the page growing unreadably long.
 ///
 /// The split is a plain `HStack` rather than a `NavigationSplitView`: the
-/// settings sidebar is a fixed-width index that should never auto-collapse or
-/// slide under the sheet's top edge as the layout narrows.
+/// settings sidebar is a fixed-width index that should never auto-collapse,
+/// slide under the titlebar, or zero out the page header as the window narrows.
 struct SettingsView: View {
-    @Environment(\.dismiss) private var dismiss
-
     @State private var selection: SettingsPage = .appearance
 
     private let sidebarWidth: CGFloat = 210
 
+    static let defaultSize = CGSize(width: 940, height: 700)
+    /// Keeps the sidebar plus a readable page on screen.
+    static let minimumSize = CGSize(width: 720, height: 480)
+
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                sidebar
+        HStack(spacing: 0) {
+            sidebar
 
-                Rectangle()
-                    .fill(Color.appBorder)
-                    .frame(width: 1)
+            Rectangle()
+                .fill(Color.appBorder)
+                .frame(width: 1)
 
-                SettingsPageScaffold(page: selection) {
-                    page(for: selection)
-                }
-                // Page state is per-page, so rebuild cleanly when the selection changes.
-                .id(selection)
+            SettingsPageScaffold(page: selection) {
+                page(for: selection)
             }
-
-            footer
+            // Page state is per-page, so rebuild cleanly when the selection changes.
+            .id(selection)
         }
-        .frame(width: 940, height: 700)
+        .frame(
+            minWidth: Self.minimumSize.width, idealWidth: Self.defaultSize.width, maxWidth: .infinity,
+            minHeight: Self.minimumSize.height, idealHeight: Self.defaultSize.height, maxHeight: .infinity
+        )
         .background(Color.appBackground)
-        .onExitCommand { dismiss() }
+        .background(alignment: .topLeading) { closeOnEscapeButton }
+        .background(SettingsWindowConfigurator(defaultSize: Self.defaultSize, minimumSize: Self.minimumSize))
+    }
+
+    /// Carries Escape. A real button holds the shortcut wherever focus sits
+    /// (`.onExitCommand` stops firing once a control takes focus). ⌘W comes
+    /// from the standard File ▸ Close item.
+    private var closeOnEscapeButton: some View {
+        Button("Close Settings") {
+            NSApp.keyWindow?.performClose(nil)
+        }
+        .keyboardShortcut(.cancelAction)
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 
     private var sidebar: some View {
@@ -66,36 +81,6 @@ struct SettingsView: View {
         }
         .frame(width: sidebarWidth)
         .background(Color.appSidebarBackground)
-    }
-
-    private var footer: some View {
-        HStack {
-            Spacer(minLength: 0)
-
-            // Carries Escape. A real button holds the shortcut wherever focus
-            // sits, where `.onExitCommand` stops firing once a control inside
-            // the sheet takes focus.
-            Button("Close") {
-                dismiss()
-            }
-            .keyboardShortcut(.cancelAction)
-            .opacity(0)
-            .frame(width: 0, height: 0)
-            .accessibilityHidden(true)
-
-            Button("Done") {
-                dismiss()
-            }
-            .keyboardShortcut(.defaultAction)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .background(Color.appBackground)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(Color.appBorder)
-                .frame(height: 1)
-        }
     }
 
     @ViewBuilder
@@ -158,5 +143,50 @@ private struct SettingsSidebarRow: View {
             return Color.appSelected
         }
         return isHovering ? Color.appHover : Color.clear
+    }
+}
+
+/// Gives the Settings window a remembered, resizable frame. The `Settings`
+/// scene opens its window at the content's fitting size and doesn't restore
+/// frames, so this sets the default size once and autosaves the frame.
+private struct SettingsWindowConfigurator: NSViewRepresentable {
+    let defaultSize: CGSize
+    let minimumSize: CGSize
+
+    private static let autosaveName = "PromptLibraryExplorer.SettingsWindow"
+
+    func makeNSView(context: Context) -> TrackingView {
+        let view = TrackingView()
+        view.onWindow = configure(window:)
+        return view
+    }
+
+    func updateNSView(_ nsView: TrackingView, context: Context) {}
+
+    private func configure(window: NSWindow) {
+        window.styleMask.insert(.resizable)
+        window.contentMinSize = minimumSize
+        // Restore the saved frame, or start at the default size.
+        if !window.setFrameUsingName(Self.autosaveName) {
+            window.setContentSize(defaultSize)
+            window.center()
+        }
+        window.setFrameAutosaveName(Self.autosaveName)
+    }
+
+    final class TrackingView: NSView {
+        var onWindow: ((NSWindow) -> Void)?
+        private weak var configuredWindow: NSWindow?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window, window !== configuredWindow else { return }
+            configuredWindow = window
+            // After SwiftUI's own initial sizing pass.
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let window else { return }
+                self?.onWindow?(window)
+            }
+        }
     }
 }

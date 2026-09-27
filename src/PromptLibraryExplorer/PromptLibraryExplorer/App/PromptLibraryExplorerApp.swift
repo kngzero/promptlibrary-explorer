@@ -29,6 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// and select every item in the listing. (One owner: no key-monitor case.)
     @MainActor @objc
     func selectAll(_ sender: Any?) {
+        // Settings (or another auxiliary window) is key with no text field
+        // focused: don't select the browser's items behind it.
+        guard !ModalKeyGuard.isAuxiliaryWindowKey else { return }
         guard let viewModel, !viewModel.isModalBlockingCommands, !viewModel.lightboxOpen else { return }
         viewModel.selectAllItems()
     }
@@ -36,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @MainActor
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard menuItem.action == #selector(selectAll(_:)) else { return true }
-        guard let viewModel else { return false }
+        guard let viewModel, !ModalKeyGuard.isAuxiliaryWindowKey else { return false }
         return !viewModel.isModalBlockingCommands
             && !viewModel.lightboxOpen
             && !viewModel.processedFolderContents.isEmpty
@@ -74,7 +77,25 @@ struct PromptLibraryExplorerApp: App {
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1280, height: 800)
-        .commands {
+        .commands { mainCommands }
+
+        // PromptLibrary Explorer ▸ Settings… (⌘,) comes from this scene: it is the
+        // single owner of ⌘,. `ExplorerViewModel.openSettings()` opens it too.
+        Settings {
+            SettingsView()
+                .environment(explorerVM)
+                .preferredColorScheme(explorerVM.appearanceMode.preferredColorScheme)
+        }
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: SettingsView.defaultSize.width, height: SettingsView.defaultSize.height)
+    }
+
+    @CommandsBuilder
+    private var mainCommands: some Commands {
+            // View ▸ Show/Hide Toolbar (⌥⌘T) and Customize Toolbar… for the
+            // customizable browser toolbar. ⌥⌘T has no other owner.
+            ToolbarCommands()
+
             // MARK: File
             CommandGroup(replacing: .newItem) {
                 Button("Open Folder…") {
@@ -113,7 +134,7 @@ struct PromptLibraryExplorerApp: App {
 
                 Button("Rename") {
                     // The inline rename field lives in the browser, under the lightbox.
-                    run(allowInLightbox: false) { NotificationCenter.default.post(name: .beginRenameSelection, object: nil) }
+                    runInMainWindow(allowInLightbox: false) { NotificationCenter.default.post(name: .beginRenameSelection, object: nil) }
                 }
                 .disabled(isBlocked || explorerVM.lightboxOpen || explorerVM.selectedIndices.count != 1)
 
@@ -131,7 +152,7 @@ struct PromptLibraryExplorerApp: App {
                         NSApp.sendAction(#selector(NSText.deleteToBeginningOfLine(_:)), to: nil, from: nil)
                         return
                     }
-                    run(allowInLightbox: false) { explorerVM.trashSelection() }
+                    runInMainWindow(allowInLightbox: false) { explorerVM.trashSelection() }
                 }
                 .keyboardShortcut(.delete, modifiers: .command)
                 .disabled(isBlocked || !hasSelection)
@@ -166,12 +187,6 @@ struct PromptLibraryExplorerApp: App {
                     }
                     .disabled(isBlocked || !hasSelection)
                 }
-            }
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings...") {
-                    explorerVM.openSettings()
-                }
-                .keyboardShortcut(",", modifiers: .command)
             }
 
             // MARK: Edit
@@ -367,7 +382,7 @@ struct PromptLibraryExplorerApp: App {
                         NSApp.sendAction(#selector(NSResponder.moveToBeginningOfDocument(_:)), to: nil, from: nil)
                         return
                     }
-                    run {
+                    runInMainWindow {
                         if explorerVM.isCollectionMode {
                             explorerVM.openCollection(nil)
                         } else {
@@ -449,7 +464,6 @@ struct PromptLibraryExplorerApp: App {
                     explorerVM.openDeveloperWebsite()
                 }
             }
-        }
     }
 
     // MARK: - Command helpers
@@ -478,11 +492,19 @@ struct PromptLibraryExplorerApp: App {
         action()
     }
 
-    /// For commands whose target (the header search field, the command
+    /// For commands that act on the browser window's own UI (inline rename, the
+    /// focused selection, Enclosing Folder): no-op while Settings or another
+    /// auxiliary window is key, so a key press there never reaches the grid.
+    private func runInMainWindow(allowInLightbox: Bool = true, _ action: () -> Void) {
+        guard !ModalKeyGuard.isAuxiliaryWindowKey else { return }
+        run(allowInLightbox: allowInLightbox, action)
+    }
+
+    /// For commands whose target (the toolbar search field, the command
     /// palette) sits underneath the lightbox: close the lightbox, then act on
-    /// the next run-loop turn once the browser chrome is back.
+    /// the next run-loop turn once the browser chrome is back. Main-window only.
     private func runClosingLightbox(_ action: @escaping () -> Void) {
-        guard !explorerVM.isModalBlockingCommands else { return }
+        guard !explorerVM.isModalBlockingCommands, !ModalKeyGuard.isAuxiliaryWindowKey else { return }
         guard explorerVM.lightboxOpen else {
             action()
             return
