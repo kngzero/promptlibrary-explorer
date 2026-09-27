@@ -6,7 +6,8 @@ struct ContentBrowserView: View {
     @State private var inlineRenamePath: String?
     @State private var inlineRenameValue = ""
     @State private var reorderIndicator: ExplorerReorderIndicator?
-    @State private var collapsedGroups: Set<String> = []
+    /// Owned by MainContentView so keyboard navigation can skip collapsed sections.
+    @Binding var collapsedGroups: Set<String>
     @State private var isShowingNewCollectionPrompt = false
     @State private var newCollectionName = ""
     private let gridSpacing: CGFloat = AppSpacing.xs
@@ -387,9 +388,11 @@ struct ContentBrowserView: View {
 
     /// File ▸ Rename (posted as `.beginRenameSelection`).
     private func beginRenameOfSelection() {
-        guard !vm.isAnyModalOpen, vm.selectedIndices.count == 1 else { return }
+        // Rename the one selected item. `selectedItemIndex` is the last-clicked
+        // anchor and can point at an item that was just ⌘-deselected.
+        guard !vm.isAnyModalOpen, !vm.lightboxOpen, vm.selectedIndices.count == 1,
+              let index = vm.selectedIndices.first else { return }
         let items = vm.processedFolderContents
-        let index = vm.selectedItemIndex >= 0 ? vm.selectedItemIndex : (vm.selectedIndices.first ?? -1)
         guard index >= 0, index < items.count else { return }
         expandGroupContaining(index)
         startInlineRename(for: items[index])

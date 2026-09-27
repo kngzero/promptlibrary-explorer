@@ -110,6 +110,13 @@ actor LibraryIndexService {
     private var didAttemptOpen = false
     private let databaseURL: URL
 
+    /// `indexLibrary` suspends while extracting a batch, and `movePath` /
+    /// `removeEntries` can run on this actor meanwhile (reentrancy). Paths they
+    /// touch while any build is in flight are logged here, and a build drops
+    /// extracted records at or under them instead of resurrecting ghost rows.
+    private var activeBuildCount = 0
+    private var pathsMutatedDuringBuilds: [String] = []
+
     init(databaseURL: URL? = nil) {
         if let databaseURL {
             self.databaseURL = databaseURL
@@ -132,6 +139,13 @@ actor LibraryIndexService {
     func indexLibrary(root: URL, progress: (@Sendable (_ done: Int, _ total: Int) -> Void)?) async {
         guard openIfNeeded() else { return }
         let rootPath = Self.normalizedPath(root.path)
+
+        activeBuildCount += 1
+        let mutationLogStart = pathsMutatedDuringBuilds.count
+        defer {
+            activeBuildCount -= 1
+            if activeBuildCount == 0 { pathsMutatedDuringBuilds.removeAll() }
+        }
 
         let candidates = Self.walk(rootPath: rootPath)
         guard !Task.isCancelled, let candidates else { return }
@@ -168,8 +182,17 @@ actor LibraryIndexService {
         while start < total {
             if Task.isCancelled { return }
             let batch = Array(toIndex[start..<min(start + batchSize, total)])
-            let records = await Self.extractRecords(batch)
+            var records = await Self.extractRecords(batch)
             if Task.isCancelled { return }
+            // Files moved, renamed or removed while this batch was being read
+            // are stale; the mutation already fixed their rows (the next index
+            // picks up anything new).
+            let mutated = pathsMutatedDuringBuilds[mutationLogStart...]
+            if !mutated.isEmpty {
+                records.removeAll { record in
+                    mutated.contains { Self.isSameOrDescendant(record.path, of: $0) }
+                }
+            }
             transaction {
                 for record in records { upsert(record) }
             }
@@ -189,8 +212,9 @@ actor LibraryIndexService {
         var sql = """
         SELECT f.path, f.name, f.folder,
                snippet(prompts, 2, '«', '»', '…', 24),
-               bm25(prompts, 0.0, 2.0, 1.0, 0.0),
-               snippet(prompts, 1, '«', '»', '…', 24)
+               bm25(prompts, \(Self.bm25Weights)),
+               snippet(prompts, 1, '«', '»', '…', 24),
+               snippet(prompts, 3, '«', '»', '…', 24)
         FROM prompts JOIN files f ON f.id = prompts.rowid
         WHERE prompts MATCH ?
         """
@@ -200,7 +224,7 @@ actor LibraryIndexService {
             sql += " AND f.path > ? AND f.path < ?"
             bindings += [.text(lower), .text(upper)]
         }
-        sql += " ORDER BY bm25(prompts, 0.0, 2.0, 1.0, 0.0) LIMIT ?"
+        sql += " ORDER BY bm25(prompts, \(Self.bm25Weights)) LIMIT ?"
         bindings.append(.int(Int64(max(1, limit))))
 
         var hits: [LibrarySearchHit] = []
@@ -209,7 +233,11 @@ actor LibraryIndexService {
                 path: Self.columnText(stmt, 0) ?? "",
                 fileName: Self.columnText(stmt, 1) ?? "",
                 folderPath: Self.columnText(stmt, 2) ?? "",
-                snippet: Self.bestSnippet(prompt: Self.columnText(stmt, 3), name: Self.columnText(stmt, 5)),
+                snippet: Self.bestSnippet(
+                    prompt: Self.columnText(stmt, 3),
+                    name: Self.columnText(stmt, 5),
+                    negative: Self.columnText(stmt, 6)
+                ),
                 rank: sqlite3_column_double(stmt, 4)
             ))
         }
@@ -250,6 +278,8 @@ actor LibraryIndexService {
         let old = Self.normalizedPath(oldPath)
         let new = Self.normalizedPath(newPath)
         guard old != new else { return }
+        noteMutation(old)
+        noteMutation(new)
         let offset = Int64(old.unicodeScalars.count + 1)
         let (lower, upper) = Self.descendantRange(old)
         let newURL = URL(fileURLWithPath: new)
@@ -285,11 +315,23 @@ actor LibraryIndexService {
     func removeEntries(under path: String) async {
         guard openIfNeeded() else { return }
         let normalized = Self.normalizedPath(path)
+        noteMutation(normalized)
         let (lower, upper) = Self.descendantRange(normalized)
         transaction {
             deleteRow(path: normalized)
             deleteRange(lower: lower, upper: upper)
         }
+    }
+
+    private func noteMutation(_ path: String) {
+        guard activeBuildCount > 0 else { return }
+        pathsMutatedDuringBuilds.append(path)
+    }
+
+    private static func isSameOrDescendant(_ path: String, of ancestor: String) -> Bool {
+        if path == ancestor { return true }
+        if ancestor == "/" { return path.hasPrefix("/") }
+        return path.hasPrefix(ancestor + "/")
     }
 
     func stats(under root: URL?) async -> LibraryIndexStats {
@@ -391,7 +433,42 @@ actor LibraryIndexService {
             db = nil
             return false
         }
+        migratePromptsTableIfNeeded(handle)
         return true
+    }
+
+    /// Search needs `negative` as an indexed FTS column. A database whose
+    /// `prompts` table lacks it (or has it UNINDEXED) is rebuilt: the FTS table is
+    /// recreated and the file rows cleared so the next index re-extracts every file.
+    private func migratePromptsTableIfNeeded(_ handle: OpaquePointer) {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'prompts'", -1, &stmt, nil) == SQLITE_OK,
+              let stmt
+        else { return }
+        var definition = ""
+        if sqlite3_step(stmt) == SQLITE_ROW, let text = sqlite3_column_text(stmt, 0) {
+            definition = String(cString: text).lowercased()
+        }
+        sqlite3_finalize(stmt)
+        guard !definition.isEmpty else { return }
+        let compact = definition.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        let hasIndexedNegative = compact.contains("negative") && !compact.contains("negative unindexed")
+        guard !hasIndexedNegative else { return }
+
+        let rebuild = """
+        BEGIN IMMEDIATE;
+        DROP TABLE IF EXISTS prompts;
+        CREATE VIRTUAL TABLE prompts USING fts5(
+            path UNINDEXED, name, prompt, negative,
+            tokenize = 'unicode61 remove_diacritics 2'
+        );
+        DELETE FROM files;
+        DELETE FROM roots;
+        COMMIT;
+        """
+        if sqlite3_exec(handle, rebuild, nil, nil, nil) != SQLITE_OK {
+            sqlite3_exec(handle, "ROLLBACK", nil, nil, nil)
+        }
     }
 
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
@@ -532,10 +609,18 @@ actor LibraryIndexService {
         name.replacingOccurrences(of: "_", with: " ")
     }
 
-    /// The prompt excerpt, unless the match was only in the file name and there is no prompt.
-    private static func bestSnippet(prompt: String?, name: String?) -> String {
+    /// Column weights for bm25 (path, name, prompt, negative): names weigh most,
+    /// negative prompts least, so a negative-only match ranks below prompt matches.
+    static let bm25Weights = "0.0, 2.0, 1.0, 0.3"
+
+    /// The prompt excerpt; the negative-prompt excerpt when only that matched;
+    /// the file name when there is no prompt at all.
+    private static func bestSnippet(prompt: String?, name: String?, negative: String? = nil) -> String {
         let promptSnippet = cleanSnippet(prompt ?? "")
-        if promptSnippet.contains("«") || !promptSnippet.isEmpty { return promptSnippet }
+        if promptSnippet.contains("«") { return promptSnippet }
+        let negativeSnippet = cleanSnippet(negative ?? "")
+        if negativeSnippet.contains("«") { return "Negative: " + negativeSnippet }
+        if !promptSnippet.isEmpty { return promptSnippet }
         return cleanSnippet(name ?? "")
     }
 
@@ -550,11 +635,16 @@ actor LibraryIndexService {
 
     /// Translates the user query syntax into a safe FTS5 MATCH expression.
     /// Words are ANDed, `"quoted phrase"` stays a phrase, `-word` excludes, `word*` is a prefix.
+    /// Terms match the file name, prompt and (weighted lower) negative prompt; `neg:word`
+    /// matches only the negative prompt. `-word` excludes on name/prompt only (so
+    /// `-blurry` doesn't drop every file with "blurry" in its negative prompt);
+    /// `-neg:word` excludes on the negative prompt.
     /// Every term is quoted so FTS5 operators/punctuation in user text are inert.
     /// Returns nil when the query has no positive term.
     static func ftsQuery(from query: String) -> String? {
         var positives: [String] = []
-        var negatives: [String] = []
+        var negativePromptPositives: [String] = []
+        var exclusions: [String] = []
 
         let chars = Array(query)
         var i = 0
@@ -564,6 +654,13 @@ actor LibraryIndexService {
             if chars[i] == "-" {
                 negate = true
                 i += 1
+                if i >= chars.count { break }
+                if chars[i].isWhitespace { continue }
+            }
+            var negativeColumn = false
+            if i + 4 <= chars.count, String(chars[i..<(i + 4)]).lowercased() == "neg:" {
+                negativeColumn = true
+                i += 4
                 if i >= chars.count { break }
                 if chars[i].isWhitespace { continue }
             }
@@ -587,15 +684,27 @@ actor LibraryIndexService {
             }
             guard term.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { continue }
             let quoted = "\"" + term.replacingOccurrences(of: "\"", with: "\"\"") + "\"" + (prefix ? "*" : "")
-            if negate { negatives.append(quoted) } else { positives.append(quoted) }
+            switch (negate, negativeColumn) {
+            case (false, false): positives.append(quoted)
+            case (false, true): negativePromptPositives.append(quoted)
+            case (true, false): exclusions.append("{name prompt} : " + quoted)
+            case (true, true): exclusions.append("negative : " + quoted)
+            }
         }
 
-        guard !positives.isEmpty else { return nil }
-        var expression = "(" + positives.joined(separator: " AND ") + ")"
-        for negative in negatives {
-            expression = "(" + expression + " NOT " + negative + ")"
+        var parts: [String] = []
+        if !positives.isEmpty {
+            parts.append("{name prompt negative} : (" + positives.joined(separator: " AND ") + ")")
         }
-        return "{name prompt} : " + expression
+        if !negativePromptPositives.isEmpty {
+            parts.append("negative : (" + negativePromptPositives.joined(separator: " AND ") + ")")
+        }
+        guard !parts.isEmpty else { return nil }
+        var expression = parts.count == 1 ? parts[0] : parts.map { "(" + $0 + ")" }.joined(separator: " AND ")
+        for exclusion in exclusions {
+            expression = "(" + expression + ") NOT (" + exclusion + ")"
+        }
+        return expression
     }
 
     /// Recursive walk of supported files (hidden files and package contents skipped). Paths are

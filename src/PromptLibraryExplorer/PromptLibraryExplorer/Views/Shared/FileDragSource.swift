@@ -18,6 +18,9 @@ struct FileDragSource: NSViewRepresentable {
     let externalOperation: () -> ExternalDragOperation
     /// Called once the drag finishes, with the operation the receiver actually performed.
     let onDragEnded: (NSDragOperation) -> Void
+    /// A region (in this overlay's SwiftUI coordinates, top-left origin) whose
+    /// clicks go to the SwiftUI content underneath, e.g. clickable rating stars.
+    var passthroughRect: CGRect? = nil
 
     func makeNSView(context: Context) -> FileDragSourceNSView {
         let view = FileDragSourceNSView()
@@ -36,6 +39,7 @@ struct FileDragSource: NSViewRepresentable {
         view.onDoubleClick = onDoubleClick
         view.externalOperation = externalOperation
         view.onDragEnded = onDragEnded
+        view.passthroughRect = passthroughRect
     }
 }
 
@@ -46,6 +50,7 @@ final class FileDragSourceNSView: NSView, NSDraggingSource {
     var onDoubleClick: () -> Void = {}
     var externalOperation: () -> ExternalDragOperation = { .copy }
     var onDragEnded: (NSDragOperation) -> Void = { _ in }
+    var passthroughRect: CGRect?
 
     private var mouseDownLocation: NSPoint?
     private var pendingSelectionCollapse = false
@@ -65,6 +70,11 @@ final class FileDragSourceNSView: NSView, NSDraggingSource {
         switch event.type {
         case .leftMouseDown, .leftMouseDragged, .leftMouseUp:
             guard !event.modifierFlags.contains(.control) else { return nil }
+            if let passthroughRect, !isDragging {
+                let local = convert(point, from: superview)
+                let topLeft = CGPoint(x: local.x, y: isFlipped ? local.y : bounds.height - local.y)
+                if passthroughRect.contains(topLeft) { return nil }
+            }
             return super.hitTest(point)
         default:
             return nil

@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "PromptLibraryExplorer",
             path: "PromptLibraryExplorer"
+        ),
+        .testTarget(
+            name: "PromptLibraryExplorerTests",
+            dependencies: ["PromptLibraryExplorer"],
+            path: "Tests/PromptLibraryExplorerTests"
         )
     ]
 )

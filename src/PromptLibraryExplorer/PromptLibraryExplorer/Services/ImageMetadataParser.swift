@@ -106,11 +106,25 @@ actor ImageMetadataParser {
         var comfyPromptJSON: String?
         var comfyWorkflowJSON: String?
 
+        // The writer mirrors the prompt into TIFF ImageDescription / XMP dc:description, so a plain
+        // UserComment equal to one of those is the app's own prompt-only parameters block.
+        let descriptionValues = Set(dedupedFields.compactMap { field -> String? in
+            let key = canonicalKey(field.label)
+            return key == "imagedescription" || key == "description" ? field.value : nil
+        })
+
         for field in dedupedFields {
             let canonical = canonicalKey(field.label)
+            let isParametersSource = canonical == "parameters" || canonical == "usercomment"
+            let allowsPlainPrompt = canonical == "parameters"
+                || (canonical == "usercomment" && descriptionValues.contains(field.value))
 
             if !consumedParameterBlock,
-               let parameterBlock = parseParameterBlock(from: field.value)
+               let parameterBlock = parseParameterBlock(
+                   from: field.value,
+                   lenient: isParametersSource,
+                   allowPlainPrompt: allowsPlainPrompt
+               )
             {
                 consumedParameterBlock = true
                 if prompt.isEmpty {
@@ -166,21 +180,35 @@ actor ImageMetadataParser {
             displayFields.append(field)
         }
 
-        if !consumedParameterBlock, comfyPromptJSON != nil || comfyWorkflowJSON != nil {
+        if comfyPromptJSON != nil || comfyWorkflowJSON != nil {
             let extraction = comfyPromptJSON.flatMap(ComfyUIGraphParser.extract(apiGraphJSON:))
                 ?? comfyWorkflowJSON.flatMap(ComfyUIGraphParser.extract(workflowJSON:))
             if let extraction {
-                if prompt.isEmpty { prompt = extraction.prompt }
-                if negativePrompt == nil, let negative = extraction.negativePrompt, !negative.isEmpty {
-                    negativePrompt = negative
+                if consumedParameterBlock {
+                    // A `parameters` block (e.g. one the user edited in the app) takes precedence;
+                    // the graph only fills in what the block doesn't say.
+                    if prompt.isEmpty { prompt = extraction.prompt }
+                    let hadNegative = negativePrompt?.isEmpty == false
+                    if !hadNegative, let negative = extraction.negativePrompt, !negative.isEmpty {
+                        negativePrompt = negative
+                        displayFields.insert(PromptMetadataField(label: "Negative Prompt", value: negative), at: 0)
+                    }
+                    if model == nil { model = extraction.model }
+                    let presentLabels = Set(displayFields.map { canonicalKey($0.label) })
+                    displayFields.append(contentsOf: extraction.fields.filter { !presentLabels.contains(canonicalKey($0.label)) })
+                } else {
+                    if prompt.isEmpty { prompt = extraction.prompt }
+                    if negativePrompt == nil, let negative = extraction.negativePrompt, !negative.isEmpty {
+                        negativePrompt = negative
+                    }
+                    if model == nil { model = extraction.model }
+                    var comfyFields: [PromptMetadataField] = []
+                    if let negativePrompt, !negativePrompt.isEmpty {
+                        comfyFields.append(PromptMetadataField(label: "Negative Prompt", value: negativePrompt))
+                    }
+                    comfyFields.append(contentsOf: extraction.fields)
+                    displayFields.insert(contentsOf: comfyFields, at: 0)
                 }
-                if model == nil { model = extraction.model }
-                var comfyFields: [PromptMetadataField] = []
-                if let negativePrompt, !negativePrompt.isEmpty {
-                    comfyFields.append(PromptMetadataField(label: "Negative Prompt", value: negativePrompt))
-                }
-                comfyFields.append(contentsOf: extraction.fields)
-                displayFields.insert(contentsOf: comfyFields, at: 0)
             }
         }
 
@@ -494,26 +522,51 @@ actor ImageMetadataParser {
             .replacingOccurrences(of: "&amp;", with: "&")
     }
 
-    private static func parseParameterBlock(from value: String) -> ParsedParameterBlock? {
+    /// Keys that can start an A1111-style "Key: value, Key: value" line that lacks "Steps:"
+    /// (e.g. one the app wrote with only a model or seed set).
+    private static let parameterLineLeadingKeys: Set<String> = [
+        "steps", "sampler", "cfgscale", "seed", "model", "modelname", "modelhash", "size", "scheduler",
+        "guidance", "vae", "denoisingstrength", "clipskip", "loras", "generator",
+    ]
+
+    /// Parses an A1111-style parameters block. Normally a "Steps:" line is required. With `lenient`
+    /// (the text comes from a `parameters` chunk or EXIF UserComment), a trailing line that starts
+    /// with a known key or a "Negative prompt:" section is enough; with `allowPlainPrompt` plain
+    /// text with neither is taken as the whole prompt.
+    private static func parseParameterBlock(
+        from value: String,
+        lenient: Bool = false,
+        allowPlainPrompt: Bool = false
+    ) -> ParsedParameterBlock? {
         let normalized = value
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.localizedCaseInsensitiveContains("Steps:") else { return nil }
+        let hasSteps = normalized.localizedCaseInsensitiveContains("Steps:")
+        guard hasSteps || lenient, !normalized.isEmpty, !looksLikeJSON(normalized) else { return nil }
 
         let lines = normalized
             .components(separatedBy: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
 
-        guard let parameterStartIndex = lines.lastIndex(where: { $0.contains("Steps:") }) else {
-            return nil
+        var parameterStartIndex = hasSteps ? lines.lastIndex(where: { $0.contains("Steps:") }) : nil
+        if parameterStartIndex == nil, lenient {
+            parameterStartIndex = lines.lastIndex(where: startsWithKnownParameterKey)
         }
 
-        let promptLines = Array(lines[..<parameterStartIndex])
-        let parameterLine = lines[parameterStartIndex...].joined(separator: " ")
-        let parameterPairs = parseParameterPairs(from: parameterLine)
-        guard !parameterPairs.isEmpty else { return nil }
+        let promptLines: [String]
+        var parameterPairs: [(String, String)] = []
+        if let parameterStartIndex {
+            promptLines = Array(lines[..<parameterStartIndex])
+            let parameterLine = lines[parameterStartIndex...].joined(separator: " ")
+            parameterPairs = parseParameterPairs(from: parameterLine)
+            guard !parameterPairs.isEmpty else { return nil }
+        } else {
+            let hasNegativeSection = lines.contains { $0.lowercased().hasPrefix("negative prompt:") }
+            guard lenient, hasNegativeSection || allowPlainPrompt else { return nil }
+            promptLines = lines
+        }
 
         var positivePromptLines: [String] = []
         var negativePromptLines: [String] = []
@@ -549,24 +602,65 @@ actor ImageMetadataParser {
         )
     }
 
+    private static func startsWithKnownParameterKey(_ line: String) -> Bool {
+        guard let colon = line.firstIndex(of: ":") else { return false }
+        let key = line[..<colon]
+        guard !key.contains(","), !key.contains("\"") else { return false }
+        return parameterLineLeadingKeys.contains(canonicalKey(String(key)))
+    }
+
+    /// Splits "Key: value, Key: \"quoted, value: x\"" at top-level commas (commas inside double
+    /// quotes don't split). A segment without a key continues the previous value; leading text
+    /// before the first key is ignored. Values are kept verbatim (quotes included).
     private static func parseParameterPairs(from value: String) -> [(String, String)] {
-        let pattern = #"([A-Za-z0-9 _./()-]+):\s*(.*?)(?=,\s+[A-Za-z0-9 _./()-]+:|$)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        var segments: [String] = []
+        var current = ""
+        var inQuotes = false
+        var escaped = false
 
-        let range = NSRange(value.startIndex..<value.endIndex, in: value)
-        let matches = regex.matches(in: value, range: range)
-
-        return matches.compactMap { match in
-            guard let keyRange = Range(match.range(at: 1), in: value),
-                  let valueRange = Range(match.range(at: 2), in: value)
-            else {
-                return nil
+        for character in value {
+            if inQuotes {
+                current.append(character)
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inQuotes = false
+                }
+                continue
             }
+            if character == "\"" {
+                inQuotes = true
+                current.append(character)
+            } else if character == "," {
+                segments.append(current)
+                current = ""
+            } else {
+                current.append(character)
+            }
+        }
+        segments.append(current)
 
-            let key = String(value[keyRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-            let parsedValue = String(value[valueRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty, !parsedValue.isEmpty else { return nil }
-            return (key, parsedValue)
+        var pairs: [(String, String)] = []
+        for segment in segments {
+            if let colon = segment.firstIndex(of: ":"), !segment[..<colon].contains("\"") {
+                let key = segment[..<colon].trimmingCharacters(in: .whitespacesAndNewlines)
+                let parsedValue = segment[segment.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !key.isEmpty {
+                    pairs.append((key, parsedValue))
+                    continue
+                }
+            }
+            // A segment without a key belongs to the previous value (e.g. an unquoted comma).
+            if !pairs.isEmpty {
+                pairs[pairs.count - 1].1 += "," + segment
+            }
+        }
+
+        return pairs.compactMap { key, value in
+            let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : (key, value)
         }
     }
 
@@ -742,9 +836,19 @@ enum ComfyUIGraphParser {
         return GraphWalker(graph: graph).extraction()
     }
 
-    private struct GraphWalker {
+    /// Walks an API graph. Crafted graphs can contain cycles and diamonds, so every recursive
+    /// resolution is memoized per node and all walks share a node-visit budget; once the budget is
+    /// spent the walker stops following links and returns what it has.
+    private final class GraphWalker {
         let graph: [String: Node]
         let orderedIDs: [String]
+
+        static let visitBudget = 10_000
+        private var visits = 0
+        private var textMemo: [String: String?] = [:]
+        private var textInProgress: Set<String> = []
+        private var conditioningMemo: [String: [String]] = [:]
+        private var conditioningInProgress: Set<String> = []
 
         init(graph: [String: Node]) {
             self.graph = graph
@@ -756,6 +860,13 @@ enum ComfyUIGraphParser {
                 default: return a < b
                 }
             }
+        }
+
+        /// Counts one node visit; false once the walk budget is exhausted.
+        private func spendVisit() -> Bool {
+            guard visits < Self.visitBudget else { return false }
+            visits += 1
+            return true
         }
 
         func classType(_ id: String) -> String { graph[id]?["class_type"] as? String ?? "" }
@@ -797,6 +908,12 @@ enum ComfyUIGraphParser {
         }
 
         func textOfNode(_ id: String, depth: Int) -> String? {
+            if let memo = textMemo[id] { return memo }
+            // A cycle back into a node still being resolved contributes nothing.
+            guard !textInProgress.contains(id), spendVisit() else { return nil }
+            textInProgress.insert(id)
+            defer { textInProgress.remove(id) }
+
             let inputs = inputs(id)
             var parts: [String] = []
             for key in textKeys {
@@ -812,15 +929,27 @@ enum ComfyUIGraphParser {
                 // Primitive-style nodes that expose their value in widgets.
                 if let text = Self.scalarString(graph[id]?["value"]) { parts.append(text) }
             }
-            return parts.isEmpty ? nil : parts.joined(separator: "\n")
+            let result = parts.isEmpty ? nil : parts.joined(separator: "\n")
+            textMemo[id] = .some(result)
+            return result
         }
 
         // MARK: Conditioning
 
-        func resolveConditioning(_ value: Any?, depth: Int = 0, visited: Set<String> = []) -> [String] {
-            guard depth < 32, let link = Self.link(value), graph[link.id] != nil, !visited.contains(link.id) else { return [] }
-            var visited = visited
-            visited.insert(link.id)
+        func resolveConditioning(_ value: Any?, depth: Int = 0) -> [String] {
+            guard depth < 32, let link = Self.link(value), graph[link.id] != nil else { return [] }
+            let memoKey = "\(link.id):\(link.slot)"
+            if let memo = conditioningMemo[memoKey] { return memo }
+            guard !conditioningInProgress.contains(link.id), spendVisit() else { return [] }
+            conditioningInProgress.insert(link.id)
+            defer { conditioningInProgress.remove(link.id) }
+
+            let result = computeConditioning(link, depth: depth)
+            conditioningMemo[memoKey] = result
+            return result
+        }
+
+        private func computeConditioning(_ link: (id: String, slot: Int), depth: Int) -> [String] {
             let cls = classType(link.id)
             let inputs = inputs(link.id)
 
@@ -830,32 +959,41 @@ enum ComfyUIGraphParser {
             // Nodes that pass both positive and negative through (ControlNetApplyAdvanced, InstructPix2Pix, ...).
             if inputs["positive"] != nil, inputs["negative"] != nil, Self.link(inputs["positive"]) != nil {
                 let key = link.slot == 1 ? "negative" : "positive"
-                return resolveConditioning(inputs[key], depth: depth + 1, visited: visited)
+                return resolveConditioning(inputs[key], depth: depth + 1)
             }
             var texts: [String] = []
             for key in inputs.keys.sorted() where !nonConditioningInputs.contains(key) {
                 guard Self.link(inputs[key]) != nil else { continue }
-                for text in resolveConditioning(inputs[key], depth: depth + 1, visited: visited) where !texts.contains(text) {
+                for text in resolveConditioning(inputs[key], depth: depth + 1) where !texts.contains(text) {
                     texts.append(text)
                 }
             }
-            if texts.isEmpty, let text = textOfNode(link.id, depth: depth), cls.lowercased().contains("prompt") || cls.lowercased().contains("text") {
+            if texts.isEmpty, cls.lowercased().contains("prompt") || cls.lowercased().contains("text"),
+               let text = textOfNode(link.id, depth: depth)
+            {
                 texts.append(text)
             }
             return texts
         }
 
         /// Walks a conditioning chain and returns the first value found for any of `keys` (e.g. FluxGuidance).
-        func findInConditioningChain(_ value: Any?, keys: [String], classContains: String, depth: Int = 0) -> String? {
-            guard depth < 32, let link = Self.link(value), graph[link.id] != nil else { return nil }
-            let inputs = inputs(link.id)
-            if classType(link.id).contains(classContains) {
-                for key in keys { if let v = Self.scalarString(inputs[key]) { return v } }
+        /// Each node is examined at most once: a node already explored yielded nothing.
+        func findInConditioningChain(_ value: Any?, keys: [String], classContains: String) -> String? {
+            var visited = Set<String>()
+            func find(_ value: Any?, depth: Int) -> String? {
+                guard depth < 32, let link = Self.link(value), graph[link.id] != nil,
+                      visited.insert(link.id).inserted, spendVisit()
+                else { return nil }
+                let inputs = inputs(link.id)
+                if classType(link.id).contains(classContains) {
+                    for key in keys { if let v = Self.scalarString(inputs[key]) { return v } }
+                }
+                for key in inputs.keys.sorted() where !nonConditioningInputs.contains(key) {
+                    if let v = find(inputs[key], depth: depth + 1) { return v }
+                }
+                return nil
             }
-            for key in inputs.keys.sorted() where !nonConditioningInputs.contains(key) {
-                if let v = findInConditioningChain(inputs[key], keys: keys, classContains: classContains, depth: depth + 1) { return v }
-            }
-            return nil
+            return find(value, depth: 0)
         }
 
         // MARK: Scalars
@@ -863,7 +1001,7 @@ enum ComfyUIGraphParser {
         /// Value of the first matching key on `id`, following links into upstream nodes
         /// (primitives, RandomNoise, KSamplerSelect, BasicScheduler, CFGGuider...).
         func scalar(_ keys: [String], on id: String, via linkKeys: [String] = [], depth: Int = 0) -> String? {
-            guard depth < 8 else { return nil }
+            guard depth < 8, spendVisit() else { return nil }
             let inputs = inputs(id)
             for key in keys {
                 guard let value = inputs[key] else { continue }
@@ -1083,8 +1221,23 @@ enum ComfyUIGraphParser {
             guard index < values.count else { return nil }
             return GraphWalker.scalarString(values[index])
         }
+        // Memoized per node with a cycle guard and a visit budget, so crafted diamond/cyclic
+        // workflows can't cause exponential walks.
+        var textMemo: [Int: String?] = [:]
+        var textInProgress = Set<Int>()
+        var textVisits = 0
         func text(of id: Int, depth: Int = 0) -> String? {
             guard depth < 24, nodes[id] != nil else { return nil }
+            if let memo = textMemo[id] { return memo }
+            guard !textInProgress.contains(id), textVisits < 10_000 else { return nil }
+            textVisits += 1
+            textInProgress.insert(id)
+            defer { textInProgress.remove(id) }
+            let result = uncachedText(of: id, depth: depth)
+            textMemo[id] = .some(result)
+            return result
+        }
+        func uncachedText(of id: Int, depth: Int) -> String? {
             let cls = type(id)
             if cls.hasPrefix("CLIPTextEncode") || cls.contains("TextEncode") {
                 if let upstream = inputLink(id, named: "text"), let t = text(of: upstream.node, depth: depth + 1) { return t }

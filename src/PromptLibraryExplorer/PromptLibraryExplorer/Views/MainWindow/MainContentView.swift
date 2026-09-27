@@ -4,6 +4,9 @@ struct MainContentView: View {
     @Environment(ExplorerViewModel.self) private var vm
     @State private var splitViewVisibility: NavigationSplitViewVisibility =
         SettingsStore.shared.sidebarVisible ? .all : .doubleColumn
+    /// Collapsed group sections of the content browser. Owned here so arrow-key
+    /// navigation can skip the items of collapsed sections.
+    @State private var collapsedGroups: Set<String> = []
 
     var body: some View {
         @Bindable var vm = vm
@@ -140,7 +143,7 @@ struct MainContentView: View {
                     FileTreeView()
                         .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 320)
                 } content: {
-                    ContentBrowserView()
+                    ContentBrowserView(collapsedGroups: $collapsedGroups)
                         .navigationSplitViewColumnWidth(min: 400, ideal: 600)
                 } detail: {
                     MetadataPanelView()
@@ -272,7 +275,8 @@ struct MainContentView: View {
 
         case KeyCode.rightArrow.rawValue:
             if vm.activePane == .sidebar {
-                if let targetIndex = vm.firstColumnIndexFromSidebarHint() {
+                let rows = navigationLayout.rows
+                if !rows.isEmpty, let targetIndex = rows[min(vm.sidebarContentRowHint, rows.count - 1)].first {
                     vm.selectItem(at: targetIndex, modifiers: selectionModifiers)
                 } else {
                     vm.focusContent()
@@ -370,56 +374,65 @@ struct MainContentView: View {
         event.modifierFlags.contains(.shift) ? [.shift] : []
     }
 
+    /// The listing as laid out on screen: grouped sections start new rows,
+    /// collapsed sections are skipped, the list view is one column.
+    private var navigationLayout: ContentNavigationLayout {
+        ContentNavigationLayout(
+            itemCount: vm.processedFolderContents.count,
+            groups: vm.contentGroups,
+            collapsedGroups: collapsedGroups,
+            columns: vm.viewMode == .list ? 1 : vm.gridColumnCount
+        )
+    }
+
     private func handleContentLeft(items: [FileEntry], modifiers: EventModifiers = []) {
-        guard !items.isEmpty else {
+        let layout = navigationLayout
+        guard !items.isEmpty, !layout.order.isEmpty else {
             vm.focusSidebar(preservingContentRow: 0)
             return
         }
-        guard vm.selectedItemIndex >= 0 else {
-            vm.selectItem(at: 0, modifiers: modifiers)
+        let current = vm.selectedItemIndex
+        guard current >= 0 else {
+            if let first = layout.order.first { vm.selectItem(at: first, modifiers: modifiers) }
             return
         }
 
-        let current = vm.selectedItemIndex
-        let columns = max(1, vm.gridColumnCount)
-        if current % columns == 0 {
-            vm.focusSidebar(preservingContentRow: current / columns)
+        // From the first column, ← moves focus to the sidebar.
+        if let position = layout.position(of: current), position.column == 0 {
+            vm.focusSidebar(preservingContentRow: position.row)
+        } else if let previous = layout.neighbor(of: current, step: -1) {
+            vm.selectItem(at: previous, modifiers: modifiers)
         } else {
-            vm.selectItem(at: current - 1, modifiers: modifiers)
+            vm.focusSidebar(preservingContentRow: 0)
         }
     }
 
     private func handleContentRight(items: [FileEntry], modifiers: EventModifiers = []) {
-        guard !items.isEmpty else { return }
-        guard vm.selectedItemIndex >= 0 else {
-            vm.selectItem(at: 0, modifiers: modifiers)
+        let layout = navigationLayout
+        guard !items.isEmpty, let first = layout.order.first else { return }
+        let current = vm.selectedItemIndex
+        guard current >= 0 else {
+            vm.selectItem(at: first, modifiers: modifiers)
             return
         }
 
-        let next = min(items.count - 1, vm.selectedItemIndex + 1)
-        vm.selectItem(at: next, modifiers: modifiers)
+        if let next = layout.neighbor(of: current, step: 1) {
+            vm.selectItem(at: next, modifiers: modifiers)
+        }
     }
 
     private func handleContentVertical(direction: Int, items: [FileEntry], modifiers: EventModifiers = []) {
-        guard !items.isEmpty else { return }
-        guard vm.selectedItemIndex >= 0 else {
-            vm.selectItem(at: 0, modifiers: modifiers)
+        let layout = navigationLayout
+        guard !items.isEmpty, let first = layout.order.first else { return }
+        let current = vm.selectedItemIndex
+        guard current >= 0 else {
+            vm.selectItem(at: first, modifiers: modifiers)
             return
         }
 
-        let columns = max(1, vm.gridColumnCount)
-        let current = vm.selectedItemIndex
-        let currentRow = current / columns
-        let currentColumn = current % columns
-        let lastRow = (items.count - 1) / columns
-        let targetRow = max(0, min(lastRow, currentRow + direction))
-
-        guard targetRow != currentRow else { return }
-
-        let rowStart = targetRow * columns
-        let rowEnd = min(items.count - 1, rowStart + columns - 1)
-        let targetIndex = min(rowStart + currentColumn, rowEnd)
-        vm.selectItem(at: targetIndex, modifiers: modifiers)
+        if let target = layout.vertical(from: current, direction: direction) {
+            vm.selectItem(at: target, modifiers: modifiers)
+        }
     }
 }
 

@@ -242,7 +242,15 @@ private struct FileListRow: View {
 
     @State private var thumbnail: NSImage?
     @State private var isDropTarget = false
+    @State private var reorderPosition: ReorderPosition?
+    @State private var isHovered = false
+    /// Rating cell frame in row coordinates; clicks there reach the stars
+    /// instead of `FileDragSource`.
+    @State private var ratingRect: CGRect?
     @FocusState private var renameFieldFocused: Bool
+
+    private static let rowHeight: CGFloat = 34
+    private static let coordinateSpace = "fileListRow"
 
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -280,7 +288,16 @@ private struct FileListRow: View {
             }
             if columns.rating {
                 ratingView
-                    .frame(width: FileListColumns.ratingWidth, alignment: .leading)
+                    .frame(width: FileListColumns.ratingWidth, height: Self.rowHeight, alignment: .leading)
+                    .background {
+                        GeometryReader { proxy in
+                            let frame = proxy.frame(in: .named(Self.coordinateSpace))
+                            Color.clear
+                                .onAppear { ratingRect = frame }
+                                .onChange(of: frame) { _, newFrame in ratingRect = newFrame }
+                                .onDisappear { ratingRect = nil }
+                        }
+                    }
             }
             if columns.date {
                 cell(item.modifiedDate.map { Self.dateFormatter.string(from: $0) } ?? "--")
@@ -298,7 +315,8 @@ private struct FileListRow: View {
             }
         }
         .padding(.horizontal, AppSpacing.lg)
-        .frame(height: 34)
+        .frame(height: Self.rowHeight)
+        .coordinateSpace(name: Self.coordinateSpace)
         .background(rowFill)
         .overlay(alignment: .leading) {
             if isSelected && vm.activePane == .content {
@@ -312,6 +330,15 @@ private struct FileListRow: View {
                 Rectangle().strokeBorder(Color.appAccent.opacity(0.6), lineWidth: 1)
             }
         }
+        .overlay(alignment: reorderPosition == .after ? .bottom : .top) {
+            if reorderPosition != nil {
+                Rectangle()
+                    .fill(Color.appAccent)
+                    .frame(height: 2)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onHover { isHovered = $0 }
         .contentShape(Rectangle())
         .overlay {
             if !isRenaming {
@@ -325,7 +352,8 @@ private struct FileListRow: View {
                         if operation.contains(.move) {
                             Task { await vm.refreshFolder() }
                         }
-                    }
+                    },
+                    passthroughRect: columns.rating ? ratingRect : nil
                 )
             }
         }
@@ -344,7 +372,12 @@ private struct FileListRow: View {
             guard !Task.isCancelled else { return }
             thumbnail = loaded
         }
-        .modifier(FolderRowDropModifier(item: item, isDropTarget: $isDropTarget))
+        .modifier(FileListRowDropModifier(
+            item: item,
+            rowHeight: Self.rowHeight,
+            isDropTarget: $isDropTarget,
+            reorderPosition: $reorderPosition
+        ))
     }
 
     @ViewBuilder
@@ -409,16 +442,12 @@ private struct FileListRow: View {
     @ViewBuilder
     private var ratingView: some View {
         let rating = vm.rating(for: item.path)
-        if rating > 0 {
-            HStack(spacing: 1) {
-                ForEach(1...5, id: \.self) { star in
-                    Image(systemName: star <= rating ? "star.fill" : "star")
-                        .font(.appIcon(9))
-                        .foregroundStyle(star <= rating ? Color.favoriteGoldText : Color.appMuted.opacity(0.4))
-                }
+        // Unrated rows show empty stars on hover / selection so they can be rated.
+        if !item.isDirectory, rating > 0 || isHovered || isSelected {
+            StarRatingView(rating: rating, size: 10, fillColor: Color.favoriteGoldText) { newRating in
+                vm.setRating(newRating, for: item.path)
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(rating) star\(rating == 1 ? "" : "s")")
+            .help("Click a star to rate; click the current rating to clear it")
         } else {
             Text("")
         }
@@ -451,32 +480,134 @@ private struct FileListRow: View {
     }
 }
 
-/// Folder rows accept drops: internal items move into the folder, Finder
-/// files are imported into it. Non-folder rows let drops fall through to the
+/// Row drop handling. Folder rows take drops into the folder (internal items
+/// move, Finder files import). With Custom sort, internal drags reorder: the
+/// top / bottom half of a file row (the edges of a folder row) inserts before /
+/// after it, mirroring the grid. Other rows let drops fall through to the
 /// list's background (import into the current folder).
-private struct FolderRowDropModifier: ViewModifier {
+private struct FileListRowDropModifier: ViewModifier {
     @Environment(ExplorerViewModel.self) private var vm
     let item: FileEntry
+    let rowHeight: CGFloat
     @Binding var isDropTarget: Bool
+    @Binding var reorderPosition: ReorderPosition?
 
     func body(content: Content) -> some View {
-        if item.isDirectory {
-            content.onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTarget) { providers in
-                let target = item.url
-                Task {
-                    let urls = await URLDropLoader.loadURLs(from: providers).map(\.standardizedFileURL)
-                    guard !urls.isEmpty, !urls.contains(where: { $0.path == target.standardizedFileURL.path }) else { return }
-                    let listed = Set(vm.processedFolderContents.map(\.path))
-                    if urls.allSatisfy({ listed.contains($0.path) }) {
-                        await vm.moveDraggedItems(urls, to: target)
-                    } else {
-                        await vm.importExternalFiles(urls, to: target)
-                    }
-                }
-                return true
-            }
+        let isCustomSort = vm.sortConfig.field == .custom
+        if item.isDirectory || isCustomSort {
+            content.onDrop(
+                of: [UTType.fileURL.identifier],
+                delegate: FileListRowDropDelegate(
+                    item: item,
+                    rowHeight: rowHeight,
+                    allowsReorder: isCustomSort,
+                    isDropTarget: $isDropTarget,
+                    reorderPosition: $reorderPosition,
+                    dropHandler: handleDrop
+                )
+            )
         } else {
             content
         }
+    }
+
+    @MainActor
+    private func handleDrop(_ urls: [URL], intent: ExplorerDropIntent?) {
+        let urls = urls.map(\.standardizedFileURL)
+        guard !urls.isEmpty else { return }
+        let listed = Set(vm.processedFolderContents.map(\.path))
+        let isInternalDrag = urls.allSatisfy { listed.contains($0.path) }
+
+        guard isInternalDrag else {
+            if item.isDirectory, intent == .moveIntoFolder {
+                Task { await vm.importExternalFiles(urls, to: item.url) }
+            } else {
+                Task { await vm.importExternalFiles(urls) }
+            }
+            return
+        }
+
+        switch intent {
+        case .moveIntoFolder:
+            guard !urls.contains(where: { $0.path == item.url.standardizedFileURL.path }) else { return }
+            Task { await vm.moveDraggedItems(urls, to: item.url) }
+        case let .reorder(position):
+            let sourcePath = urls[0].path
+            let sourcePaths = vm.selectedPaths.contains(sourcePath) && vm.selectedIndices.count > 1
+                ? vm.selectedPaths
+                : [sourcePath]
+            vm.reorderItems(sourcePaths: sourcePaths, targetPath: item.path, position: position)
+        case nil:
+            break
+        }
+    }
+}
+
+private struct FileListRowDropDelegate: DropDelegate {
+    let item: FileEntry
+    let rowHeight: CGFloat
+    let allowsReorder: Bool
+    @Binding var isDropTarget: Bool
+    @Binding var reorderPosition: ReorderPosition?
+    let dropHandler: @MainActor ([URL], ExplorerDropIntent?) -> Void
+
+    func dropEntered(info: DropInfo) {
+        updatePreview(for: resolvedIntent(for: info.location.y))
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        let intent = resolvedIntent(for: info.location.y)
+        updatePreview(for: intent)
+        switch intent {
+        case .moveIntoFolder: return DropProposal(operation: .copy)
+        case .reorder: return DropProposal(operation: .move)
+        case nil: return nil
+        }
+    }
+
+    func dropExited(info: DropInfo) {
+        resetPreview()
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let providers = info.itemProviders(for: [UTType.fileURL.identifier])
+        let intent = resolvedIntent(for: info.location.y)
+        resetPreview()
+        guard !providers.isEmpty, intent != nil else { return false }
+        Task { @MainActor in
+            let urls = await URLDropLoader.loadURLs(from: providers)
+            dropHandler(urls, intent)
+        }
+        return true
+    }
+
+    private func resolvedIntent(for y: CGFloat) -> ExplorerDropIntent? {
+        if item.isDirectory {
+            guard allowsReorder else { return .moveIntoFolder }
+            let edge = min(max(rowHeight * 0.25, 6), 10)
+            if y <= edge { return .reorder(.before) }
+            if y >= rowHeight - edge { return .reorder(.after) }
+            return .moveIntoFolder
+        }
+        guard allowsReorder else { return nil }
+        return .reorder(y >= rowHeight / 2 ? .after : .before)
+    }
+
+    private func updatePreview(for intent: ExplorerDropIntent?) {
+        switch intent {
+        case .moveIntoFolder:
+            isDropTarget = true
+            reorderPosition = nil
+        case let .reorder(position):
+            isDropTarget = false
+            reorderPosition = position
+        case nil:
+            resetPreview()
+        }
+    }
+
+    private func resetPreview() {
+        isDropTarget = false
+        reorderPosition = nil
     }
 }

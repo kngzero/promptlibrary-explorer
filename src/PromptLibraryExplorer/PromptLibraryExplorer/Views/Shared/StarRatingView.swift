@@ -4,12 +4,20 @@ struct StarRatingView: View {
     let rating: Int
     let maxRating: Int
     let size: CGFloat
+    var fillColor: Color
     var onRate: ((Int) -> Void)?
 
-    init(rating: Int, maxRating: Int = 5, size: CGFloat = 14, onRate: ((Int) -> Void)? = nil) {
+    init(
+        rating: Int,
+        maxRating: Int = 5,
+        size: CGFloat = 14,
+        fillColor: Color = .appAccent,
+        onRate: ((Int) -> Void)? = nil
+    ) {
         self.rating = rating
         self.maxRating = maxRating
         self.size = size
+        self.fillColor = fillColor
         self.onRate = onRate
     }
 
@@ -18,7 +26,9 @@ struct StarRatingView: View {
             ForEach(1...maxRating, id: \.self) { star in
                 Image(systemName: star <= rating ? "star.fill" : "star")
                     .font(.appIcon(size, weight: .medium))
-                    .foregroundStyle(star <= rating ? Color.appAccent : Color.appMuted.opacity(0.4))
+                    .foregroundStyle(star <= rating ? fillColor : Color.appMuted.opacity(0.4))
+                    // Whole glyph box is clickable, not just the star's ink.
+                    .contentShape(Rectangle())
                     .onTapGesture {
                         if let onRate {
                             onRate(star == rating ? 0 : star)

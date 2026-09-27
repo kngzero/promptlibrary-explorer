@@ -591,15 +591,17 @@ enum ImageMetadataWriter {
         try verifyDecodable(output, matching: original)
     }
 
-    /// Emits tEXt for Latin-1 text and uncompressed iTXt (UTF-8) otherwise, per the PNG spec.
+    /// Emits tEXt for pure-ASCII text and uncompressed iTXt (UTF-8) otherwise. tEXt is Latin-1 by
+    /// spec, but many tools put UTF-8 in it (and readers, including this app, decode it UTF-8
+    /// first), so non-ASCII text always goes to iTXt, where the encoding is unambiguous.
     private static func buildTextChunk(keyword: String, text: String) -> Data {
         var payload = Data(keyword.utf8)
         payload.append(0) // null separator
 
         let type: String
-        if let latin1 = text.data(using: .isoLatin1) {
+        if text.utf8.allSatisfy({ $0 < 0x80 }) {
             type = "tEXt"
-            payload.append(latin1)
+            payload.append(Data(text.utf8))
         } else {
             type = "iTXt"
             payload.append(contentsOf: [0, 0]) // uncompressed, method 0
@@ -663,7 +665,9 @@ enum ImageMetadataWriter {
             throw WriterError.failedToCreateImageSource
         }
 
-        var block = existingParameterBlock(from: source) ?? ParameterBlock()
+        let previousBlock = existingParameterBlock(from: source)
+        let previousComment = existingUserComment(from: source)
+        var block = previousBlock ?? ParameterBlock()
         block.apply(metadata, mode: mode)
         let parametersString = block.serialized
 
@@ -674,16 +678,29 @@ enum ImageMetadataWriter {
             imageMetadata = CGImageMetadataCreateMutable()
         }
 
-        guard CGImageMetadataSetValueMatchingImageProperty(
-            imageMetadata,
-            kCGImagePropertyExifDictionary,
-            kCGImagePropertyExifUserComment,
-            parametersString as CFString
-        ) else {
-            throw WriterError.failedToCreateDestination
+        // Removing a tag isn't possible when merging into the source's metadata, so a write that
+        // removes tags replaces the metadata wholesale with `imageMetadata` (a full copy of the
+        // source's metadata minus the removed tags).
+        var removesTags = false
+        if parametersString.isEmpty {
+            // Everything was cleared: drop the UserComment rather than leaving an empty one.
+            if CGImageMetadataCopyTagWithPath(imageMetadata, nil, "exif:UserComment" as CFString) != nil {
+                CGImageMetadataRemoveTagWithPath(imageMetadata, nil, "exif:UserComment" as CFString)
+                removesTags = true
+            }
+        } else {
+            guard CGImageMetadataSetValueMatchingImageProperty(
+                imageMetadata,
+                kCGImagePropertyExifDictionary,
+                kCGImagePropertyExifUserComment,
+                parametersString as CFString
+            ) else {
+                throw WriterError.failedToCreateDestination
+            }
         }
 
         // ImageIO mirrors TIFF ImageDescription into XMP dc:description.
+        var clearedDescriptions: Set<String> = []
         if !block.prompt.isEmpty {
             _ = CGImageMetadataSetValueMatchingImageProperty(
                 imageMetadata,
@@ -691,6 +708,28 @@ enum ImageMetadataWriter {
                 kCGImagePropertyTIFFImageDescription,
                 block.prompt as CFString
             )
+        } else {
+            // The prompt was cleared. Remove the descriptions the app mirrored it into, but only when
+            // they still hold the old prompt / parameters text, so an unrelated caption survives.
+            let ownedValues = Set(
+                [previousBlock?.prompt, previousComment, previousBlock?.serialized]
+                    .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            )
+            let descriptions = existingDescriptions(from: source, metadata: imageMetadata)
+            // ImageIO maps TIFF ImageDescription onto XMP dc:description, so both paths are removed.
+            if let tiff = descriptions.tiff, ownedValues.contains(tiff) {
+                CGImageMetadataRemoveTagWithPath(imageMetadata, nil, "tiff:ImageDescription" as CFString)
+                CGImageMetadataRemoveTagWithPath(imageMetadata, nil, "dc:description" as CFString)
+                clearedDescriptions.insert(tiff)
+                removesTags = true
+            }
+            if let xmp = descriptions.xmp, ownedValues.contains(xmp) {
+                CGImageMetadataRemoveTagWithPath(imageMetadata, nil, "dc:description" as CFString)
+                CGImageMetadataRemoveTagWithPath(imageMetadata, nil, "tiff:ImageDescription" as CFString)
+                clearedDescriptions.insert(xmp)
+                removesTags = true
+            }
         }
 
         let uti = CGImageSourceGetType(source) ?? (UTType.jpeg.identifier as CFString)
@@ -702,7 +741,7 @@ enum ImageMetadataWriter {
         // Lossless: copies the compressed image data and merges in the new metadata (existing XMP kept).
         let options: [CFString: Any] = [
             kCGImageDestinationMetadata: imageMetadata,
-            kCGImageDestinationMergeMetadata: true,
+            kCGImageDestinationMergeMetadata: !removesTags,
         ]
         var copyError: Unmanaged<CFError>?
         guard CGImageDestinationCopyImageSource(destination, source, options as CFDictionary, &copyError) else {
@@ -711,11 +750,75 @@ enum ImageMetadataWriter {
         }
 
         let output = outputData as Data
-        try verifyJPEG(output, original: original, expectedUserComment: parametersString)
+        try verifyJPEG(
+            output,
+            original: original,
+            expectedUserComment: parametersString,
+            clearedDescriptions: clearedDescriptions
+        )
         try MetadataFileReplacer.replaceContents(of: url, with: output)
     }
 
-    private static func verifyJPEG(_ output: Data, original: Data, expectedUserComment: String) throws {
+    /// The raw (trimmed) EXIF UserComment, if any.
+    private static func existingUserComment(from source: CGImageSource) -> String? {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any],
+              let comment = decodedUserComment(exif[kCGImagePropertyExifUserComment])?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !comment.isEmpty
+        else {
+            return nil
+        }
+        return comment
+    }
+
+    /// Current TIFF ImageDescription and XMP dc:description (default-language item), trimmed.
+    private static func existingDescriptions(
+        from source: CGImageSource,
+        metadata: CGImageMetadata?
+    ) -> (tiff: String?, xmp: String?) {
+        func trimmed(_ value: String?) -> String? {
+            guard let value = value?.replacingOccurrences(of: "\0", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+            return value
+        }
+
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let tiffDictionary = properties?[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+        let tiff = trimmed(tiffDictionary?[kCGImagePropertyTIFFImageDescription] as? String)
+
+        var xmp: String?
+        if let metadata, let tag = CGImageMetadataCopyTagWithPath(metadata, nil, "dc:description" as CFString) {
+            let value = CGImageMetadataTagCopyValue(tag)
+            if let string = value as? String {
+                xmp = trimmed(string)
+            } else if let items = value as? [Any] {
+                // Alternative-language array: take the first item's value.
+                for item in items {
+                    if let string = item as? String {
+                        xmp = trimmed(string)
+                        break
+                    }
+                    let object = item as AnyObject
+                    if CFGetTypeID(object) == CGImageMetadataTagGetTypeID(),
+                       // swiftlint:disable:next force_cast
+                       let string = CGImageMetadataTagCopyValue(object as! CGImageMetadataTag) as? String
+                    {
+                        xmp = trimmed(string)
+                        break
+                    }
+                }
+            }
+        }
+        return (tiff, xmp)
+    }
+
+    private static func verifyJPEG(
+        _ output: Data,
+        original: Data,
+        expectedUserComment: String,
+        clearedDescriptions: Set<String> = []
+    ) throws {
         guard output.count > 4, output[output.startIndex] == 0xFF, output[output.startIndex + 1] == 0xD8 else {
             throw WriterError.verificationFailed("output is not a JPEG")
         }
@@ -728,14 +831,31 @@ enum ImageMetadataWriter {
             throw WriterError.verificationFailed("image data would be re-encoded")
         }
 
-        guard let source = CGImageSourceCreateWithData(output as CFData, nil),
-              let comment = existingParameterBlock(from: source)
-        else {
+        guard let source = CGImageSourceCreateWithData(output as CFData, nil) else {
             throw WriterError.verificationFailed("metadata didn't read back")
         }
         let expected = ParameterBlock(parsing: expectedUserComment)
-        guard comment.serialized == expected.serialized else {
-            throw WriterError.verificationFailed("metadata didn't read back")
+        if expected.serialized.isEmpty {
+            // Clearing everything: success means no parameters remain.
+            if let remaining = existingParameterBlock(from: source), !remaining.serialized.isEmpty {
+                throw WriterError.verificationFailed("cleared metadata didn't read back")
+            }
+        } else {
+            guard let comment = existingParameterBlock(from: source),
+                  comment.serialized == expected.serialized
+            else {
+                throw WriterError.verificationFailed("metadata didn't read back")
+            }
+        }
+
+        if !clearedDescriptions.isEmpty {
+            let descriptions = existingDescriptions(from: source, metadata: CGImageSourceCopyMetadataAtIndex(source, 0, nil))
+            if let tiff = descriptions.tiff, clearedDescriptions.contains(tiff) {
+                throw WriterError.verificationFailed("cleared image description didn't read back")
+            }
+            if let xmp = descriptions.xmp, clearedDescriptions.contains(xmp) {
+                throw WriterError.verificationFailed("cleared XMP description didn't read back")
+            }
         }
 
         try verifyDecodable(output, matching: original)

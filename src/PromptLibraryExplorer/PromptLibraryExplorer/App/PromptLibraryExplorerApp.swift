@@ -112,9 +112,10 @@ struct PromptLibraryExplorerApp: App {
                 .disabled(isBlocked || !explorerVM.canCreateFolder)
 
                 Button("Rename") {
-                    run { NotificationCenter.default.post(name: .beginRenameSelection, object: nil) }
+                    // The inline rename field lives in the browser, under the lightbox.
+                    run(allowInLightbox: false) { NotificationCenter.default.post(name: .beginRenameSelection, object: nil) }
                 }
-                .disabled(isBlocked || explorerVM.selectedIndices.count != 1)
+                .disabled(isBlocked || explorerVM.lightboxOpen || explorerVM.selectedIndices.count != 1)
 
                 Button("Batch Rename…") {
                     run { explorerVM.batchRenameOpen = true }
@@ -213,8 +214,9 @@ struct PromptLibraryExplorerApp: App {
             }
             CommandGroup(replacing: .textEditing) {
                 Button("Find") {
-                    // Works from a focused text field too.
-                    run { NotificationCenter.default.post(name: .focusSearchField, object: nil) }
+                    // Works from a focused text field too. The search field sits
+                    // under the lightbox, so close it first.
+                    runClosingLightbox { NotificationCenter.default.post(name: .focusSearchField, object: nil) }
                 }
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(isBlocked || explorerVM.explorerRootPath == nil)
@@ -379,7 +381,8 @@ struct PromptLibraryExplorerApp: App {
                 Divider()
 
                 Button("Command Palette") {
-                    run { NotificationCenter.default.post(name: .toggleCommandPalette, object: nil) }
+                    // The palette is an overlay under the lightbox; close it first.
+                    runClosingLightbox { NotificationCenter.default.post(name: .toggleCommandPalette, object: nil) }
                 }
                 .keyboardShortcut("k", modifiers: .command)
                 .disabled(isBlocked || explorerVM.explorerRootPath == nil)
@@ -473,6 +476,19 @@ struct PromptLibraryExplorerApp: App {
         guard !explorerVM.isModalBlockingCommands else { return }
         if !allowInLightbox, explorerVM.lightboxOpen { return }
         action()
+    }
+
+    /// For commands whose target (the header search field, the command
+    /// palette) sits underneath the lightbox: close the lightbox, then act on
+    /// the next run-loop turn once the browser chrome is back.
+    private func runClosingLightbox(_ action: @escaping () -> Void) {
+        guard !explorerVM.isModalBlockingCommands else { return }
+        guard explorerVM.lightboxOpen else {
+            action()
+            return
+        }
+        explorerVM.lightboxOpen = false
+        DispatchQueue.main.async { action() }
     }
 
     private func viewModeBinding(_ mode: BrowserViewMode) -> Binding<Bool> {

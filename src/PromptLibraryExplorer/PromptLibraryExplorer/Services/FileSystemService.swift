@@ -104,6 +104,17 @@ enum FileSystemService {
         to destinationDir: URL,
         onDuplicate policy: DuplicateNamePolicy
     ) throws -> MoveResolution {
+        try moveFileReportingReplacement(from: source, to: destinationDir, onDuplicate: policy).resolution
+    }
+
+    /// Like `moveFile(from:to:onDuplicate:)`, but also reports where a replaced
+    /// item went: with `.replace`, `replacedTrashURL` is the Trash location of
+    /// the item that used to be at the destination (the `.moved` URL).
+    static func moveFileReportingReplacement(
+        from source: URL,
+        to destinationDir: URL,
+        onDuplicate policy: DuplicateNamePolicy
+    ) throws -> (resolution: MoveResolution, replacedTrashURL: URL?) {
         let sourceURL = source.standardizedFileURL
         let proposedURL = destinationDir
             .appendingPathComponent(sourceURL.lastPathComponent)
@@ -111,25 +122,25 @@ enum FileSystemService {
 
         // No collision (or the file is already exactly where it is going).
         guard fm.fileExists(atPath: proposedURL.path), proposedURL != sourceURL else {
-            return .moved(try moveEntry(from: sourceURL, to: proposedURL))
+            return (.moved(try moveEntry(from: sourceURL, to: proposedURL)), nil)
         }
 
         // The "existing" destination is the source itself, reached via a symlinked or
         // case-variant path. Treat as a no-op rather than trashing the file we are moving.
         if isSameFile(sourceURL, proposedURL) {
-            return .moved(sourceURL)
+            return (.moved(sourceURL), nil)
         }
 
         switch policy {
         case .keepBoth:
-            return .moved(try moveEntry(from: sourceURL, to: nonConflictingURL(for: proposedURL)))
+            return (.moved(try moveEntry(from: sourceURL, to: nonConflictingURL(for: proposedURL))), nil)
         case .skip:
-            return .skipped
+            return (.skipped, nil)
         case .replace:
             // Trash rather than delete, so a mistaken replace is still recoverable.
             let trashedURL = try moveToTrash(at: proposedURL)
             do {
-                return .moved(try moveEntry(from: sourceURL, to: proposedURL))
+                return (.moved(try moveEntry(from: sourceURL, to: proposedURL)), trashedURL)
             } catch {
                 // Put the replaced item back so a failed move doesn't lose it to the Trash.
                 if !fm.fileExists(atPath: proposedURL.path) {

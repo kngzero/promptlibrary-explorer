@@ -171,3 +171,75 @@ struct ContentGroupHeader: View {
         .accessibilityAddTraits(.isHeader)
     }
 }
+
+// MARK: - Keyboard navigation layout
+
+/// The on-screen arrangement of the listing, for arrow-key navigation: each
+/// expanded group's items laid out in rows of `columns` (every group starts a
+/// new row), collapsed groups contributing nothing. Indices are positions in
+/// `processedFolderContents`.
+struct ContentNavigationLayout {
+    let rows: [[Int]]
+    /// Visible items in on-screen order.
+    let order: [Int]
+    private let positions: [Int: (row: Int, column: Int)]
+
+    init(itemCount: Int, groups: [ContentGroup], collapsedGroups: Set<String>, columns: Int) {
+        let columns = max(1, columns)
+        let sections: [[Int]]
+        if groups.isEmpty {
+            sections = [Array(0..<max(0, itemCount))]
+        } else {
+            sections = groups
+                .filter { !collapsedGroups.contains($0.id) }
+                .map { $0.indices.filter { $0 >= 0 && $0 < itemCount } }
+        }
+
+        var rows: [[Int]] = []
+        for section in sections where !section.isEmpty {
+            var start = 0
+            while start < section.count {
+                rows.append(Array(section[start..<min(section.count, start + columns)]))
+                start += columns
+            }
+        }
+
+        var positions: [Int: (row: Int, column: Int)] = [:]
+        for (rowIndex, row) in rows.enumerated() {
+            for (column, index) in row.enumerated() {
+                positions[index] = (rowIndex, column)
+            }
+        }
+        self.rows = rows
+        self.order = rows.flatMap { $0 }
+        self.positions = positions
+    }
+
+    func position(of index: Int) -> (row: Int, column: Int)? {
+        positions[index]
+    }
+
+    /// Previous (`step` < 0) or next visible item in on-screen order. An index
+    /// that isn't visible (inside a collapsed group) resolves to the nearest
+    /// visible item on that side.
+    func neighbor(of index: Int, step: Int) -> Int? {
+        guard !order.isEmpty else { return nil }
+        if let offset = order.firstIndex(of: index) {
+            let target = offset + step
+            return order.indices.contains(target) ? order[target] : nil
+        }
+        return step > 0 ? order.first(where: { $0 > index }) : order.last(where: { $0 < index })
+    }
+
+    /// Same column in the row above (`direction` < 0) or below, clamped to the
+    /// last item of a shorter row; crosses group boundaries.
+    func vertical(from index: Int, direction: Int) -> Int? {
+        guard let position = position(of: index) else {
+            return neighbor(of: index, step: direction)
+        }
+        let targetRow = position.row + (direction < 0 ? -1 : 1)
+        guard rows.indices.contains(targetRow) else { return nil }
+        let row = rows[targetRow]
+        return row[min(position.column, row.count - 1)]
+    }
+}

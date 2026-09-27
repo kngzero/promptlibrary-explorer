@@ -24,7 +24,9 @@ final class SnippetService {
     private var snippets: [PromptSnippet]
 
     private init() {
-        snippets = CollectionServiceStorage.load([PromptSnippet].self, from: Self.fileName) ?? []
+        // Unreadable files are moved aside and bad entries skipped (with a backup copy), so a
+        // later save never overwrites the only copy of the user's snippets.
+        snippets = CollectionServiceStorage.loadArray(PromptSnippet.self, from: Self.fileName).elements
     }
 
     func all() -> [PromptSnippet] { snippets }

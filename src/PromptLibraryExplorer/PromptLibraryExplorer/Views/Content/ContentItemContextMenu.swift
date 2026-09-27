@@ -122,16 +122,14 @@ struct ContentItemContextMenu: View {
             Button("Remove from Collection", action: onSelection { vm.removeSelectionFromActiveCollection() })
         }
 
-        if vm.selectedIndices.count == 2 {
-            Button("Compare Prompts") {
-                vm.openPromptDiff()
-            }
+        // `targets` is the selection as it will be after `ensureSelected`
+        // (right-clicking an unselected item selects just that item).
+        if targets.count == 2 {
+            Button("Compare Prompts", action: onSelection { vm.openPromptDiff() })
         }
 
-        if targets.contains(where: { vm.isEmbeddableImageFile($0.name) }) && vm.selectedIndices.count > 1 {
-            Button("Batch Edit Metadata") {
-                vm.openBatchMetadataEditor()
-            }
+        if targets.count > 1, targets.contains(where: { vm.isEmbeddableImageFile($0.name) }) {
+            Button("Batch Edit Metadata", action: onSelection { vm.openBatchMetadataEditor() })
         }
 
         Divider()

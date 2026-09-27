@@ -62,6 +62,45 @@ actor PromptIndexService {
         index.removeValue(forKey: path)
     }
 
+    struct PathMove: Sendable, Hashable {
+        let from: String
+        let to: String
+    }
+
+    /// Patches the index after files changed paths, without touching build
+    /// state (a complete index stays complete). Removes `removing` (and their
+    /// descendants), then applies `moves` as one simultaneous step — so swaps
+    /// and chains keep each file's text — then removes `thenRemoving`.
+    func apply(removing: [String], moves: [PathMove], thenRemoving: [String] = []) {
+        func isSameOrDescendant(_ path: String, of ancestor: String) -> Bool {
+            path == ancestor || path.hasPrefix(ancestor.hasSuffix("/") ? ancestor : ancestor + "/")
+        }
+        func removeTree(_ root: String) {
+            index.removeValue(forKey: root)
+            let prefix = root.hasSuffix("/") ? root : root + "/"
+            for key in index.keys where key.hasPrefix(prefix) {
+                index.removeValue(forKey: key)
+            }
+        }
+
+        for path in removing { removeTree(path) }
+
+        let effective = moves.filter { $0.from != $0.to }
+        if !effective.isEmpty {
+            // Lift every moving entry out first, then place them all.
+            var lifted: [(to: String, text: String)] = []
+            for move in effective {
+                for (key, text) in index where isSameOrDescendant(key, of: move.from) {
+                    lifted.append((move.to + key.dropFirst(move.from.count), text))
+                }
+            }
+            for move in effective { removeTree(move.from) }
+            for entry in lifted { index[entry.to] = entry.text }
+        }
+
+        for path in thenRemoving { removeTree(path) }
+    }
+
     /// Clear the entire index and any build state.
     func clearIndex() {
         index.removeAll()

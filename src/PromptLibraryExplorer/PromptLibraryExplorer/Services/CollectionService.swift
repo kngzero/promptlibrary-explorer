@@ -51,6 +51,82 @@ enum CollectionServiceStorage {
         return try? decoder.decode(T.self, from: data)
     }
 
+    /// Outcome of loading a JSON array store.
+    enum LoadStatus: Equatable {
+        /// No file yet: start empty.
+        case missing
+        /// Every element decoded.
+        case loaded
+        /// Some elements couldn't be decoded and were skipped; the original file was copied to `backup`.
+        case partial(skipped: Int, backup: URL?)
+        /// The file couldn't be read or isn't a JSON array. It was moved aside to `backup` so a later
+        /// save can't overwrite the only copy.
+        case unreadable(backup: URL?)
+
+        /// True when the in-memory data is a faithful copy of the file (safe to repair and re-save).
+        var isClean: Bool {
+            switch self {
+            case .missing, .loaded: return true
+            case .partial, .unreadable: return false
+            }
+        }
+    }
+
+    /// Wraps an element so one undecodable entry doesn't fail the whole array.
+    private struct Lenient<Element: Decodable>: Decodable {
+        let value: Element?
+        init(from decoder: Decoder) throws {
+            value = try? Element(from: decoder)
+        }
+    }
+
+    /// Loads a JSON array element by element: bad elements are skipped (and the file backed up),
+    /// an unreadable file is renamed to `<name>.corrupt-<timestamp>.json` and an empty array returned.
+    static func loadArray<Element: Decodable>(_ type: Element.Type, from fileName: String) -> (elements: [Element], status: LoadStatus) {
+        let url = directoryURL.appendingPathComponent(fileName)
+        guard FileManager.default.fileExists(atPath: url.path) else { return ([], .missing) }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let data = try? Data(contentsOf: url),
+              let wrapped = try? decoder.decode([Lenient<Element>].self, from: data)
+        else {
+            let backup = backupURL(for: fileName)
+            do {
+                try FileManager.default.moveItem(at: url, to: backup)
+                NSLog("PromptLibraryExplorer: %@ couldn't be read; moved it to %@", fileName, backup.lastPathComponent)
+                return ([], .unreadable(backup: backup))
+            } catch {
+                NSLog("PromptLibraryExplorer: %@ couldn't be read or backed up: %@", fileName, error.localizedDescription)
+                return ([], .unreadable(backup: nil))
+            }
+        }
+
+        let elements = wrapped.compactMap(\.value)
+        let skipped = wrapped.count - elements.count
+        guard skipped > 0 else { return (elements, .loaded) }
+
+        let backup = backupURL(for: fileName)
+        let copied = (try? FileManager.default.copyItem(at: url, to: backup)) != nil
+        NSLog("PromptLibraryExplorer: skipped %d unreadable entries in %@", skipped, fileName)
+        return (elements, .partial(skipped: skipped, backup: copied ? backup : nil))
+    }
+
+    private static func backupURL(for fileName: String) -> URL {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let stamp = formatter.string(from: Date())
+        let base = (fileName as NSString).deletingPathExtension
+        var candidate = directoryURL.appendingPathComponent("\(base).corrupt-\(stamp).json")
+        var counter = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = directoryURL.appendingPathComponent("\(base).corrupt-\(stamp)-\(counter).json")
+            counter += 1
+        }
+        return candidate
+    }
+
     static func save<T: Encodable>(_ value: T, to fileName: String) {
         let url = directoryURL.appendingPathComponent(fileName)
         let encoder = JSONEncoder()
@@ -82,8 +158,15 @@ final class CollectionService {
     private var sets: [CollectionSet]
 
     private init() {
-        collections = CollectionServiceStorage.load([FileCollection].self, from: Self.fileName) ?? []
-        sets = CollectionServiceStorage.load([CollectionSet].self, from: Self.setsFileName) ?? []
+        let loadedCollections = CollectionServiceStorage.loadArray(FileCollection.self, from: Self.fileName)
+        let loadedSets = CollectionServiceStorage.loadArray(CollectionSet.self, from: Self.setsFileName)
+        collections = loadedCollections.elements
+        sets = loadedSets.elements
+
+        // Only repair (and re-save) when both files loaded faithfully. If either was unreadable or
+        // partly skipped, "orphaned" parents may just be entries we couldn't decode; leave the data
+        // as-is so nothing is written until the user makes a change (the backup stays either way).
+        guard loadedCollections.status.isClean, loadedSets.status.isClean else { return }
 
         // A set deleted by an older build (or a hand-edited file) must not strand its children.
         let setIDs = Set(sets.map(\.id))

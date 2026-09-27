@@ -273,6 +273,9 @@ struct MetadataPanelView: View {
                             Text("Rating")
                                 .font(.appCalloutEmphasis)
                                 .foregroundStyle(Color.appMuted)
+                                .lineLimit(1)
+                                .fixedSize()
+                                .layoutPriority(1)
                             Spacer()
 
                             // Favorite toggle
@@ -308,6 +311,9 @@ struct MetadataPanelView: View {
                                 Text("Tags")
                                     .font(.appCalloutEmphasis)
                                     .foregroundStyle(Color.appMuted)
+                                    .lineLimit(1)
+                                    .fixedSize()
+                                    .layoutPriority(1)
 
                                 TagPillsView(tags: fileTags)
 

@@ -2,6 +2,7 @@ import Foundation
 
 struct RenameTemplateContext: Sendable {
     var url: URL
+    /// 0-based position in the batch; `{counter}` renders it 1-based.
     var index: Int
     var modifiedDate: Date?
     var prompt: String?
@@ -73,7 +74,14 @@ enum RenameTemplateService {
         ("{counter:N}", "Counter zero-padded to N digits, e.g. {counter:3} → 001"),
     ]
 
+    /// Soft cap on the rendered base name, in characters.
     static let maxBaseNameLength = 180
+    /// Hard cap on a whole rendered file name in UTF-8 bytes. APFS allows 255;
+    /// the rest is headroom for the " 9999" collision suffix `plan` may add.
+    static let maxFileNameBytes = 250
+    static let collisionSuffixReserveBytes = 5
+    /// Longest extension kept, in UTF-8 bytes (only reachable with text after `{ext}`).
+    static let maxExtensionBytes = 64
     static let defaultPromptLength = 60
 
     private static let tokenPattern = try! NSRegularExpression(pattern: #"\{([A-Za-z]+)(?::([^{}]*))?\}"#)
@@ -128,11 +136,48 @@ enum RenameTemplateService {
         ext = sanitize(ext).trimmingCharacters(in: CharacterSet(charactersIn: ". "))
         if base.isEmpty { base = sanitize(originalBase) }
         if base.isEmpty { base = "Untitled" }
+        let trimSet = CharacterSet(charactersIn: ". ").union(.whitespaces)
+        if ext.utf8.count > maxExtensionBytes {
+            ext = truncated(ext, maxUTF8Bytes: maxExtensionBytes).trimmingCharacters(in: trimSet)
+        }
         if base.count > maxBaseNameLength {
-            base = String(base.prefix(maxBaseNameLength)).trimmingCharacters(in: CharacterSet(charactersIn: ". ").union(.whitespaces))
+            base = String(base.prefix(maxBaseNameLength)).trimmingCharacters(in: trimSet)
+        }
+        let extensionBytes = ext.isEmpty ? 0 : ext.utf8.count + 1
+        let baseBudget = max(16, maxFileNameBytes - collisionSuffixReserveBytes - extensionBytes)
+        if base.utf8.count > baseBudget {
+            base = truncated(base, maxUTF8Bytes: baseBudget).trimmingCharacters(in: trimSet)
+            if base.isEmpty { base = "Untitled" }
         }
         return ext.isEmpty ? base : "\(base).\(ext)"
     }
+
+    /// Longest prefix of whole grapheme clusters whose UTF-8 encoding fits in `maxUTF8Bytes`.
+    static func truncated(_ text: String, maxUTF8Bytes: Int) -> String {
+        guard text.utf8.count > maxUTF8Bytes else { return text }
+        var result = ""
+        var bytes = 0
+        for character in text {
+            let size = character.utf8.count
+            if bytes + size > maxUTF8Bytes { break }
+            result.append(character)
+            bytes += size
+        }
+        return result
+    }
+
+    /// True when `template` uses any of `tokens` (names without braces, e.g. "prompt"),
+    /// matched case-insensitively the same way `render` resolves them.
+    static func usesAnyToken(_ tokenNames: Set<String>, in template: String) -> Bool {
+        let ns = template as NSString
+        for match in tokenPattern.matches(in: template, range: NSRange(location: 0, length: ns.length)) {
+            if tokenNames.contains(ns.substring(with: match.range(at: 1)).lowercased()) { return true }
+        }
+        return false
+    }
+
+    /// Tokens whose value comes from parsed generation metadata.
+    static let parsedDataTokens: Set<String> = ["prompt", "model", "seed", "sampler", "steps", "cfg", "width", "height"]
 
     /// Plans a batch rename: renders every item, marks unchanged names, and resolves collisions
     /// (within the batch and against files already in each destination folder) by appending " 2", " 3"….
@@ -255,6 +300,8 @@ enum RenameTemplateService {
     /// "models/sd_xl_base_1.0.safetensors" → "sd_xl_base_1.0"
     private static func cleanModelName(_ model: String) -> String {
         var name = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "N/A" means no model; check before path stripping turns it into "A".
+        if name.isEmpty || name.caseInsensitiveCompare("N/A") == .orderedSame { return "" }
         if let slash = name.lastIndex(where: { $0 == "/" || $0 == "\\" }) {
             name = String(name[name.index(after: slash)...])
         }

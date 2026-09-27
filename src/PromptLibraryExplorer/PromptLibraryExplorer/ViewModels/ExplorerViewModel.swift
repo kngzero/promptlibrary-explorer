@@ -86,6 +86,41 @@ private struct TrashRestoreRecord {
     let metadata: PathMetadataSnapshot
 }
 
+/// One undoable move step: items to trash first (redo of a Replace), then the
+/// moves, then items to put back from the Trash (undo of a Replace).
+private struct MoveBatch {
+    var trashFirst: [URL] = []
+    var moves: [PathMoveRecord] = []
+    var restoreAfter: [TrashRestoreRecord] = []
+    /// Apply the moves through unique temporary names so chained and swapped
+    /// names (a→b while b→c, or a↔b) work in any order.
+    var twoPhase = false
+
+    var isEmpty: Bool { trashFirst.isEmpty && moves.isEmpty && restoreAfter.isEmpty }
+    var itemCount: Int { trashFirst.count + moves.count + restoreAfter.count }
+}
+
+/// Paths a mutation touched, so a refresh can invalidate just those instead of
+/// every parser cache and the prompt index. Applied in order: removed, moved, added.
+private struct ListingPathChanges {
+    var removed: [String] = []
+    var moves: [(from: String, to: String)] = []
+    /// Paths that appeared from outside the listing (e.g. restored from Trash).
+    var added: [String] = []
+    /// Folders are involved; per-path invalidation would miss their descendants.
+    var involvesDirectories = false
+
+    var allPaths: [String] { removed + moves.flatMap { [$0.from, $0.to] } + added }
+
+    mutating func noteDirectory(at path: String) {
+        guard !involvesDirectories else { return }
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue {
+            involvesDirectories = true
+        }
+    }
+}
+
 /// Outcome of applying one history entry. A partially failed apply yields both
 /// an inverse (for what did happen) and a remainder (for what didn't), so a
 /// half-applied entry is never retried as a whole.
@@ -286,6 +321,8 @@ final class ExplorerViewModel {
             guard groupBy != oldValue else { return }
             settings.groupBy = groupBy.rawValue
             contentGroupsRevision &+= 1
+            // Grouping reorders the processed list so each group is contiguous.
+            invalidateProcessedFolderContents()
             if groupBy.needsGenerationParameters {
                 loadListingPromptDataIfNeeded(force: true)
             }
@@ -295,8 +332,12 @@ final class ExplorerViewModel {
     /// library index and from the per-folder prompt index build.
     var parametersByPath: [String: GenerationParameters] = [:] {
         didSet {
-            if groupBy.needsGenerationParameters { contentGroupsRevision &+= 1 }
-            if activeSmartFolder != nil { invalidateProcessedFolderContents() }
+            if groupBy.needsGenerationParameters {
+                contentGroupsRevision &+= 1
+                invalidateProcessedFolderContents()
+            } else if activeSmartFolder != nil {
+                invalidateProcessedFolderContents()
+            }
         }
     }
     /// Original-case positive / negative prompt text per path for the current
@@ -555,6 +596,10 @@ final class ExplorerViewModel {
             )
         }
 
+        if groupBy != .none {
+            items = groupedContiguously(items)
+        }
+
         processedFolderContentsCache = items
         processedFolderContentsCacheRevision = revision
         return items
@@ -721,15 +766,31 @@ final class ExplorerViewModel {
     }
 
     func refreshFolder() async {
+        await refreshFolder(changes: nil)
+    }
+
+    /// With `changes` (a mutation the app made itself), only the touched paths
+    /// are invalidated and the prompt index is patched per path; without, every
+    /// parser cache and the prompt index are dropped to pick up outside edits.
+    private func refreshFolder(changes: ListingPathChanges?) async {
         let generation = navigationGeneration
-        // Parser caches are keyed by path with no modification check and only
-        // support clear-all, so a refresh must drop them to pick up changes.
-        await clearParserCaches()
+        // Parser caches are keyed by path with no modification check, so a
+        // refresh must drop (at least the touched) entries to pick up changes.
+        var pathsToReparse: [String] = []
+        if let changes, !changes.involvesDirectories {
+            pathsToReparse = await invalidateCaches(for: changes)
+        } else {
+            await clearParserCaches()
+        }
         guard generation == navigationGeneration else { return }
         if activeCollectionID != nil {
             guard await reloadCollectionContents() else { return }
         } else {
             guard await refreshFolderContents(showLoading: false) else { return }
+        }
+        if !pathsToReparse.isEmpty {
+            await reindexPromptData(for: pathsToReparse)
+            guard generation == navigationGeneration else { return }
         }
         loadListingPromptDataIfNeeded(force: true)
         guard await refreshFolderTree() else { return }
@@ -961,7 +1022,9 @@ final class ExplorerViewModel {
         do {
             let renamedURL = try FileSystemService.rename(at: sourceURL, to: newName).standardizedFileURL
             migrateMetadataKeys(from: sourceURL.path, to: renamedURL.path)
-            await refreshAfterMutation(preferredPaths: [renamedURL.path])
+            var changes = ListingPathChanges(moves: [(sourceURL.path, renamedURL.path)])
+            changes.noteDirectory(at: renamedURL.path)
+            await refreshAfterMutation(preferredPaths: [renamedURL.path], changes: changes)
             recordFolderHistoryEntry(
                 makeMoveHistoryEntry(
                     recordsToApplyNext: [PathMoveRecord(from: renamedURL, to: sourceURL)],
@@ -2203,6 +2266,90 @@ final class ExplorerViewModel {
             .joined()
     }
 
+    /// Drops the parser-cache entries and patches the prompt index for the
+    /// paths in `changes`. Returns the paths that entered the listing and must
+    /// be parsed into the index to keep it complete for the current scope.
+    private func invalidateCaches(for changes: ListingPathChanges) async -> [String] {
+        for path in Set(changes.allPaths) {
+            await PlibParser.shared.invalidate(path: path)
+            await AoeParser.shared.invalidate(path: path)
+        }
+        // These two only support clear-all.
+        await ImageMetadataParser.shared.clearCache()
+        await AudioMetadataParser.shared.clearCache()
+
+        // A build in flight may already have read old paths; restart it.
+        if promptIndexBuildTask != nil {
+            cancelPromptIndexBuild()
+            await PromptIndexService.shared.clearIndex()
+            return []
+        }
+
+        let scope = promptIndexScope
+        let folderScope = activeCollectionID == nil ? selectedFolderPath?.standardizedFileURL.path : nil
+        func inScope(_ path: String) -> Bool {
+            guard let folderScope else { return true }  // collections: membership follows the file
+            return (path as NSString).deletingLastPathComponent == folderScope
+        }
+
+        var entering: [String] = []
+        // Moved out of the listed folder. (Removed paths' prompt data was already
+        // dropped by `removeMetadata`.)
+        var leaving: [String] = []
+        for move in changes.moves {
+            if !inScope(move.to) {
+                leaving.append(move.to)
+            } else if !inScope(move.from) {
+                entering.append(move.to)
+            }
+        }
+        entering += changes.added.filter(inScope)
+
+        let indexComplete: Bool
+        if let scope {
+            indexComplete = await PromptIndexService.shared.isIndexComplete(for: scope)
+        } else {
+            indexComplete = false
+        }
+        // Parsing a large import eagerly would cost more than a lazy rebuild.
+        if indexComplete, entering.count > 50 {
+            await PromptIndexService.shared.clearIndex()
+            return []
+        }
+
+        await PromptIndexService.shared.apply(
+            removing: changes.removed,
+            moves: changes.moves.map { PromptIndexService.PathMove(from: $0.from, to: $0.to) },
+            thenRemoving: leaving
+        )
+        for path in leaving {
+            promptTextByPath.removeValue(forKey: path)
+            negativePromptByPath.removeValue(forKey: path)
+            parametersByPath.removeValue(forKey: path)
+        }
+        return indexComplete ? entering : []
+    }
+
+    /// Parses `paths` (those still in the listing) into the prompt index and the
+    /// prompt text / parameter maps, as a full build would.
+    private func reindexPromptData(for paths: [String]) async {
+        let scope = promptIndexScope
+        let listed = Dictionary(listingSourceContents.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        for path in paths {
+            guard let item = listed[path], !item.isDirectory else { continue }
+            let parsed = await Self.parsePromptData(for: item)
+            guard promptIndexScope == scope else { return }
+            if let text = parsed.searchText, !text.isEmpty {
+                await PromptIndexService.shared.index(path: path, prompt: text)
+            }
+            if let prompt = parsed.prompt, !prompt.isEmpty { promptTextByPath[path] = prompt }
+            if let negative = parsed.negative, !negative.isEmpty { negativePromptByPath[path] = negative }
+            if !parsed.parameters.isEmpty {
+                parametersByPath[path] = (parametersByPath[path] ?? GenerationParameters()).filling(from: parsed.parameters)
+            }
+        }
+    }
+
     private func clearParserCaches() async {
         cancelPromptIndexBuild()
         await PlibParser.shared.clearCache()
@@ -2563,6 +2710,8 @@ final class ExplorerViewModel {
     /// Always refreshes, and the history entry covers exactly what moved.
     private func performMoveOperation(_ sources: [URL], to destinationDir: URL, title: String) async -> MoveOutcome {
         var appliedRecords: [PathMoveRecord] = []
+        var replacedRecords: [TrashRestoreRecord] = []
+        var changes = ListingPathChanges()
         var skippedCount = 0
         var failedCount = 0
         var firstError: Error?
@@ -2570,17 +2719,31 @@ final class ExplorerViewModel {
         for source in sources {
             let sourceURL = source.standardizedFileURL
             do {
-                let resolution = try FileSystemService.moveFile(
+                let report = try FileSystemService.moveFileReportingReplacement(
                     from: sourceURL,
                     to: destinationDir,
                     onDuplicate: duplicateNamePolicy
                 )
 
-                switch resolution {
+                switch report.resolution {
                 case let .moved(movedURL):
                     let record = PathMoveRecord(from: sourceURL, to: movedURL.standardizedFileURL)
+                    if let trashedURL = report.replacedTrashURL {
+                        // The replaced file's ratings, tags, favorite and collection
+                        // membership go with it into the Trash (and come back on undo);
+                        // the incoming file must not inherit them.
+                        let metadata = removeMetadata(under: record.to.path)
+                        replacedRecords.append(TrashRestoreRecord(
+                            trashedURL: trashedURL.standardizedFileURL,
+                            originalURL: record.to,
+                            metadata: metadata
+                        ))
+                        changes.removed.append(record.to.path)
+                    }
                     appliedRecords.append(record)
                     migrateMetadataKeys(from: record.from.path, to: record.to.path)
+                    changes.moves.append((record.from.path, record.to.path))
+                    changes.noteDirectory(at: record.to.path)
                 case .skipped:
                     skippedCount += 1
                 }
@@ -2590,12 +2753,16 @@ final class ExplorerViewModel {
             }
         }
 
-        await refreshAfterMutation(preferredPaths: appliedRecords.map { $0.to.path })
+        await refreshAfterMutation(preferredPaths: appliedRecords.map { $0.to.path }, changes: changes)
 
         // Nothing moved means nothing to undo, so no history entry is recorded.
+        // Undo moves the files back, then restores what they replaced.
         let historyEntry = appliedRecords.isEmpty
             ? nil
-            : makeMoveHistoryEntry(recordsToApplyNext: invertedMoveRecords(appliedRecords), title: title)
+            : makeMoveBatchHistoryEntry(
+                MoveBatch(moves: invertedMoveRecords(appliedRecords), restoreAfter: replacedRecords),
+                title: title
+            )
 
         return MoveOutcome(
             historyEntry: historyEntry,
@@ -2644,10 +2811,10 @@ final class ExplorerViewModel {
         return outcome.movedCount > 0 ? .success : .info
     }
 
-    /// Applies exact path moves, continuing past failures.
-    private func performExactMoveRecords(
+    /// Applies exact path moves in order, continuing past failures. Does not refresh.
+    private func performExactMoveRecordsNow(
         _ records: [PathMoveRecord]
-    ) async -> (applied: [PathMoveRecord], failed: [PathMoveRecord], firstError: Error?) {
+    ) -> (applied: [PathMoveRecord], failed: [PathMoveRecord], firstError: Error?) {
         var appliedRecords: [PathMoveRecord] = []
         var failedRecords: [PathMoveRecord] = []
         var firstError: Error?
@@ -2663,9 +2830,70 @@ final class ExplorerViewModel {
                 if firstError == nil { firstError = error }
             }
         }
-
-        await refreshAfterMutation(preferredPaths: appliedRecords.map { $0.to.path })
         return (appliedRecords, failedRecords, firstError)
+    }
+
+    /// Applies path moves in two phases — every source first goes to a unique
+    /// hidden name in its own folder, then each goes to its destination — so a
+    /// destination another item is vacating (chains, swaps) is always free.
+    /// An item whose second phase fails is put back under its original name
+    /// (or, if that got taken, a free name beside it). Does not refresh.
+    ///
+    /// `applied` lists every item that ended up somewhere new (including those
+    /// that fell back to a free name, counted in `misplacedCount`); `failed`
+    /// lists the ones left exactly where they started.
+    private func performTwoPhaseMovesNow(
+        _ records: [PathMoveRecord]
+    ) -> (applied: [PathMoveRecord], failed: [PathMoveRecord], misplacedCount: Int, firstError: Error?) {
+        let fm = FileManager.default
+        var staged: [(record: PathMoveRecord, temp: URL)] = []
+        var applied: [PathMoveRecord] = []
+        var failed: [PathMoveRecord] = []
+        var misplacedCount = 0
+        var firstError: Error?
+
+        for record in records {
+            let from = record.from.standardizedFileURL
+            let to = record.to.standardizedFileURL
+            guard from.path != to.path else { continue }
+            let temp = from.deletingLastPathComponent()
+                .appendingPathComponent(".plx-rename-\(UUID().uuidString)")
+                .standardizedFileURL
+            do {
+                try fm.moveItem(at: from, to: temp)
+                migrateMetadataKeys(from: from.path, to: temp.path)
+                staged.append((PathMoveRecord(from: from, to: to), temp))
+            } catch {
+                failed.append(record)
+                if firstError == nil { firstError = error }
+            }
+        }
+
+        for (record, temp) in staged {
+            do {
+                // moveEntry never overwrites: an occupied destination throws.
+                let final = try FileSystemService.moveEntry(from: temp, to: record.to).standardizedFileURL
+                migrateMetadataKeys(from: temp.path, to: final.path)
+                applied.append(PathMoveRecord(from: record.from, to: final))
+            } catch {
+                if firstError == nil { firstError = error }
+                if (try? fm.moveItem(at: temp, to: record.from)) != nil {
+                    migrateMetadataKeys(from: temp.path, to: record.from.path)
+                    failed.append(record)
+                    continue
+                }
+                misplacedCount += 1
+                let fallback = FileSystemService.nonConflictingURL(for: record.from).standardizedFileURL
+                if (try? fm.moveItem(at: temp, to: fallback)) != nil {
+                    migrateMetadataKeys(from: temp.path, to: fallback.path)
+                    applied.append(PathMoveRecord(from: record.from, to: fallback))
+                } else {
+                    // Still under its temporary name; undo can move it back.
+                    applied.append(PathMoveRecord(from: record.from, to: temp))
+                }
+            }
+        }
+        return (applied, failed, misplacedCount, firstError)
     }
 
     /// Trashes each URL, continuing past failures. Metadata is lifted off each
@@ -2674,6 +2902,19 @@ final class ExplorerViewModel {
     private func trashURLs(
         _ urls: [URL]
     ) async -> (records: [TrashRestoreRecord], failed: [URL], firstError: Error?) {
+        let outcome = trashURLsNow(urls)
+        var changes = ListingPathChanges()
+        for record in outcome.records {
+            changes.removed.append(record.originalURL.path)
+            changes.noteDirectory(at: record.trashedURL.path)
+        }
+        await refreshAfterMutation(changes: changes)
+        return outcome
+    }
+
+    private func trashURLsNow(
+        _ urls: [URL]
+    ) -> (records: [TrashRestoreRecord], failed: [URL], firstError: Error?) {
         var restoreRecords: [TrashRestoreRecord] = []
         var failedURLs: [URL] = []
         var firstError: Error?
@@ -2691,14 +2932,25 @@ final class ExplorerViewModel {
                 if firstError == nil { firstError = error }
             }
         }
-
-        await refreshAfterMutation()
         return (restoreRecords, failedURLs, firstError)
     }
 
     private func restoreTrashedRecords(
         _ records: [TrashRestoreRecord]
     ) async -> (restored: [URL], failed: [TrashRestoreRecord], firstError: Error?) {
+        let outcome = restoreTrashedRecordsNow(records)
+        var changes = ListingPathChanges()
+        for url in outcome.restored {
+            changes.added.append(url.path)
+            changes.noteDirectory(at: url.path)
+        }
+        await refreshAfterMutation(preferredPaths: outcome.restored.map(\.path), changes: changes)
+        return outcome
+    }
+
+    private func restoreTrashedRecordsNow(
+        _ records: [TrashRestoreRecord]
+    ) -> (restored: [URL], failed: [TrashRestoreRecord], firstError: Error?) {
         var restoredURLs: [URL] = []
         var failedRecords: [TrashRestoreRecord] = []
         var firstError: Error?
@@ -2713,25 +2965,75 @@ final class ExplorerViewModel {
                 if firstError == nil { firstError = error }
             }
         }
-
-        await refreshAfterMutation(preferredPaths: restoredURLs.map(\.path))
         return (restoredURLs, failedRecords, firstError)
     }
 
     private func makeMoveHistoryEntry(recordsToApplyNext: [PathMoveRecord], title: String) -> FolderHistoryEntry {
+        makeMoveBatchHistoryEntry(MoveBatch(moves: recordsToApplyNext), title: title)
+    }
+
+    /// History entry that applies `batch`; its inverse is the batch that undoes
+    /// exactly what applied (moves reversed, trash and restore swapped).
+    private func makeMoveBatchHistoryEntry(_ batch: MoveBatch, title: String) -> FolderHistoryEntry {
         FolderHistoryEntry(title: title) { [weak self] in
-            guard let self else { return ExplorerViewModel.releasedHistoryResult(count: recordsToApplyNext.count) }
-            let outcome = await self.performExactMoveRecords(recordsToApplyNext)
+            guard let self else { return ExplorerViewModel.releasedHistoryResult(count: batch.itemCount) }
+
+            let trashed = self.trashURLsNow(batch.trashFirst)
+
+            var moveApplied: [PathMoveRecord]
+            var moveFailed: [PathMoveRecord]
+            var moveError: Error?
+            var misplacedCount = 0
+            if batch.twoPhase {
+                let outcome = self.performTwoPhaseMovesNow(batch.moves)
+                (moveApplied, moveFailed, misplacedCount, moveError) =
+                    (outcome.applied, outcome.failed, outcome.misplacedCount, outcome.firstError)
+            } else {
+                let outcome = self.performExactMoveRecordsNow(batch.moves)
+                (moveApplied, moveFailed, moveError) = (outcome.applied, outcome.failed, outcome.firstError)
+            }
+
+            let restored = self.restoreTrashedRecordsNow(batch.restoreAfter)
+
+            var changes = ListingPathChanges()
+            for record in trashed.records {
+                changes.removed.append(record.originalURL.path)
+                changes.noteDirectory(at: record.trashedURL.path)
+            }
+            for record in moveApplied {
+                changes.moves.append((record.from.path, record.to.path))
+                changes.noteDirectory(at: record.to.path)
+            }
+            for url in restored.restored {
+                changes.added.append(url.path)
+                changes.noteDirectory(at: url.path)
+            }
+            await self.refreshAfterMutation(
+                preferredPaths: moveApplied.map(\.to.path) + restored.restored.map(\.path),
+                changes: changes
+            )
+
+            let inverse = MoveBatch(
+                trashFirst: restored.restored,
+                moves: self.invertedMoveRecords(moveApplied),
+                restoreAfter: trashed.records,
+                twoPhase: batch.twoPhase
+            )
+            let remaining = MoveBatch(
+                trashFirst: trashed.failed,
+                moves: moveFailed,
+                restoreAfter: restored.failed,
+                twoPhase: batch.twoPhase
+            )
+            let failedCount = trashed.failed.count + moveFailed.count + restored.failed.count + misplacedCount
             return FolderHistoryApplyResult(
-                inverse: outcome.applied.isEmpty
-                    ? nil
-                    : self.makeMoveHistoryEntry(recordsToApplyNext: self.invertedMoveRecords(outcome.applied), title: title),
-                remaining: outcome.failed.isEmpty
-                    ? nil
-                    : self.makeMoveHistoryEntry(recordsToApplyNext: outcome.failed, title: title),
-                appliedCount: outcome.applied.count,
-                failedCount: outcome.failed.count,
-                firstError: outcome.firstError
+                inverse: inverse.isEmpty ? nil : self.makeMoveBatchHistoryEntry(inverse, title: title),
+                remaining: remaining.isEmpty ? nil : self.makeMoveBatchHistoryEntry(remaining, title: title),
+                appliedCount: batch.moves.isEmpty
+                    ? trashed.records.count + restored.restored.count
+                    : moveApplied.count - misplacedCount,
+                failedCount: failedCount,
+                firstError: trashed.firstError ?? moveError ?? restored.firstError
             )
         }
     }
@@ -2915,6 +3217,21 @@ final class ExplorerViewModel {
 
         enqueueLibraryIndexMutation { await LibraryIndexService.shared.removeEntries(under: path) }
 
+        // Parsed prompt data belongs to the file that left, not to whatever
+        // takes its path next.
+        if promptTextByPath.keys.contains(where: { MetadataPathKeys.isSameOrDescendant($0, of: path) }) {
+            promptTextByPath = promptTextByPath.filter { !MetadataPathKeys.isSameOrDescendant($0.key, of: path) }
+        }
+        if negativePromptByPath.keys.contains(where: { MetadataPathKeys.isSameOrDescendant($0, of: path) }) {
+            negativePromptByPath = negativePromptByPath.filter { !MetadataPathKeys.isSameOrDescendant($0.key, of: path) }
+        }
+        let parameterKeys = parametersByPath.keys.filter { MetadataPathKeys.isSameOrDescendant($0, of: path) }
+        if !parameterKeys.isEmpty {
+            var next = parametersByPath
+            for key in parameterKeys { next.removeValue(forKey: key) }
+            parametersByPath = next
+        }
+
         return snapshot
     }
 
@@ -2974,7 +3291,11 @@ final class ExplorerViewModel {
         }
     }
 
-    /// Runs library-index mutations one after another, in call order.
+    /// Runs library-index mutations one after another, in call order. They are
+    /// only ordered among themselves: a library index build may be suspended
+    /// mid-batch while one runs, and `LibraryIndexService` itself drops the
+    /// build's records for paths a mutation touched, so no ordering with
+    /// `indexLibrary` is assumed here.
     func enqueueLibraryIndexMutation(_ operation: @escaping @Sendable () async -> Void) {
         let previous = libraryIndexMutationTask
         libraryIndexMutationTask = Task(priority: .utility) {
@@ -2983,14 +3304,18 @@ final class ExplorerViewModel {
         }
     }
 
+    /// The moves that undo `records`, in reverse order so chained moves
+    /// (a→b then b→c) unwind correctly.
     private func invertedMoveRecords(_ records: [PathMoveRecord]) -> [PathMoveRecord] {
-        records.map { record in
+        records.reversed().map { record in
             PathMoveRecord(from: record.to, to: record.from)
         }
     }
 
-    private func refreshAfterMutation(preferredPaths: [String] = []) async {
-        await refreshFolder()
+    /// Refreshes after a file mutation. With `changes`, only the touched paths'
+    /// caches and prompt-index entries are updated; without, everything is dropped.
+    private func refreshAfterMutation(preferredPaths: [String] = [], changes: ListingPathChanges? = nil) async {
+        await refreshFolder(changes: changes)
         restoreSelection(afterRefreshing: preferredPaths)
     }
 
@@ -3243,28 +3568,83 @@ struct PromptDiffSession: Identifiable {
 
 extension ExplorerViewModel {
     /// Sections of `processedFolderContents` for `groupBy`; `[]` when not grouping.
-    /// Order within each group follows the processed list; groups appear in the
-    /// order of their first item, except "Unknown", which is always last.
+    /// Order within each group follows the active sort; groups appear in the
+    /// order of their first item, except "Unknown", which is always last. Each
+    /// group's `indices` is a contiguous ascending range of the processed list.
     var contentGroups: [ContentGroup] {
         guard groupBy != .none else { return [] }
         let key = (processed: processedFolderContentsRevision, groups: contentGroupsRevision)
         if contentGroupsCacheKey == key { return contentGroupsCache }
 
+        // `processedFolderContents` is already ordered group by group (see
+        // `groupedContiguously`), so every group's indices form one ascending run.
         let items = processedFolderContents
         let field = groupBy
+        let keyer = GroupKeyer(field: field)
         var order: [String] = []
         var titles: [String: String] = [:]
         var indicesByKey: [String: [Int]] = [:]
-        let unknownKey = "__unknown__"
-
-        let dayFormatter = DateFormatter()
-        dayFormatter.dateStyle = .medium
-        dayFormatter.timeStyle = .none
-        let keyFormatter = DateFormatter()
-        keyFormatter.dateFormat = "yyyy-MM-dd"
-        keyFormatter.locale = Locale(identifier: "en_US_POSIX")
 
         for (index, item) in items.enumerated() {
+            let (resolvedKey, title) = keyer.key(for: item, parameters: parametersByPath[item.path])
+            if indicesByKey[resolvedKey] == nil {
+                order.append(resolvedKey)
+                titles[resolvedKey] = title
+            }
+            indicesByKey[resolvedKey, default: []].append(index)
+        }
+
+        // Normally already last; kept for safety if the list was not regrouped.
+        if let unknownIndex = order.firstIndex(of: GroupKeyer.unknownKey) {
+            order.remove(at: unknownIndex)
+            order.append(GroupKeyer.unknownKey)
+        }
+
+        let groups = order.map { key in
+            ContentGroup(id: "\(field.rawValue):\(key)", title: titles[key] ?? "Unknown", indices: indicesByKey[key] ?? [])
+        }
+        contentGroupsCache = groups
+        contentGroupsCacheKey = key
+        return groups
+    }
+
+    /// Stable regrouping of `items` for `groupBy`: groups in order of their first
+    /// item ("Unknown" last), each group's items together in their sorted order.
+    fileprivate func groupedContiguously(_ items: [FileEntry]) -> [FileEntry] {
+        let keyer = GroupKeyer(field: groupBy)
+        var order: [String] = []
+        var buckets: [String: [FileEntry]] = [:]
+        for item in items {
+            let key = keyer.key(for: item, parameters: parametersByPath[item.path]).key
+            if buckets[key] == nil { order.append(key) }
+            buckets[key, default: []].append(item)
+        }
+        if let unknownIndex = order.firstIndex(of: GroupKeyer.unknownKey) {
+            order.remove(at: unknownIndex)
+            order.append(GroupKeyer.unknownKey)
+        }
+        guard order.count > 1 else { return items }
+        return order.flatMap { buckets[$0] ?? [] }
+    }
+
+    /// Group key and title of one item for a `GroupByField`.
+    private struct GroupKeyer {
+        static let unknownKey = "__unknown__"
+        let field: GroupByField
+        let dayFormatter: DateFormatter
+        let keyFormatter: DateFormatter
+
+        init(field: GroupByField) {
+            self.field = field
+            dayFormatter = DateFormatter()
+            dayFormatter.dateStyle = .medium
+            dayFormatter.timeStyle = .none
+            keyFormatter = DateFormatter()
+            keyFormatter.dateFormat = "yyyy-MM-dd"
+            keyFormatter.locale = Locale(identifier: "en_US_POSIX")
+        }
+
+        func key(for item: FileEntry, parameters: GenerationParameters?) -> (key: String, title: String) {
             var groupKey: String?
             var title: String?
 
@@ -3272,13 +3652,13 @@ extension ExplorerViewModel {
             case .none:
                 break
             case .model:
-                groupKey = parametersByPath[item.path]?.model.flatMap(Self.nonEmpty)
+                groupKey = parameters?.model.flatMap(ExplorerViewModel.nonEmpty)
                 title = groupKey
             case .sampler:
-                groupKey = parametersByPath[item.path]?.sampler.flatMap(Self.nonEmpty)
+                groupKey = parameters?.sampler.flatMap(ExplorerViewModel.nonEmpty)
                 title = groupKey
             case .seed:
-                groupKey = parametersByPath[item.path]?.seed.flatMap(Self.nonEmpty)
+                groupKey = parameters?.seed.flatMap(ExplorerViewModel.nonEmpty)
                 title = groupKey.map { "Seed \($0)" }
             case .day:
                 if let date = item.modifiedDate {
@@ -3291,28 +3671,12 @@ extension ExplorerViewModel {
                 title = descriptor.typeLabel
             }
 
-            let resolvedKey = groupKey.map { $0.lowercased() } ?? unknownKey
-            if indicesByKey[resolvedKey] == nil {
-                order.append(resolvedKey)
-                titles[resolvedKey] = title ?? "Unknown"
-            }
-            indicesByKey[resolvedKey, default: []].append(index)
+            guard let groupKey else { return (Self.unknownKey, "Unknown") }
+            return (groupKey.lowercased(), title ?? "Unknown")
         }
-
-        if let unknownIndex = order.firstIndex(of: unknownKey) {
-            order.remove(at: unknownIndex)
-            order.append(unknownKey)
-        }
-
-        let groups = order.map { key in
-            ContentGroup(id: "\(field.rawValue):\(key)", title: titles[key] ?? "Unknown", indices: indicesByKey[key] ?? [])
-        }
-        contentGroupsCache = groups
-        contentGroupsCacheKey = key
-        return groups
     }
 
-    private static func nonEmpty(_ value: String) -> String? {
+    nonisolated fileprivate static func nonEmpty(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != "N/A" else { return nil }
         return trimmed
@@ -3591,8 +3955,7 @@ extension ExplorerViewModel {
         let targets = batchRenameTargets
         guard !targets.isEmpty else { return [] }
 
-        let needsParsedData = ["{prompt", "{model", "{seed", "{sampler", "{steps", "{cfg", "{width", "{height"]
-            .contains(where: template.contains)
+        let needsParsedData = RenameTemplateService.usesAnyToken(RenameTemplateService.parsedDataTokens, in: template)
         if needsParsedData {
             await ensurePromptIndexForCurrentListing()
         }
@@ -3601,7 +3964,7 @@ extension ExplorerViewModel {
             let parameters = parametersByPath[item.path]
             return RenameTemplateContext(
                 url: item.url,
-                index: offset + 1,
+                index: offset,
                 modifiedDate: item.modifiedDate,
                 prompt: promptTextByPath[item.path],
                 model: parameters?.model,
@@ -3632,39 +3995,40 @@ extension ExplorerViewModel {
             return
         }
 
-        var applied: [PathMoveRecord] = []
-        var failedCount = 0
-        var firstError: Error?
-
-        for item in actionable {
-            let source = item.source.standardizedFileURL
-            do {
-                let renamed = try FileSystemService.rename(at: source, to: item.proposedName).standardizedFileURL
-                applied.append(PathMoveRecord(from: source, to: renamed))
-                migrateMetadataKeys(from: source.path, to: renamed.path)
-            } catch {
-                failedCount += 1
-                if firstError == nil { firstError = error }
-            }
+        // Two phases (every file to a temporary name, then to its final name) so
+        // renumbering chains and swaps work regardless of plan order.
+        let records = actionable.map {
+            PathMoveRecord(from: $0.source.standardizedFileURL, to: $0.destination.standardizedFileURL)
         }
+        let outcome = performTwoPhaseMovesNow(records)
+        let applied = outcome.applied
+        let renamedCount = applied.count - outcome.misplacedCount
+        let failedCount = outcome.failed.count + outcome.misplacedCount
+        let firstError = outcome.firstError
 
+        var changes = ListingPathChanges()
+        changes.moves = applied.map { ($0.from.path, $0.to.path) }
         // Refreshing also reloads the active collection's files.
-        await refreshAfterMutation(preferredPaths: applied.map(\.to.path))
+        await refreshAfterMutation(preferredPaths: applied.map(\.to.path), changes: changes)
 
         if !applied.isEmpty {
+            // One entry for the whole batch; undo and redo are two-phase too.
             recordFolderHistoryEntry(
-                makeMoveHistoryEntry(recordsToApplyNext: invertedMoveRecords(applied), title: "Batch Rename")
+                makeMoveBatchHistoryEntry(
+                    MoveBatch(moves: invertedMoveRecords(applied), twoPhase: true),
+                    title: "Batch Rename"
+                )
             )
         }
 
         let skipped = plan.count - actionable.count
         if failedCount == 0 {
-            var message = "Renamed \(applied.count) file\(applied.count == 1 ? "" : "s")"
+            var message = "Renamed \(renamedCount) file\(renamedCount == 1 ? "" : "s")"
             if skipped > 0 { message += ", skipped \(skipped)" }
             showToast(message, type: .success)
         } else {
             showToast(
-                "Renamed \(applied.count) of \(actionable.count); \(failedCount) failed: \(firstError?.localizedDescription ?? "Unknown error")",
+                "Renamed \(renamedCount) of \(actionable.count); \(failedCount) failed: \(firstError?.localizedDescription ?? "Unknown error")",
                 type: .error
             )
         }
