@@ -313,6 +313,41 @@ struct BrowserToolbar: CustomizableToolbarContent {
                     }
                 }
             }
+
+            Menu("Flag") {
+                ForEach(FlagFilter.allCases) { option in
+                    Toggle(option.title, isOn: Binding(
+                        get: { vm.filterConfig.flagFilter == option },
+                        set: { _ in
+                            vm.filterConfig.flagFilter = option
+                            vm.persistFilterConfig()
+                        }
+                    ))
+                    if option == .all {
+                        Divider()
+                    }
+                }
+            }
+
+            Menu("Label") {
+                Button("Any Label") {
+                    vm.filterConfig.labelFilter = []
+                    vm.persistFilterConfig()
+                }
+                .disabled(vm.filterConfig.labelFilter.isEmpty)
+
+                Divider()
+
+                ForEach(FinderLabel.menuOrder + [.none]) { label in
+                    Toggle(isOn: labelFilterBinding(for: label)) {
+                        Label {
+                            Text(label == .none ? "No Label" : label.title)
+                        } icon: {
+                            Image(nsImage: label.menuSwatch)
+                        }
+                    }
+                }
+            }
         } label: {
             // A toolbar menu shows only its label's icon, so an active filter
             // switches to the filled glyph (in the accent) instead of a count badge.
@@ -327,6 +362,21 @@ struct BrowserToolbar: CustomizableToolbarContent {
         .help(vm.filterConfig.activeCount > 0 ? "Filter (\(vm.filterConfig.activeCount) active)" : "Filter")
         .accessibilityLabel("Filter")
         .accessibilityValue(vm.filterConfig.activeCount > 0 ? "\(vm.filterConfig.activeCount) active" : "None active")
+    }
+
+    /// Label filter membership: shows items with any of the checked labels.
+    private func labelFilterBinding(for label: FinderLabel) -> Binding<Bool> {
+        Binding(
+            get: { vm.filterConfig.labelFilter.contains(label.rawValue) },
+            set: { isOn in
+                if isOn {
+                    vm.filterConfig.labelFilter.insert(label.rawValue)
+                } else {
+                    vm.filterConfig.labelFilter.remove(label.rawValue)
+                }
+                vm.persistFilterConfig()
+            }
+        )
     }
 
     private func filterBinding(for fileType: FileTypeFilter) -> Binding<Bool> {
@@ -365,6 +415,10 @@ struct BrowserToolbar: CustomizableToolbarContent {
         switch field {
         case .rating:
             return asc ? "High-Low" : "Low-High"
+        case .flag:
+            return asc ? "Picks First" : "Rejects First"
+        case .label:
+            return asc ? "Finder Order" : "Reverse Order"
         case .dateModified, .dateCreated:
             return asc ? "Oldest First" : "Newest First"
         case .size:

@@ -5,6 +5,8 @@ enum SortField: String, CaseIterable, Identifiable {
     case name
     case custom
     case rating
+    case flag
+    case label
     case dateModified
     case dateCreated
     case size
@@ -17,6 +19,8 @@ enum SortField: String, CaseIterable, Identifiable {
         case .name: return "Name"
         case .custom: return "Custom Order"
         case .rating: return "Rating"
+        case .flag: return "Flag"
+        case .label: return "Label"
         case .dateModified: return "Date Modified"
         case .dateCreated: return "Date Created"
         case .size: return "Size"
@@ -29,6 +33,8 @@ enum SortField: String, CaseIterable, Identifiable {
         case .name: return "textformat.abc"
         case .custom: return "line.3.horizontal.decrease.circle"
         case .rating: return "star.fill"
+        case .flag: return "flag.fill"
+        case .label: return "circle.fill"
         case .dateModified: return "clock"
         case .dateCreated: return "calendar"
         case .size: return "internaldrive"
@@ -81,6 +87,8 @@ enum GroupByField: String, CaseIterable, Identifiable {
     case seed
     case day
     case type
+    case flag
+    case label
 
     var id: String { rawValue }
 
@@ -92,6 +100,8 @@ enum GroupByField: String, CaseIterable, Identifiable {
         case .seed: return "Seed"
         case .day: return "Day Modified"
         case .type: return "Kind"
+        case .flag: return "Flag"
+        case .label: return "Label"
         }
     }
 }
@@ -144,8 +154,23 @@ struct FilterConfig: Equatable {
 
     var filterMinRating: Int = 0
 
+    /// Pick / reject filter.
+    var flagFilter: FlagFilter = .all
+
+    /// Finder label numbers to show (any of; 0 = no label). Empty = no filter.
+    var labelFilter: Set<Int> = []
+
     var activeCount: Int {
-        hiddenFileTypes.subtracting(Self.defaultHiddenFileTypes).count + (filterMinRating > 0 ? 1 : 0)
+        hiddenFileTypes.subtracting(Self.defaultHiddenFileTypes).count
+            + (filterMinRating > 0 ? 1 : 0)
+            + (flagFilter != .all ? 1 : 0)
+            + (labelFilter.isEmpty ? 0 : 1)
+    }
+
+    /// True when the flag and label filters let a file with these values through.
+    func passesCullFilters(flag: FileFlag, labelNumber: Int?) -> Bool {
+        guard flagFilter.includes(flag) else { return false }
+        return labelFilter.isEmpty || labelFilter.contains(FinderLabel(labelNumber: labelNumber).rawValue)
     }
 
     func hides(_ fileType: FileTypeFilter) -> Bool {

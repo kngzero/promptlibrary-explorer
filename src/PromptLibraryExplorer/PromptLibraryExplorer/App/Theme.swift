@@ -314,6 +314,71 @@ extension Color {
     }
 }
 
+// MARK: - Finder Label Colours
+//
+// Fills for Finder colour-label dots, stripes and swatches (Finder's hues), plus
+// text-safe variants (~4.5:1 on the app surfaces in both modes) for label names
+// and thin glyphs.
+
+extension Color {
+    static let labelRed = ThemePalette.color(dark: (0xFF, 0x45, 0x3A), light: (0xFF, 0x3B, 0x30))
+    static let labelOrange = ThemePalette.color(dark: (0xFF, 0x9F, 0x0A), light: (0xFF, 0x95, 0x00))
+    static let labelYellow = ThemePalette.color(dark: (0xFF, 0xD6, 0x0A), light: (0xF5, 0xC4, 0x00))
+    static let labelGreen = ThemePalette.color(dark: (0x32, 0xD7, 0x4B), light: (0x28, 0xCD, 0x41))
+    static let labelBlue = ThemePalette.color(dark: (0x0A, 0x84, 0xFF), light: (0x00, 0x7A, 0xFF))
+    static let labelPurple = ThemePalette.color(dark: (0xBF, 0x5A, 0xF2), light: (0xAF, 0x52, 0xDE))
+    static let labelGray = ThemePalette.color(dark: (0x98, 0x98, 0x9D), light: (0x8E, 0x8E, 0x93))
+
+    static let labelRedText = ThemePalette.color(dark: (0xFF, 0x6B, 0x62), light: (0xB3, 0x26, 0x1E))
+    static let labelOrangeText = ThemePalette.color(dark: (0xFF, 0xA8, 0x33), light: (0xA3, 0x52, 0x00))
+    static let labelYellowText = ThemePalette.color(dark: (0xFF, 0xD6, 0x0A), light: (0x7A, 0x5C, 0x00))
+    static let labelGreenText = ThemePalette.color(dark: (0x4A, 0xDB, 0x62), light: (0x1E, 0x7A, 0x30))
+    static let labelBlueText = ThemePalette.color(dark: (0x40, 0x9C, 0xFF), light: (0x00, 0x58, 0xC7))
+    static let labelPurpleText = ThemePalette.color(dark: (0xC9, 0x7B, 0xF5), light: (0x8A, 0x2B, 0xB8))
+    static let labelGrayText = ThemePalette.color(dark: (0xA1, 0xA1, 0xAA), light: (0x5E, 0x5E, 0x63))
+}
+
+extension FinderLabel {
+    /// Decorative fill (dots, stripes, swatches). `.none` is muted.
+    var color: Color {
+        switch self {
+        case .none: return .appMuted
+        case .red: return .labelRed
+        case .orange: return .labelOrange
+        case .yellow: return .labelYellow
+        case .green: return .labelGreen
+        case .blue: return .labelBlue
+        case .purple: return .labelPurple
+        case .gray: return .labelGray
+        }
+    }
+
+    /// Text-safe variant for label names and thin glyphs.
+    var textColor: Color {
+        switch self {
+        case .none: return .appMuted
+        case .red: return .labelRedText
+        case .orange: return .labelOrangeText
+        case .yellow: return .labelYellowText
+        case .green: return .labelGreenText
+        case .blue: return .labelBlueText
+        case .purple: return .labelPurpleText
+        case .gray: return .labelGrayText
+        }
+    }
+}
+
+extension FileFlag {
+    /// Text-safe tint for the flag glyph (pick = accent, reject = error red).
+    var tint: Color {
+        switch self {
+        case .pick: return .appAccent
+        case .unflagged: return .appMuted
+        case .reject: return .appError
+        }
+    }
+}
+
 // MARK: - Font Helpers
 
 extension Font {

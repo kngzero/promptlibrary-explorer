@@ -256,6 +256,16 @@ struct MainContentView: View {
         let items = vm.processedFolderContents
         let selectionModifiers = contentSelectionModifiers(for: event)
 
+        // Culling keys (bare P X U 0–9) belong to this monitor only; the Cull
+        // menu shows them as text, never as key equivalents, so they can't fire
+        // while typing in a text field (handled above).
+        if let action = CullAction(event: event) {
+            guard vm.activePane == .content, !vm.selectedItems.isEmpty else { return false }
+            // A held key must not flag a whole folder by auto-advancing.
+            if !event.isARepeat { applyCullKey(action) }
+            return true
+        }
+
         switch event.keyCode {
         // Cmd+[ and Cmd+] are owned by the Go menu; Cmd+←/→ are extra aliases
         // with no menu item, so they live here.
@@ -365,6 +375,29 @@ struct MainContentView: View {
 
         default:
             return false
+        }
+    }
+
+    /// Applies a culling key to the selection. With one item selected, auto-advance
+    /// (culling mode) moves to the next item; if the item left the listing (a
+    /// flag / label filter now hides it), the item that took its place is selected.
+    private func applyCullKey(_ action: CullAction) {
+        let wasSingle = vm.selectedIndices.count == 1
+        let pathBefore = vm.selectedItemPath
+        let indexBefore = vm.selectedItemIndex
+        guard vm.performCullAction(action) > 0, wasSingle else { return }
+
+        if pathBefore != nil, vm.selectedItemPath == pathBefore {
+            if vm.isCullAutoAdvanceActive,
+               let next = navigationLayout.neighbor(of: vm.selectedItemIndex, step: 1)
+            {
+                vm.selectItem(at: next)
+            }
+        } else if vm.selectedIndices.isEmpty {
+            let count = vm.processedFolderContents.count
+            if count > 0 {
+                vm.selectItem(at: min(max(indexBefore, 0), count - 1))
+            }
         }
     }
 

@@ -267,7 +267,7 @@ struct ContentBrowserView: View {
     private var filterSummary: String {
         var parts: [String] = []
         if !vm.searchQuery.isEmpty { parts.append("search \u{201C}\(vm.searchQuery)\u{201D}") }
-        if vm.filterConfig != FilterConfig() { parts.append("file type or rating filters") }
+        if vm.filterConfig != FilterConfig() { parts.append("file type, rating, flag or label filters") }
         if vm.filterByTagID != nil { parts.append("a tag filter") }
         if let smart = vm.activeSmartFolder { parts.append("smart folder \u{201C}\(smart.name)\u{201D}") }
         guard !parts.isEmpty else { return "Nothing here matches the current filters." }
@@ -747,6 +747,10 @@ private struct ExplorerItemView: View {
         inlineRenamePath == item.path
     }
 
+    private var flag: FileFlag {
+        item.isDirectory ? .unflagged : vm.flag(for: item.path)
+    }
+
     private var loadKey: String {
         "\(item.id)|\(Int(size.rounded()))"
     }
@@ -870,6 +874,8 @@ private struct ExplorerItemView: View {
                 }
                 .frame(width: size, height: size)
                 .background(Color.appSurface)
+                // Rejects stay listed but recede.
+                .opacity(flag == .reject ? 0.38 : 1)
                 .cornerRadius(AppRadius.md)
                 .overlay(
                     RoundedRectangle(cornerRadius: AppRadius.md)
@@ -885,6 +891,15 @@ private struct ExplorerItemView: View {
                     FavoritePinBadge(isPinned: vm.isFavorite(path: item.path))
                         .offset(x: 4, y: -6)
                         .allowsHitTesting(false)
+                }
+                .overlay(alignment: .topTrailing) {
+                    TileCullBadges(
+                        flag: flag,
+                        label: FinderLabel(labelNumber: item.labelNumber),
+                        side: badgeSide
+                    )
+                    .offset(x: -4, y: 4)
+                    .allowsHitTesting(false)
                 }
 
                 if let badgeKind {

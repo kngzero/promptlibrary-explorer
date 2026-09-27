@@ -11,6 +11,9 @@ struct FileEntry: Identifiable, Hashable {
     var modifiedDate: Date?
     var creationDate: Date?
     var fileSize: Int64?
+    /// Finder colour label (`URLResourceKey.labelNumberKey`, 0 = none, see
+    /// `FinderLabel`); nil when unknown.
+    var labelNumber: Int?
 
     var path: String { url.path }
 
@@ -20,7 +23,8 @@ struct FileEntry: Identifiable, Hashable {
         children: [FileEntry]? = nil,
         modifiedDate: Date? = nil,
         creationDate: Date? = nil,
-        fileSize: Int64? = nil
+        fileSize: Int64? = nil,
+        labelNumber: Int? = nil
     ) {
         self.id = url.path
         self.url = url
@@ -30,11 +34,14 @@ struct FileEntry: Identifiable, Hashable {
         self.modifiedDate = modifiedDate
         self.creationDate = creationDate
         self.fileSize = fileSize
+        self.labelNumber = labelNumber
     }
 
     /// Reads a single entry (with dates and size) from disk, or nil when missing.
     static func load(from url: URL) -> FileEntry? {
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .contentModificationDateKey, .creationDateKey, .fileSizeKey]
+        let keys: Set<URLResourceKey> = [
+            .isDirectoryKey, .contentModificationDateKey, .creationDateKey, .fileSizeKey, .labelNumberKey,
+        ]
         guard let values = try? url.resourceValues(forKeys: keys),
               let isDir = values.isDirectory
         else { return nil }
@@ -44,7 +51,8 @@ struct FileEntry: Identifiable, Hashable {
             children: isDir ? [] : nil,
             modifiedDate: values.contentModificationDate,
             creationDate: values.creationDate,
-            fileSize: isDir ? nil : values.fileSize.map(Int64.init)
+            fileSize: isDir ? nil : values.fileSize.map(Int64.init),
+            labelNumber: values.labelNumber
         )
     }
 }

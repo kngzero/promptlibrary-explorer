@@ -14,6 +14,8 @@ struct FileListColumns: Equatable {
     var kind = true
     var model = true
     var rating = true
+    var flag = true
+    var label = true
     var date = true
     var size = true
     var dimensions = true
@@ -22,18 +24,22 @@ struct FileListColumns: Equatable {
     static let kindWidth: CGFloat = 120
     static let modelWidth: CGFloat = 140
     static let ratingWidth: CGFloat = 76
+    static let flagWidth: CGFloat = 36
+    static let labelWidth: CGFloat = 76
     static let dateWidth: CGFloat = 140
     static let sizeWidth: CGFloat = 70
     static let dimensionsWidth: CGFloat = 90
 
     static func fitting(width: CGFloat) -> FileListColumns {
         var columns = FileListColumns()
-        columns.model = width >= 820
+        columns.model = width >= 960
+        columns.label = width >= 880
         columns.dimensions = width >= 720
         columns.kind = width >= 620
         columns.size = width >= 540
         columns.date = width >= 460
         columns.rating = width >= 380
+        columns.flag = width >= 420
         return columns
     }
 }
@@ -155,6 +161,12 @@ private struct FileListHeaderRow: View {
             if columns.rating {
                 header("Rating", field: .rating).frame(width: FileListColumns.ratingWidth, alignment: .leading)
             }
+            if columns.flag {
+                header("Flag", field: .flag).frame(width: FileListColumns.flagWidth, alignment: .leading)
+            }
+            if columns.label {
+                header("Label", field: .label).frame(width: FileListColumns.labelWidth, alignment: .leading)
+            }
             if columns.date {
                 header("Date Modified", field: .dateModified).frame(width: FileListColumns.dateWidth, alignment: .leading)
             }
@@ -222,9 +234,10 @@ private struct FileListHeaderRow: View {
         }
     }
 
-    /// Up chevron = smallest value at the top. Rating's `.asc` is high-to-low.
+    /// Up chevron = smallest value at the top. Rating's and flag's `.asc` is
+    /// high-to-low (best-rated / picks first).
     private static func showsUpChevron(_ field: SortField, _ direction: SortDirection) -> Bool {
-        field == .rating ? direction == .desc : direction == .asc
+        field == .rating || field == .flag ? direction == .desc : direction == .asc
     }
 }
 
@@ -274,6 +287,7 @@ private struct FileListRow: View {
         HStack(spacing: AppSpacing.md) {
             thumbnailView
                 .frame(width: FileListColumns.thumbnailWidth, height: FileListColumns.thumbnailWidth)
+                .opacity(!item.isDirectory && vm.flag(for: item.path) == .reject ? 0.38 : 1)
 
             nameView
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -298,6 +312,14 @@ private struct FileListRow: View {
                                 .onDisappear { ratingRect = nil }
                         }
                     }
+            }
+            if columns.flag {
+                FlagCell(flag: item.isDirectory ? .unflagged : vm.flag(for: item.path))
+                    .frame(width: FileListColumns.flagWidth, alignment: .leading)
+            }
+            if columns.label {
+                LabelCell(label: FinderLabel(labelNumber: item.labelNumber))
+                    .frame(width: FileListColumns.labelWidth, alignment: .leading)
             }
             if columns.date {
                 cell(item.modifiedDate.map { Self.dateFormatter.string(from: $0) } ?? "--")
@@ -476,6 +498,10 @@ private struct FileListRow: View {
         if let model = parameters?.model, !model.isEmpty { parts.append(model) }
         let rating = vm.rating(for: item.path)
         if rating > 0 { parts.append("\(rating) star\(rating == 1 ? "" : "s")") }
+        let flag = vm.flag(for: item.path)
+        if !item.isDirectory, flag != .unflagged { parts.append(flag.title) }
+        let label = FinderLabel(labelNumber: item.labelNumber)
+        if label != .none { parts.append("\(label.title) label") }
         return parts.joined(separator: ", ")
     }
 }

@@ -143,6 +143,35 @@ struct SmartFolderEditorView: View {
                         .pickerStyle(.segmented)
                     }
 
+                    // Flag
+                    VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                        Text("Flag")
+                            .font(.appHeadline)
+                            .foregroundStyle(Color.appMuted)
+
+                        Picker("Flag", selection: $folder.criteria.flag) {
+                            Text("Any").tag(FlagFilter.all)
+                            Text("Picks").tag(FlagFilter.picks)
+                            Text("Not Rejected").tag(FlagFilter.hideRejects)
+                            Text("Rejects").tag(FlagFilter.rejects)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .accessibilityLabel("Flag")
+                    }
+
+                    // Finder labels
+                    VStack(alignment: .leading, spacing: AppSpacing.md) {
+                        Text("Finder Label Is Any Of")
+                            .font(.appHeadline)
+                            .foregroundStyle(Color.appMuted)
+                        TagChipFlow(spacing: AppSpacing.sm) {
+                            ForEach(FinderLabel.menuOrder + [.none]) { label in
+                                labelChip(label)
+                            }
+                        }
+                    }
+
                     // Date Range
                     VStack(alignment: .leading, spacing: AppSpacing.sm) {
                         Text("Modified Date")
@@ -181,7 +210,7 @@ struct SmartFolderEditorView: View {
                 Rectangle().fill(Color.appBorder).frame(height: 1)
             }
         }
-        .frame(width: 500, height: 640)
+        .frame(width: 500, height: 720)
         .background(Color.appBackground)
         .task(id: needsPromptData) {
             guard needsPromptData else { return }
@@ -221,6 +250,44 @@ struct SmartFolderEditorView: View {
             }
             .accessibilityElement(children: .combine)
         }
+    }
+
+    // MARK: - Label chips
+
+    private func labelChip(_ label: FinderLabel) -> some View {
+        let isOn = folder.criteria.labels.contains(label.rawValue)
+        let title = label == .none ? "No Label" : label.title
+        return Button {
+            if isOn {
+                folder.criteria.labels.remove(label.rawValue)
+            } else {
+                folder.criteria.labels.insert(label.rawValue)
+            }
+        } label: {
+            HStack(spacing: AppSpacing.xs) {
+                Circle()
+                    .fill(label == .none ? Color.clear : label.color)
+                    .overlay(Circle().strokeBorder(label == .none ? Color.appMuted : Color.clear, lineWidth: 1))
+                    .frame(width: 8, height: 8)
+                Text(title)
+                    .font(.appCallout)
+                    .foregroundStyle(isOn ? Color.appPrimaryText : Color.appMuted)
+                    .lineLimit(1)
+                if isOn {
+                    Image(systemName: "checkmark")
+                        .font(.appIcon(9, weight: .bold))
+                        .foregroundStyle(Color.appAccent)
+                }
+            }
+            .padding(.horizontal, AppSpacing.md)
+            .padding(.vertical, AppSpacing.xs)
+            .background(Capsule().fill(isOn ? Color.appSelected : Color.appSurface))
+            .overlay(Capsule().strokeBorder(isOn ? Color.appAccent.opacity(0.6) : Color.appBorder, lineWidth: 1))
+        }
+        .buttonStyle(AppAdaptiveButtonStyle())
+        .accessibilityLabel("Label \(title)")
+        .accessibilityValue(isOn ? "Selected" : "Not selected")
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 
     // MARK: - Tag chips

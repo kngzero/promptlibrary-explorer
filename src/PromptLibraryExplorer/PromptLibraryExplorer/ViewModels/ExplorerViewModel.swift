@@ -12,9 +12,13 @@ struct DeleteConfirmationRequest: Identifiable {
     let kind: Kind
     let urls: [URL]
     let names: [String]
+    /// Cull ▸ Move Rejects to Trash…: always confirmed, worded for rejects.
+    var isRejects = false
 
     var title: String {
         switch kind {
+        case .trash where isRejects:
+            return urls.count == 1 ? "Move 1 Reject to Trash?" : "Move \(urls.count) Rejects to Trash?"
         case .trash:
             return urls.count == 1 ? "Move to Trash?" : "Move \(urls.count) Items to Trash?"
         case .permanent:
@@ -26,6 +30,11 @@ struct DeleteConfirmationRequest: Identifiable {
         let subject = names.count == 1 ? names.first.map { "\"\($0)\"" } : nil
 
         switch kind {
+        case .trash where isRejects:
+            if let subject {
+                return "The rejected item \(subject) will be moved to the Trash. You can put it back from there or undo this action."
+            }
+            return "The \(urls.count) rejected items in this listing, including any hidden by filters, will be moved to the Trash. You can put them back from there or undo this action."
         case .trash:
             if let subject {
                 return "\(subject) will be moved to the Trash. You can put it back from there or undo this action."
@@ -62,10 +71,11 @@ private struct MoveOutcome {
     let firstError: Error?
 }
 
-/// Path-keyed metadata (ratings, tags, favorites, custom order) lifted off a
-/// file or folder and its descendants, so it can be put back later.
+/// Path-keyed metadata (ratings, flags, tags, favorites, custom order) lifted
+/// off a file or folder and its descendants, so it can be put back later.
 private struct PathMetadataSnapshot {
     var ratings: [String: Int] = [:]
+    var flags: [String: FileFlag] = [:]
     var tags: [String: [UUID]] = [:]
     var favorites: Set<String> = []
     var customOrders: [String: [String]] = [:]
@@ -73,7 +83,7 @@ private struct PathMetadataSnapshot {
     var collectionMemberships: [UUID: [(index: Int, path: String)]] = [:]
 
     var isEmpty: Bool {
-        ratings.isEmpty && tags.isEmpty && favorites.isEmpty && customOrders.isEmpty
+        ratings.isEmpty && flags.isEmpty && tags.isEmpty && favorites.isEmpty && customOrders.isEmpty
             && collectionMemberships.isEmpty
     }
 }
@@ -124,7 +134,7 @@ private struct ListingPathChanges {
 /// Outcome of applying one history entry. A partially failed apply yields both
 /// an inverse (for what did happen) and a remainder (for what didn't), so a
 /// half-applied entry is never retried as a whole.
-private struct FolderHistoryApplyResult {
+struct FolderHistoryApplyResult {
     let inverse: FolderHistoryEntry?
     let remaining: FolderHistoryEntry?
     let appliedCount: Int
@@ -132,7 +142,7 @@ private struct FolderHistoryApplyResult {
     let firstError: Error?
 }
 
-private struct FolderHistoryEntry {
+struct FolderHistoryEntry {
     let title: String
     let apply: @MainActor () async -> FolderHistoryApplyResult
 }
@@ -201,9 +211,37 @@ final class ExplorerViewModel {
             }
         }
     }
+    /// Pick / reject flags, path-keyed like ratings.
+    private var flagBook = FlagBook() {
+        didSet {
+            if sortConfig.field == .flag {
+                invalidateSortedFolderContents()
+            } else {
+                invalidateProcessedFolderContents()
+            }
+        }
+    }
     private var lastStandardSortConfigByFolder: [String: SortConfig] = [:]
     private var collapsedSidebarFolderPaths: Set<String> = []
     private var previousSidebarCollapsedFolderPaths: Set<String>?
+
+    // Culling
+    /// Shows the culling HUD in the lightbox and enables auto-advance.
+    var cullingModeEnabled = false {
+        didSet {
+            guard cullingModeEnabled != oldValue else { return }
+            settings.cullingMode = cullingModeEnabled
+        }
+    }
+    /// After a flag / rating / label key, move on to the next item (culling mode only).
+    var cullAutoAdvance = true {
+        didSet {
+            guard cullAutoAdvance != oldValue else { return }
+            settings.cullAutoAdvance = cullAutoAdvance
+        }
+    }
+    /// Last culling action, for the HUD's flash.
+    var cullFeedback: CullFeedback?
 
     // Tags
     var allTags: [FileTag] = []
@@ -416,6 +454,7 @@ final class ExplorerViewModel {
     }
 
     private let settings = SettingsStore.shared
+    private let flagStore = FlagStore()
     private var undoHistory: [FolderHistoryEntry] = []
     private var redoHistory: [FolderHistoryEntry] = []
     private var backNavigationStack: [FolderNavigationLocation] = []
@@ -445,6 +484,9 @@ final class ExplorerViewModel {
     init() {
         customOrderByFolder = settings.loadCustomOrders()
         ratingsByPath = settings.loadRatings()
+        flagBook = flagStore.load()
+        cullingModeEnabled = settings.cullingMode
+        cullAutoAdvance = settings.cullAutoAdvance
         thumbnailSize = settings.thumbnailSize
         sortConfig = SortConfig(
             field: SortField(rawValue: settings.sortField) ?? .type,
@@ -577,6 +619,11 @@ final class ExplorerViewModel {
 
         if filterConfig.filterMinRating > 0 {
             items = items.filter { rating(for: $0.path) >= filterConfig.filterMinRating }
+        }
+
+        if filterConfig.flagFilter != .all || !filterConfig.labelFilter.isEmpty {
+            let config = filterConfig
+            items = items.filter { config.passesCullFilters(flag: flag(for: $0.path), labelNumber: $0.labelNumber) }
         }
 
         // Tag filter
@@ -1535,14 +1582,56 @@ final class ExplorerViewModel {
         ratingsByPath[path] ?? 0
     }
 
+    /// Rates one file (undoable; see `applyRating(_:toPaths:)`).
     func setRating(_ rating: Int, for path: String) {
-        let clamped = max(0, min(5, rating))
-        if clamped == 0 {
-            ratingsByPath.removeValue(forKey: path)
-        } else {
-            ratingsByPath[path] = clamped
+        applyRating(rating, toPaths: [path])
+    }
+
+    /// Writes ratings (0 clears) without recording history. Returns the
+    /// previous rating of every path whose rating changed.
+    @discardableResult
+    func writeRatings(_ values: [String: Int]) -> [String: Int] {
+        var next = ratingsByPath
+        var previous: [String: Int] = [:]
+        for (path, rating) in values {
+            let clamped = max(0, min(5, rating))
+            let old = next[path] ?? 0
+            guard old != clamped else { continue }
+            previous[path] = old
+            if clamped == 0 {
+                next.removeValue(forKey: path)
+            } else {
+                next[path] = clamped
+            }
         }
-        settings.saveRatings(ratingsByPath)
+        guard !previous.isEmpty else { return [:] }
+        ratingsByPath = next
+        settings.saveRatings(next)
+        return previous
+    }
+
+    // MARK: - Flags
+
+    func flag(for path: String) -> FileFlag {
+        flagBook.flag(for: path)
+    }
+
+    /// Writes flags without recording history. Returns the previous flag of
+    /// every path whose flag changed.
+    @discardableResult
+    func writeFlags(_ values: [String: FileFlag]) -> [String: FileFlag] {
+        var next = flagBook
+        var previous: [String: FileFlag] = [:]
+        for (path, flag) in values {
+            let old = next.flag(for: path)
+            guard old != flag else { continue }
+            previous[path] = old
+            next.set(flag, for: path)
+        }
+        guard !previous.isEmpty else { return [:] }
+        flagBook = next
+        flagStore.save(next)
+        return previous
     }
 
     // MARK: - Recent History
@@ -2610,6 +2699,39 @@ final class ExplorerViewModel {
             return sortedItems
         }
 
+        if config.field == .flag {
+            // `.asc` is picks first, like rating's high-to-low `.asc`.
+            let book = flagBook
+            sortedItems.sort { a, b in
+                let fA = book.flag(for: a.path).rawValue
+                let fB = book.flag(for: b.path).rawValue
+                if fA != fB {
+                    return config.direction == .asc ? fA > fB : fA < fB
+                }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+            return sortedItems
+        }
+
+        if config.field == .label {
+            // Finder's menu order (Red … Gray); unlabeled items last either way.
+            sortedItems.sort { a, b in
+                let rA = FinderLabel(labelNumber: a.labelNumber).sortRank
+                let rB = FinderLabel(labelNumber: b.labelNumber).sortRank
+                switch (rA, rB) {
+                case let (x?, y?) where x != y:
+                    return config.direction == .asc ? x < y : x > y
+                case (.some, nil):
+                    return true
+                case (nil, .some):
+                    return false
+                default:
+                    return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+                }
+            }
+            return sortedItems
+        }
+
         if config.field == .dateModified || config.field == .dateCreated || config.field == .size {
             // Folders first (like Finder), then by value; missing values sort
             // last in either direction; ties fall back to name.
@@ -2697,7 +2819,7 @@ final class ExplorerViewModel {
         return sortedDecorated.map(\.entry)
     }
 
-    private func recordFolderHistoryEntry(_ entry: FolderHistoryEntry) {
+    func recordFolderHistoryEntry(_ entry: FolderHistoryEntry) {
         undoHistory.append(entry)
         redoHistory.removeAll()
 
@@ -3074,7 +3196,7 @@ final class ExplorerViewModel {
         }
     }
 
-    private static func releasedHistoryResult(count: Int) -> FolderHistoryApplyResult {
+    static func releasedHistoryResult(count: Int) -> FolderHistoryApplyResult {
         FolderHistoryApplyResult(
             inverse: nil,
             remaining: nil,
@@ -3086,7 +3208,7 @@ final class ExplorerViewModel {
 
     // MARK: - Path-keyed metadata
 
-    /// Moves ratings, tags, favorites and custom sort order from `oldPath` (and,
+    /// Moves ratings, flags, tags, favorites and custom sort order from `oldPath` (and,
     /// for folders, everything under it) to `newPath`, in memory and on disk.
     func migrateMetadataKeys(from oldPath: String, to newPath: String) {
         guard oldPath != newPath else { return }
@@ -3107,6 +3229,12 @@ final class ExplorerViewModel {
         if let migrated = MetadataPathKeys.migratingKeys(of: ratingsByPath, from: oldPath, to: newPath) {
             ratingsByPath = migrated
             settings.saveRatings(ratingsByPath)
+        }
+
+        var nextFlags = flagBook
+        if nextFlags.migrate(from: oldPath, to: newPath) {
+            flagBook = nextFlags
+            flagStore.save(nextFlags)
         }
 
         if let migrated = MetadataPathKeys.migratingKeys(of: tagAssignments, from: oldPath, to: newPath) {
@@ -3172,6 +3300,14 @@ final class ExplorerViewModel {
             }
             ratingsByPath = next
             settings.saveRatings(next)
+        }
+
+        var nextFlags = flagBook
+        let removedFlags = nextFlags.removeAll(under: path)
+        if !removedFlags.isEmpty {
+            snapshot.flags = removedFlags
+            flagBook = nextFlags
+            flagStore.save(nextFlags)
         }
 
         let tagKeys = tagAssignments.keys.filter { MetadataPathKeys.isSameOrDescendant($0, of: path) }
@@ -3248,6 +3384,13 @@ final class ExplorerViewModel {
             for (key, value) in snapshot.ratings { next[target(key)] = value }
             ratingsByPath = next
             settings.saveRatings(next)
+        }
+
+        if !snapshot.flags.isEmpty {
+            var next = flagBook
+            next.restore(snapshot.flags, from: oldPath, to: newPath)
+            flagBook = next
+            flagStore.save(next)
         }
 
         if !snapshot.tags.isEmpty {
@@ -3580,7 +3723,7 @@ extension ExplorerViewModel {
         // `groupedContiguously`), so every group's indices form one ascending run.
         let items = processedFolderContents
         let field = groupBy
-        let keyer = GroupKeyer(field: field)
+        let keyer = GroupKeyer(field: field, flags: flagBook)
         var order: [String] = []
         var titles: [String: String] = [:]
         var indicesByKey: [String: [Int]] = [:]
@@ -3611,7 +3754,7 @@ extension ExplorerViewModel {
     /// Stable regrouping of `items` for `groupBy`: groups in order of their first
     /// item ("Unknown" last), each group's items together in their sorted order.
     fileprivate func groupedContiguously(_ items: [FileEntry]) -> [FileEntry] {
-        let keyer = GroupKeyer(field: groupBy)
+        let keyer = GroupKeyer(field: groupBy, flags: flagBook)
         var order: [String] = []
         var buckets: [String: [FileEntry]] = [:]
         for item in items {
@@ -3631,11 +3774,13 @@ extension ExplorerViewModel {
     private struct GroupKeyer {
         static let unknownKey = "__unknown__"
         let field: GroupByField
+        let flags: FlagBook
         let dayFormatter: DateFormatter
         let keyFormatter: DateFormatter
 
-        init(field: GroupByField) {
+        init(field: GroupByField, flags: FlagBook) {
             self.field = field
+            self.flags = flags
             dayFormatter = DateFormatter()
             dayFormatter.dateStyle = .medium
             dayFormatter.timeStyle = .none
@@ -3669,6 +3814,16 @@ extension ExplorerViewModel {
                 let descriptor = FileHelpers.typeSortDescriptor(for: item)
                 groupKey = "\(descriptor.rank)|\(descriptor.typeLabel)"
                 title = descriptor.typeLabel
+            case .flag:
+                let flag = flags.flag(for: item.path)
+                groupKey = "flag\(flag.rawValue)"
+                title = flag.groupTitle
+            case .label:
+                let label = FinderLabel(labelNumber: item.labelNumber)
+                // Unlabeled items form the last group.
+                guard label != .none else { return (Self.unknownKey, "No Label") }
+                groupKey = "label\(label.rawValue)"
+                title = label.title
             }
 
             guard let groupKey else { return (Self.unknownKey, "Unknown") }
@@ -3738,7 +3893,8 @@ extension ExplorerViewModel {
             ratings: ratingsByPath,
             promptByPath: promptTextByPath,
             negativeByPath: negativePromptByPath,
-            modelByPath: modelByPath
+            modelByPath: modelByPath,
+            flags: flagBook.flags
         )
     }
 
@@ -4040,7 +4196,7 @@ extension GroupByField {
     var needsGenerationParameters: Bool {
         switch self {
         case .model, .sampler, .seed: return true
-        case .none, .day, .type: return false
+        case .none, .day, .type, .flag, .label: return false
         }
     }
 }

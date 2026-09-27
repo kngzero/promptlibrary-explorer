@@ -452,18 +452,88 @@ struct PromptLibraryExplorerApp: App {
                 .disabled(isBlocked || explorerVM.explorerRootPath == nil || explorerVM.isLibraryIndexing)
             }
 
-            // MARK: Help
-            CommandGroup(replacing: .help) {
-                Button("PromptLibrary Explorer Help") {
-                    explorerVM.helpOpen = true
-                }
+            // MARK: Cull, Help
+            // (A commands builder takes at most ten items, hence the Group.)
+            Group {
+                cullCommands
 
-                Divider()
+                CommandGroup(replacing: .help) {
+                    Button("PromptLibrary Explorer Help") {
+                        explorerVM.helpOpen = true
+                    }
 
-                Button("Developer Website") {
-                    explorerVM.openDeveloperWebsite()
+                    Divider()
+
+                    Button("Developer Website") {
+                        explorerVM.openDeveloperWebsite()
+                    }
                 }
             }
+    }
+
+    @CommandsBuilder
+    private var cullCommands: some Commands {
+        // Bare-key culling shortcuts (P X U 0–9) are owned by the key monitors
+        // (`handleGlobalKey`, the lightbox's), never by these items: a bare-letter
+        // key equivalent would fire while typing in a text field. The key is
+        // shown in each title instead.
+        CommandMenu("Cull") {
+            Toggle("Culling Mode", isOn: Binding(
+                get: { explorerVM.cullingModeEnabled },
+                set: { explorerVM.cullingModeEnabled = $0 }
+            ))
+
+            Toggle("Auto-advance After Flag, Rating or Label", isOn: Binding(
+                get: { explorerVM.cullAutoAdvance },
+                set: { explorerVM.cullAutoAdvance = $0 }
+            ))
+            .disabled(!explorerVM.cullingModeEnabled)
+
+            Divider()
+
+            ForEach(FileFlag.menuOrder) { flag in
+                Button(flag.menuTitle) { cull(.flag(flag)) }
+                    .disabled(!canCull(.flag(flag)))
+            }
+
+            Divider()
+
+            Menu("Rating") {
+                ForEach(0...5, id: \.self) { stars in
+                    Button(CullMenuText.rating(stars)) { cull(.rating(stars)) }
+                }
+            }
+            .disabled(!canCull(.rating(0)))
+
+            Menu("Label") {
+                ForEach(FinderLabel.menuOrder) { label in
+                    Button {
+                        cull(.label(label))
+                    } label: {
+                        Label {
+                            Text(label.menuTitle)
+                        } icon: {
+                            Image(nsImage: label.menuSwatch)
+                        }
+                    }
+                }
+                Divider()
+                Button("No Label") { cull(.label(.none)) }
+            }
+            .disabled(!canCull(.label(.none)))
+
+            Divider()
+
+            Button("Select Rejects") {
+                runInMainWindow(allowInLightbox: false) { explorerVM.selectRejects() }
+            }
+            .disabled(isBlocked || explorerVM.lightboxOpen || explorerVM.explorerRootPath == nil)
+
+            Button("Move Rejects to Trash…") {
+                runInMainWindow(allowInLightbox: false) { explorerVM.requestTrashRejects() }
+            }
+            .disabled(isBlocked || explorerVM.lightboxOpen || explorerVM.explorerRootPath == nil)
+        }
     }
 
     // MARK: - Command helpers
@@ -472,6 +542,15 @@ struct PromptLibraryExplorerApp: App {
     private var isBlocked: Bool { explorerVM.isAnyModalOpen }
 
     private var hasSelection: Bool { !explorerVM.selectedIndices.isEmpty }
+
+    /// Cull menu actions: the lightbox's item while it's open, else the selection.
+    private func cull(_ action: CullAction) {
+        runInMainWindow { explorerVM.performCullAction(action) }
+    }
+
+    private func canCull(_ action: CullAction) -> Bool {
+        !isBlocked && !explorerVM.cullTargets(for: action).isEmpty
+    }
 
     private var defaultCollectionName: String {
         let existing = Set(explorerVM.collections.map(\.name))

@@ -21,6 +21,17 @@ struct ContentItemContextMenu: View {
         targets.contains(where: { !$0.isDirectory })
     }
 
+    /// Targets that take flags and ratings (files only).
+    private var cullFiles: [FileEntry] {
+        targets.filter { !$0.isDirectory }
+    }
+
+    /// The value when every element agrees; nil when mixed or empty.
+    private func commonValue<Value: Equatable>(_ values: [Value]) -> Value? {
+        guard let first = values.first, values.allSatisfy({ $0 == first }) else { return nil }
+        return first
+    }
+
     /// Runs `action` after making the right-clicked item part of the selection.
     private func onSelection(_ action: @escaping () -> Void) -> () -> Void {
         { [vm, item, index] in
@@ -77,25 +88,18 @@ struct ContentItemContextMenu: View {
 
         Divider()
 
-        Menu("Rate") {
-            ForEach(1...5, id: \.self) { stars in
-                Button {
-                    vm.setRating(stars, for: item.path)
-                } label: {
-                    HStack {
-                        Text(String(repeating: "\u{2605}", count: stars))
-                        if vm.rating(for: item.path) == stars {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
+        CullActionMenus(
+            flag: commonValue(cullFiles.map { vm.flag(for: $0.path) }),
+            rating: commonValue(cullFiles.map { vm.rating(for: $0.path) }),
+            label: commonValue(targets.map { FinderLabel(labelNumber: $0.labelNumber) }),
+            includesFileActions: targetsHaveFiles,
+            perform: { action in
+                // Flags and ratings are for files; Finder labels go on folders too.
+                let items = action.appliesToFolders ? targets : cullFiles
+                ContentItemActions.ensureSelected(item, at: index, vm: vm)
+                vm.apply(action, to: items)
             }
-            Divider()
-            Button("Clear Rating") {
-                vm.setRating(0, for: item.path)
-            }
-            .disabled(vm.rating(for: item.path) == 0)
-        }
+        )
 
         Button(vm.isFavorite(path: item.path) ? "Unpin" : "Pin") {
             vm.toggleFavorite(path: item.path)

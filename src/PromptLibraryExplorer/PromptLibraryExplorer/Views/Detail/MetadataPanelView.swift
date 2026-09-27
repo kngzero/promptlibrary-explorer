@@ -304,6 +304,37 @@ struct MetadataPanelView: View {
                         .padding(.horizontal, AppSpacing.xl)
                         .padding(.vertical, AppSpacing.md)
 
+                        // Flag & Finder label
+                        HStack(spacing: AppSpacing.sm) {
+                            Text("Flag")
+                                .font(.appCalloutEmphasis)
+                                .foregroundStyle(Color.appMuted)
+                                .lineLimit(1)
+                                .fixedSize()
+                                .layoutPriority(1)
+                            Spacer()
+                            FlagSegmentedControl(flag: vm.flag(for: path)) { flag in
+                                applyCull(.flag(flag), to: path)
+                            }
+                        }
+                        .padding(.horizontal, AppSpacing.xl)
+                        .padding(.vertical, AppSpacing.xs)
+
+                        HStack(spacing: AppSpacing.sm) {
+                            Text("Label")
+                                .font(.appCalloutEmphasis)
+                                .foregroundStyle(Color.appMuted)
+                                .lineLimit(1)
+                                .fixedSize()
+                                .layoutPriority(1)
+                            Spacer()
+                            LabelSwatchRow(label: FinderLabel(labelNumber: vm.labelNumber(for: path))) { label in
+                                applyCull(.label(label), to: path)
+                            }
+                        }
+                        .padding(.horizontal, AppSpacing.xl)
+                        .padding(.vertical, AppSpacing.xs)
+
                         // Tags
                         let fileTags = vm.tagsForFile(at: path)
                         if !fileTags.isEmpty || !vm.allTags.isEmpty {
@@ -427,6 +458,12 @@ struct MetadataPanelView: View {
     }
 
     /// Saves `text` to the snippet library and confirms with a toast.
+    /// Flags / labels the file shown here (one undo step).
+    private func applyCull(_ action: CullAction, to path: String) {
+        guard let item = vm.listingSourceContents.first(where: { $0.path == path }) else { return }
+        vm.apply(action, to: [item])
+    }
+
     private func saveSnippet(text: String, category: String, title: String = "") {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }

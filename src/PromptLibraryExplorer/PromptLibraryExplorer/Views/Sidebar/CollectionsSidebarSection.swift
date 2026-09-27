@@ -32,6 +32,47 @@ struct CollectionsSidebarSection: View {
                     .sidebarSectionStart()
                     .listRowSeparator(.hidden)
                     .selectionDisabled()
+                    // Modals live on this single row. On the Group they'd be applied
+                    // to EVERY row of the section inside the List, so each row
+                    // presented its own copy (the "sheet opens 3 times" bug).
+                    .sheet(item: $creation) { request in
+                        NewCollectionSheet(
+                            request: request,
+                            parentName: request.parentID.flatMap { id in vm.collectionSets.first { $0.id == id }?.name },
+                            selectedFileCount: vm.selectedFileItems.count
+                        ) { name, withSelection in
+                            creation = nil
+                            switch request.kind {
+                            case .collection:
+                                vm.createCollection(named: name, withSelection: withSelection, inSet: request.parentID)
+                            case .set:
+                                vm.createCollectionSet(named: name, inSet: request.parentID)
+                            }
+                            isExpanded = true
+                            if let parent = request.parentID { setCollapsed(parent, false) }
+                        } onCancel: {
+                            creation = nil
+                        }
+                    }
+                    .alert(
+                        pendingDelete?.title ?? "",
+                        isPresented: Binding(
+                            get: { pendingDelete != nil },
+                            set: { if !$0 { pendingDelete = nil } }
+                        ),
+                        presenting: pendingDelete
+                    ) { target in
+                        Button("Delete", role: .destructive) {
+                            switch target {
+                            case .collection(let collection): vm.deleteCollection(collection.id)
+                            case .set(let set): vm.deleteCollectionSet(set.id)
+                            }
+                            pendingDelete = nil
+                        }
+                        Button("Cancel", role: .cancel) { pendingDelete = nil }
+                    } message: { target in
+                        Text(target.message)
+                    }
 
                 if isExpanded {
                     if isEmpty {
@@ -61,44 +102,6 @@ struct CollectionsSidebarSection: View {
                             .selectionDisabled()
                     }
                 }
-            }
-            .sheet(item: $creation) { request in
-                NewCollectionSheet(
-                    request: request,
-                    parentName: request.parentID.flatMap { id in vm.collectionSets.first { $0.id == id }?.name },
-                    selectedFileCount: vm.selectedFileItems.count
-                ) { name, withSelection in
-                    creation = nil
-                    switch request.kind {
-                    case .collection:
-                        vm.createCollection(named: name, withSelection: withSelection, inSet: request.parentID)
-                    case .set:
-                        vm.createCollectionSet(named: name, inSet: request.parentID)
-                    }
-                    isExpanded = true
-                    if let parent = request.parentID { setCollapsed(parent, false) }
-                } onCancel: {
-                    creation = nil
-                }
-            }
-            .alert(
-                pendingDelete?.title ?? "",
-                isPresented: Binding(
-                    get: { pendingDelete != nil },
-                    set: { if !$0 { pendingDelete = nil } }
-                ),
-                presenting: pendingDelete
-            ) { target in
-                Button("Delete", role: .destructive) {
-                    switch target {
-                    case .collection(let collection): vm.deleteCollection(collection.id)
-                    case .set(let set): vm.deleteCollectionSet(set.id)
-                    }
-                    pendingDelete = nil
-                }
-                Button("Cancel", role: .cancel) { pendingDelete = nil }
-            } message: { target in
-                Text(target.message)
             }
         }
     }

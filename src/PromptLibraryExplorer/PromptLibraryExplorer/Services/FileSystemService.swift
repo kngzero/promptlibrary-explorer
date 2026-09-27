@@ -22,6 +22,7 @@ enum FileSystemService {
     static func readDirectory(at url: URL) throws -> [FileEntry] {
         let keys: [URLResourceKey] = [
             .isDirectoryKey, .nameKey, .contentModificationDateKey, .creationDateKey, .fileSizeKey,
+            .labelNumberKey,
         ]
         let contents = try fm.contentsOfDirectory(
             at: url,
@@ -40,9 +41,29 @@ enum FileSystemService {
                 children: isDir ? [] : nil,
                 modifiedDate: values.contentModificationDate,
                 creationDate: values.creationDate,
-                fileSize: isDir ? nil : values.fileSize.map(Int64.init)
+                fileSize: isDir ? nil : values.fileSize.map(Int64.init),
+                labelNumber: values.labelNumber
             )
         }
+    }
+
+    // MARK: - Finder Labels
+
+    /// The item's Finder colour label read fresh from disk (0 = none).
+    static func labelNumber(at url: URL) -> Int {
+        var fresh = url
+        fresh.removeAllCachedResourceValues()
+        return (try? fresh.resourceValues(forKeys: [.labelNumberKey]))?.labelNumber ?? 0
+    }
+
+    /// Sets the item's Finder colour label (0 clears it). This is Finder's own
+    /// label, so Finder and other apps see it too.
+    static func setLabelNumber(_ labelNumber: Int, at url: URL) throws {
+        var target = url
+        var values = URLResourceValues()
+        values.labelNumber = max(0, min(7, labelNumber))
+        try target.setResourceValues(values)
+        target.removeAllCachedResourceValues()
     }
 
     /// Reads subdirectories (one level) from a directory, sorted by name.

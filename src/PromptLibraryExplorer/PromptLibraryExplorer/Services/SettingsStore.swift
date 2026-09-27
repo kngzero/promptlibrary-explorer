@@ -23,6 +23,13 @@ final class SettingsStore: ObservableObject {
     @AppStorage("externalDragOperation") var externalDragOperation: String = ExternalDragOperation.copy.rawValue
 
     @AppStorage("filterMinRating") var filterMinRating: Int = 0
+    @AppStorage("filterFlag") var filterFlag: String = FlagFilter.all.rawValue
+    /// Comma-separated Finder label numbers.
+    @AppStorage("filterLabels") var filterLabels: String = ""
+
+    // Culling
+    @AppStorage("cullingMode") var cullingMode: Bool = false
+    @AppStorage("cullAutoAdvance") var cullAutoAdvance: Bool = true
     @AppStorage("previewPaneCollapsed") var previewPaneCollapsed: Bool = false
     @AppStorage("searchMode") var searchMode: String = "filename"
 
@@ -85,12 +92,19 @@ final class SettingsStore: ObservableObject {
             hiddenFileTypes = decodeHiddenFileTypes(hiddenFileTypesValue)
         }
 
-        return FilterConfig(hiddenFileTypes: hiddenFileTypes, filterMinRating: filterMinRating)
+        return FilterConfig(
+            hiddenFileTypes: hiddenFileTypes,
+            filterMinRating: filterMinRating,
+            flagFilter: FlagFilter(rawValue: filterFlag) ?? .all,
+            labelFilter: Set(filterLabels.split(separator: ",").compactMap { Int($0) }.filter { (0...7).contains($0) })
+        )
     }
 
     func saveFilterConfig(_ config: FilterConfig) {
         saveHiddenFileTypes(config.hiddenFileTypes)
         filterMinRating = config.filterMinRating
+        filterFlag = config.flagFilter.rawValue
+        filterLabels = config.labelFilter.sorted().map(String.init).joined(separator: ",")
     }
 
     private func saveHiddenFileTypes(_ hiddenFileTypes: Set<FileTypeFilter>) {
@@ -110,8 +124,8 @@ final class SettingsStore: ObservableObject {
     }
 }
 
-/// Helpers for metadata stores keyed by absolute file path (ratings, tags,
-/// favorites, custom sort orders). When a file or folder is renamed or moved,
+/// Helpers for metadata stores keyed by absolute file path (ratings, flags,
+/// tags, favorites, custom sort orders). When a file or folder is renamed or moved,
 /// its own key and every key underneath it (for folders) must follow it.
 enum MetadataPathKeys {
     /// True when `path` is `root` itself or lives inside it.

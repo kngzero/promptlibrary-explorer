@@ -17,28 +17,31 @@ struct SmartFolderSidebarView: View {
                     .sidebarSectionStart()
                     .listRowSeparator(.hidden)
                     .selectionDisabled()
+                    // Modals live on this single row. On the Group they'd be applied
+                    // to EVERY row of the section inside the List, so each row
+                    // presented its own copy (the "sheet opens 3 times" bug).
+                    .alert(
+                        "Delete \"\(pendingDelete?.name ?? "")\"?",
+                        isPresented: Binding(
+                            get: { pendingDelete != nil },
+                            set: { if !$0 { pendingDelete = nil } }
+                        ),
+                        presenting: pendingDelete
+                    ) { folder in
+                        Button("Delete", role: .destructive) {
+                            vm.deleteSmartFolder(folder)
+                            pendingDelete = nil
+                        }
+                        Button("Cancel", role: .cancel) { pendingDelete = nil }
+                    } message: { _ in
+                        Text("The smart folder and its rules are removed. Your files are not touched. This can't be undone.")
+                    }
 
                 if isExpanded {
                     ForEach(smartFolders) { folder in
                         smartFolderRow(folder)
                     }
                 }
-            }
-            .alert(
-                "Delete \"\(pendingDelete?.name ?? "")\"?",
-                isPresented: Binding(
-                    get: { pendingDelete != nil },
-                    set: { if !$0 { pendingDelete = nil } }
-                ),
-                presenting: pendingDelete
-            ) { folder in
-                Button("Delete", role: .destructive) {
-                    vm.deleteSmartFolder(folder)
-                    pendingDelete = nil
-                }
-                Button("Cancel", role: .cancel) { pendingDelete = nil }
-            } message: { _ in
-                Text("The smart folder and its rules are removed. Your files are not touched. This can't be undone.")
             }
         }
     }

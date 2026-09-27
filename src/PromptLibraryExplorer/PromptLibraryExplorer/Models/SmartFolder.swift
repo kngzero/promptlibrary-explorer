@@ -36,6 +36,10 @@ struct SmartFolderCriteria: Codable, Hashable {
     var modelContains = ""
     var requiresPrompt = false
     var requiresNegativePrompt = false
+    /// Pick / reject rule (`.all` = no rule).
+    var flag: FlagFilter = .all
+    /// Finder label numbers, any of (0 = no label). Empty = no rule.
+    var labels: Set<Int> = []
     var matchMode: SmartFolderMatchMode = .all
 
     typealias MatchMode = SmartFolderMatchMode
@@ -50,11 +54,14 @@ struct SmartFolderCriteria: Codable, Hashable {
             || !modelContains.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || requiresPrompt
             || requiresNegativePrompt
+            || flag != .all
+            || !labels.isEmpty
     }
 
     enum CodingKeys: String, CodingKey {
         case searchQuery, fileTypes, minRating, dateRange
         case tagIDs, favoritesOnly, modelContains, requiresPrompt, requiresNegativePrompt, matchMode
+        case flag, labels
     }
 }
 
@@ -79,6 +86,12 @@ extension SmartFolderCriteria {
         requiresNegativePrompt = (try? c.decodeIfPresent(Bool.self, forKey: .requiresNegativePrompt)) ?? false
         if let raw = try? c.decodeIfPresent(String.self, forKey: .matchMode) {
             matchMode = SmartFolderMatchMode(rawValue: raw) ?? .all
+        }
+        if let raw = try? c.decodeIfPresent(String.self, forKey: .flag) {
+            flag = FlagFilter(rawValue: raw) ?? .all
+        }
+        if let rawLabels = try? c.decodeIfPresent([Int].self, forKey: .labels) {
+            labels = Set(rawLabels.filter { FinderLabel(rawValue: $0) != nil })
         }
     }
 }

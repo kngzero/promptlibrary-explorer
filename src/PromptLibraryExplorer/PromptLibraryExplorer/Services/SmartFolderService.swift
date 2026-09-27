@@ -136,6 +136,16 @@ final class SmartFolderService {
             rules.append { entry in hasText(context.negativeByPath[entry.path]) }
         }
 
+        if criteria.flag != .all {
+            let flagFilter = criteria.flag
+            rules.append { entry in flagFilter.includes(context.flags[entry.path] ?? .unflagged) }
+        }
+
+        if !criteria.labels.isEmpty {
+            let labels = criteria.labels
+            rules.append { entry in labels.contains(FinderLabel(labelNumber: entry.labelNumber).rawValue) }
+        }
+
         return rules
     }
 
@@ -165,6 +175,8 @@ struct SmartFolderFilterContext {
     var promptByPath: [String: String]
     var negativeByPath: [String: String]
     var modelByPath: [String: String]
+    /// Pick / reject flags (unflagged files have no entry).
+    var flags: [String: FileFlag]
 
     init(
         tagsByPath: [String: Set<UUID>] = [:],
@@ -172,7 +184,8 @@ struct SmartFolderFilterContext {
         ratings: [String: Int] = [:],
         promptByPath: [String: String] = [:],
         negativeByPath: [String: String] = [:],
-        modelByPath: [String: String] = [:]
+        modelByPath: [String: String] = [:],
+        flags: [String: FileFlag] = [:]
     ) {
         self.tagsByPath = tagsByPath
         self.favorites = favorites
@@ -180,6 +193,7 @@ struct SmartFolderFilterContext {
         self.promptByPath = promptByPath
         self.negativeByPath = negativeByPath
         self.modelByPath = modelByPath
+        self.flags = flags
     }
 }
 

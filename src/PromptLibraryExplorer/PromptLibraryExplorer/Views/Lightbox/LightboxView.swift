@@ -70,6 +70,11 @@ struct LightboxView: View {
             // Save panels, sheets, other key windows (Settings) and focused text fields own their keys.
             guard !ModalKeyGuard.shouldIgnore(event) else { return false }
             if handleZoomShortcut(event) { return true }
+            // Bare P X U 0–9: culling keys (this monitor is their only owner here).
+            if let action = CullAction(event: event) {
+                if !event.isARepeat { applyCullKey(action) }
+                return true
+            }
             switch event.keyCode {
             case KeyCode.escape.rawValue:
                 closeLightbox()
@@ -202,6 +207,11 @@ struct LightboxView: View {
                     }
                 }
 
+                if vm.cullingModeEnabled, let item = currentItem {
+                    CullingHUD(item: item)
+                        .padding(.horizontal, 56)
+                }
+
                 if let image = currentImage {
                     zoomToolbar(for: image, viewportSize: geometry.size)
                         .padding(.bottom, (currentEntry?.images.count ?? 0) > 1 ? 82 : 28)
@@ -237,6 +247,7 @@ struct LightboxView: View {
                     .font(.appIcon(16, weight: .semibold))
                     .foregroundStyle(Color.appPrimaryText)
                 Spacer()
+                cullingChromeButtons
                 Button { closeLightbox() } label: {
                     Image(systemName: "xmark")
                         .font(.appIcon(14, weight: .medium))
@@ -387,6 +398,63 @@ struct LightboxView: View {
                 .background(Color.appBorder)
         }
         .zIndex(2)
+    }
+
+    // MARK: - Culling
+
+    /// Culling Mode toggle, plus Auto-advance while culling. Persisted in the
+    /// view model (also in the Cull menu).
+    @ViewBuilder
+    private var cullingChromeButtons: some View {
+        if vm.cullingModeEnabled {
+            Button {
+                vm.cullAutoAdvance.toggle()
+            } label: {
+                Image(systemName: "forward.end")
+                    .font(.appIcon(13, weight: .medium))
+            }
+            .buttonStyle(
+                AppIconButtonStyle(
+                    width: 30,
+                    height: 30,
+                    cornerRadius: AppRadius.md,
+                    restingForeground: vm.cullAutoAdvance ? Color.appAccent : Color.appMuted
+                )
+            )
+            .help(vm.cullAutoAdvance ? "Auto-advance On: next item after flag, rate or label" : "Auto-advance Off")
+            .accessibilityLabel("Auto-advance")
+            .accessibilityValue(vm.cullAutoAdvance ? "On" : "Off")
+        }
+
+        Button {
+            vm.cullingModeEnabled.toggle()
+        } label: {
+            Image(systemName: vm.cullingModeEnabled ? "flag.2.crossed.fill" : "flag.2.crossed")
+                .font(.appIcon(13, weight: .medium))
+        }
+        .buttonStyle(
+            AppIconButtonStyle(
+                width: 30,
+                height: 30,
+                cornerRadius: AppRadius.md,
+                restingForeground: vm.cullingModeEnabled ? Color.appAccent : Color.appMuted
+            )
+        )
+        .help(vm.cullingModeEnabled ? "Turn Off Culling Mode" : "Culling Mode: P pick, X reject, U unflag, 0–5 rate, 6–9 label")
+        .accessibilityLabel("Culling Mode")
+        .accessibilityValue(vm.cullingModeEnabled ? "On" : "Off")
+    }
+
+    /// Applies a culling key to the item shown. If it's still here afterwards,
+    /// auto-advance (culling mode) moves on through the normal navigation; if a
+    /// filter now hides it, the lightbox has already moved to its neighbour
+    /// (see `ExplorerViewModel.performCullAction`), which counts as advancing.
+    private func applyCullKey(_ action: CullAction) {
+        let pathBefore = currentItem?.path
+        guard vm.performCullAction(action) > 0 else { return }
+        if let pathBefore, currentItem?.path == pathBefore, vm.isCullAutoAdvanceActive {
+            navigateToNext()
+        }
     }
 
     // MARK: - Card Section
