@@ -135,6 +135,14 @@ struct MainContentView: View {
             // Nothing in the covered (or uncovered) browser keeps keyboard focus.
             ModalKeyGuard.mainBrowserWindow?.makeFirstResponder(nil)
         }
+        .onChange(of: vm.isComparePageActive) { _, _ in
+            // Same for the Compare page (Views/Compare).
+            ModalKeyGuard.mainBrowserWindow?.makeFirstResponder(nil)
+        }
+        .onChange(of: vm.isSimilarImagesPageActive) { _, active in
+            // The Similar Images page replaces the Compare page.
+            if active { vm.closeComparePage() }
+        }
         .onChange(of: splitViewVisibility) { _, visibility in
             SettingsStore.shared.sidebarVisible = visibility != .doubleColumn && visibility != .detailOnly
         }
@@ -162,12 +170,12 @@ struct MainContentView: View {
                         .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 320)
                 } content: {
                     ContentBrowserView(collapsedGroups: $collapsedGroups)
-                        .coveredBySimilarImagesPage(vm.isSimilarImagesPageActive)
+                        .coveredBySimilarImagesPage(vm.isSimilarImagesPageActive || vm.isComparePageActive)
                         .background(SizeReporter(size: $contentColumnSize))
                         .navigationSplitViewColumnWidth(min: 400, ideal: 600)
                 } detail: {
                     MetadataPanelView()
-                        .coveredBySimilarImagesPage(vm.isSimilarImagesPageActive)
+                        .coveredBySimilarImagesPage(vm.isSimilarImagesPageActive || vm.isComparePageActive)
                         .background(SizeReporter(size: $detailColumnSize))
                         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 400)
                 }
@@ -181,6 +189,16 @@ struct MainContentView: View {
                 .overlay(alignment: .bottomTrailing) {
                     if vm.isSimilarImagesPageActive, contentColumnSize.width > 0 {
                         SimilarImagesPageView()
+                            .frame(width: similarPageWidth, height: max(0, contentColumnSize.height))
+                            .transition(.opacity.animation(.easeInOut(duration: 0.12)))
+                    }
+                }
+                // Compare page (View ▸ Compare Images): same footprint as the
+                // Similar Images page, same "browser untouched underneath".
+                .overlay(alignment: .bottomTrailing) {
+                    if let compare = vm.comparePageModel, !vm.isSimilarImagesPageActive, contentColumnSize.width > 0 {
+                        ComparePageView(model: compare)
+                            .id(compare.id)
                             .frame(width: similarPageWidth, height: max(0, contentColumnSize.height))
                             .transition(.opacity.animation(.easeInOut(duration: 0.12)))
                     }
@@ -295,6 +313,15 @@ struct MainContentView: View {
 
         // No root path = nothing to navigate
         guard vm.explorerRootPath != nil else { return false }
+
+        // The Compare page: Esc closes it; the browser's bare keys stop here.
+        if vm.isComparePageActive {
+            return vm.handleComparePageKey(
+                keyCode: event.keyCode,
+                characters: event.charactersIgnoringModifiers,
+                modifiers: event.modifierFlags
+            )
+        }
 
         // The Similar Images page owns the bare keys while it's up; nothing may
         // leak into the browser hidden underneath (no grid moves, no culling

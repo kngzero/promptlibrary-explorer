@@ -84,6 +84,12 @@ final class ThumbnailService {
             return await artOfficialImage(for: url, maxPixelSize: size * scale, key: key, cache: memoryCache)
         }
 
+        // Audio: a waveform drawn from the file's peaks (MediaWaveformService).
+        if FileHelpers.isAudioFile(url.lastPathComponent) {
+            let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+            return await waveformImage(for: url, maxPixelSize: size * scale, key: key, cache: memoryCache)
+        }
+
         // Tier 3: Generate via QLThumbnailGenerator
         let request = QLThumbnailGenerator.Request(
             fileAt: url,
@@ -203,7 +209,8 @@ final class ThumbnailService {
     /// Art Official documents are rendered by this app; the tag keeps them from
     /// reusing a generic icon cached before the renderer existed.
     nonisolated private static func kindTag(for url: URL) -> String {
-        FileHelpers.isArtOfficialDocumentFile(url.lastPathComponent) ? "-aodoc1" : ""
+        if FileHelpers.isAudioFile(url.lastPathComponent) { return "-wave1" }
+        return FileHelpers.isArtOfficialDocumentFile(url.lastPathComponent) ? "-aodoc1" : ""
     }
 
     // MARK: - Memory
@@ -259,6 +266,63 @@ final class ThumbnailService {
         store(image, key: key, in: cache)
         Self.persistToDisk(rendered, key: key)
         return image
+    }
+
+    /// Audio tiles: the waveform of the whole file, square, on a transparent background.
+    private func waveformImage(
+        for url: URL,
+        maxPixelSize: CGFloat,
+        key: String,
+        cache: NSCache<NSString, NSImage>
+    ) async -> NSImage? {
+        guard let peaks = await MediaWaveformService.peaks(for: url, bucketCount: MediaWaveformService.thumbnailBucketCount),
+              !Task.isCancelled
+        else { return nil }
+        let pixels = max(maxPixelSize, 32)
+        let rendered = await Task.detached(priority: .userInitiated) {
+            WaveformRenderer.thumbnail(peaks: peaks, pixelSize: pixels)
+        }.value
+        guard let rendered else { return nil }
+        let image = NSImage(cgImage: rendered, size: NSSize(width: rendered.width, height: rendered.height))
+        store(image, key: key, in: cache)
+        Self.persistToDisk(rendered, key: key)
+        return image
+    }
+
+    // MARK: - Media caches (hover-scrub strips, waveform peaks)
+
+    /// Disk-cache key for derived media data (`variant` names what's stored), keyed by the
+    /// file's path + mtime + size like thumbnails. Nil when the file can't be stat'ed.
+    nonisolated static func mediaCacheKey(for url: URL, variant: String) -> String? {
+        guard let signature = fileSignature(for: url, size: 0) else { return nil }
+        let digest = SHA256.hash(data: Data((variant + "|" + signature).utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    nonisolated static func loadMediaCacheImage(key: String) async -> CGImage? {
+        await Task.detached(priority: .utility) { () -> CGImage? in
+            let url = diskURL(for: key, ext: "jpg")
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+            else { return nil }
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+            return image
+        }.value
+    }
+
+    nonisolated static func storeMediaCacheImage(_ cgImage: CGImage, key: String) {
+        persistToDisk(cgImage, key: key)
+    }
+
+    nonisolated static func loadMediaCacheData(key: String, ext: String) -> Data? {
+        let url = diskURL(for: key, ext: ext)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+        return data
+    }
+
+    nonisolated static func storeMediaCacheData(_ data: Data, key: String, ext: String) {
+        try? data.write(to: diskURL(for: key, ext: ext), options: .atomic)
     }
 
     nonisolated private static func downsampledCGImage(at url: URL, maxPixelSize: CGFloat) async -> CGImage? {

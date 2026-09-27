@@ -33,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // focused: don't select the browser's items behind it.
         guard !ModalKeyGuard.isAuxiliaryWindowKey else { return }
         guard let viewModel, !viewModel.isModalBlockingCommands, !viewModel.lightboxOpen,
-              !viewModel.isSimilarImagesPageActive
+              !viewModel.isSimilarImagesPageActive, !viewModel.isComparePageActive
         else { return }
         viewModel.selectAllItems()
     }
@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return !viewModel.isModalBlockingCommands
             && !viewModel.lightboxOpen
             && !viewModel.isSimilarImagesPageActive
+            && !viewModel.isComparePageActive
             && !viewModel.processedFolderContents.isEmpty
     }
 
@@ -74,6 +75,8 @@ struct PromptLibraryExplorerApp: App {
         WindowGroup {
             MainContentView()
                 .exportSheetsHost()
+                .ingestSheetsHost()
+                .mediaSheetsHost()
                 .environment(explorerVM)
                 .frame(minWidth: 900, minHeight: 600)
                 .preferredColorScheme(explorerVM.appearanceMode.preferredColorScheme)
@@ -246,6 +249,21 @@ struct PromptLibraryExplorerApp: App {
                     }
                     .disabled(isBlocked || browserHidden || !explorerVM.canExport)
                 }
+
+                // Video tools (selection or the lightbox video). No shortcuts.
+                Group {
+                    Divider()
+
+                    Button("Save Middle Frame") {
+                        runInMainWindow { explorerVM.saveMiddleFramesForTarget() }
+                    }
+                    .disabled(isBlocked || !explorerVM.canSaveMiddleFrame)
+
+                    Button("Trim & Export Clip…") {
+                        runInMainWindow { explorerVM.openTrimForTarget() }
+                    }
+                    .disabled(isBlocked || !explorerVM.canTrimVideo)
+                }
             }
 
             // MARK: Edit
@@ -313,7 +331,10 @@ struct PromptLibraryExplorerApp: App {
             CommandGroup(after: .sidebar) {
                 // Leaves the Similar Images page (same as its Done button / Esc).
                 Button("Show Browser") {
-                    run { explorerVM.leaveSimilarImagesPage() }
+                    run {
+                        explorerVM.leaveSimilarImagesPage()
+                        explorerVM.closeComparePage()
+                    }
                 }
                 .disabled(isBlocked || !browserHidden)
 
@@ -408,6 +429,42 @@ struct PromptLibraryExplorerApp: App {
                     run { Task { await explorerVM.openComparison() } }
                 }
                 .disabled(isBlocked || browserHidden || explorerVM.selectedAoeItems.count < 2 || explorerVM.isLoadingComparison)
+
+                // Viewing tools (Views/Compare, Views/Viewing). No key
+                // equivalents; nothing here deletes or marks files.
+                Group {
+                    Divider()
+
+                    // 2–4 selected images / videos; on the Similar Images page
+                    // it toggles the group's synced compare.
+                    Button("Compare Images") {
+                        run(allowInLightbox: false) { explorerVM.compareImagesCommand() }
+                    }
+                    .disabled(isBlocked || explorerVM.lightboxOpen || explorerVM.isComparePageActive || !explorerVM.canCompareImages)
+
+                    // Selection (2+), else the listing: folder, collection or virtual listing.
+                    Button("Start Slideshow") {
+                        runInMainWindow(allowInLightbox: false) { explorerVM.startSlideshow() }
+                    }
+                    .disabled(isBlocked || explorerVM.lightboxOpen || !explorerVM.canStartSlideshow)
+
+                    // Lightbox loupe and histogram (also buttons in the lightbox header).
+                    Toggle("Loupe", isOn: viewingBinding(\.loupeEnabled))
+
+                    Menu("Loupe Magnification") {
+                        Picker("Loupe Magnification", selection: viewingBinding(\.loupeMagnification)) {
+                            ForEach(ViewingController.loupeMagnifications, id: \.self) { Text("\($0)×").tag($0) }
+                        }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
+
+                        Divider()
+
+                        Toggle("Crisp Pixels (Nearest Neighbour)", isOn: viewingBinding(\.loupeNearestNeighbour))
+                    }
+
+                    Toggle("Histogram", isOn: viewingBinding(\.histogramEnabled))
+                }
 
                 Divider()
 
@@ -571,6 +628,30 @@ struct PromptLibraryExplorerApp: App {
                     runInMainWindow { explorerVM.writeXMPSidecarsNow() }
                 }
                 .disabled(isBlocked || explorerVM.explorerRootPath == nil)
+
+                // Ingest inbox (Settings ▸ Ingest has the watched folders). No key equivalents.
+                Group {
+                    Divider()
+
+                    Button("Show Inbox") {
+                        runInMainWindow { explorerVM.openInbox() }
+                    }
+                    .disabled(isBlocked || browserHidden || !IngestController.shared.hasSources)
+
+                    Button("Mark Inbox as Seen") {
+                        run { explorerVM.markInboxSeen() }
+                    }
+                    .disabled(isBlocked || IngestController.shared.unseenCount == 0)
+
+                    Button("Ingest Log…") {
+                        run { explorerVM.showIngestLog() }
+                    }
+                    .disabled(isBlocked)
+
+                    Button("Watched Folders…") {
+                        explorerVM.openIngestSettings()
+                    }
+                }
             }
 
             // MARK: Cull, Help
@@ -668,7 +749,7 @@ struct PromptLibraryExplorerApp: App {
     /// The Similar Images page covers the browser: browser-only commands are
     /// disabled; Cull, Copy Prompt, Copy Path, Reveal and More Like This act on
     /// the page's focused card instead of the hidden selection.
-    private var browserHidden: Bool { explorerVM.isSimilarImagesPageActive }
+    private var browserHidden: Bool { explorerVM.isSimilarImagesPageActive || explorerVM.isComparePageActive }
 
     /// Cull menu actions: the lightbox's item while it's open, else the selection.
     private func cull(_ action: CullAction) {
@@ -717,6 +798,14 @@ struct PromptLibraryExplorerApp: App {
         }
         explorerVM.lightboxOpen = false
         DispatchQueue.main.async { action() }
+    }
+
+    /// Loupe / histogram settings (`ViewingController`).
+    private func viewingBinding<Value>(_ keyPath: ReferenceWritableKeyPath<ViewingController, Value>) -> Binding<Value> {
+        Binding(
+            get: { ViewingController.shared[keyPath: keyPath] },
+            set: { ViewingController.shared[keyPath: keyPath] = $0 }
+        )
     }
 
     private func viewModeBinding(_ mode: BrowserViewMode) -> Binding<Bool> {

@@ -100,6 +100,8 @@ struct SettingsView: View {
             ExportSettingsPage()
         case .libraryIndex:
             LibraryIndexSettingsPage()
+        case .ingest:
+            IngestSettingsPage()
         case .organize:
             OrganizeSettingsPage()
         case .data:

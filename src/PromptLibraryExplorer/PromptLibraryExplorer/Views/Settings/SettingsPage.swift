@@ -12,6 +12,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
     case fileOperations
     case export
     case libraryIndex
+    case ingest
     case organize
     case data
     case storage
@@ -22,7 +23,7 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .appearance:
             return .general
-        case .filters, .fileOperations, .export, .libraryIndex:
+        case .filters, .fileOperations, .export, .libraryIndex, .ingest:
             return .library
         case .organize, .data, .storage:
             return .maintenance
@@ -41,6 +42,8 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
             return "Export"
         case .libraryIndex:
             return "Search Index"
+        case .ingest:
+            return "Ingest"
         case .organize:
             return "Organize"
         case .data:
@@ -62,6 +65,8 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
             return "square.and.arrow.up.on.square"
         case .libraryIndex:
             return "text.magnifyingglass"
+        case .ingest:
+            return "tray.and.arrow.down"
         case .organize:
             return "calendar.badge.clock"
         case .data:
@@ -84,6 +89,8 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
             return "Presets for exporting copies: format, size, metadata, names, destination and watermark."
         case .libraryIndex:
             return "The full-text prompt index behind library search and the command palette."
+        case .ingest:
+            return "Live folder updates, and watched folders whose new files are sorted, renamed and tagged into your library."
         case .organize:
             return "Reshape the current folder into dated subfolders, or flatten it back out."
         case .data:

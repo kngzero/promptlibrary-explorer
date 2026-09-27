@@ -26,6 +26,9 @@ struct FileTreeView: View {
                     FavoriteItemView(name: "Pictures", icon: "photo", favorite: .pictures)
                 }
 
+                // Ingest Inbox (only with a watched folder configured)
+                InboxSidebarSection()
+
                 // Recent Folders
                 RecentFoldersSidebarSection()
 

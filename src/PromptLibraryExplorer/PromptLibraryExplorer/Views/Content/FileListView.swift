@@ -287,6 +287,7 @@ private struct FileListRow: View {
         HStack(spacing: AppSpacing.md) {
             thumbnailView
                 .frame(width: FileListColumns.thumbnailWidth, height: FileListColumns.thumbnailWidth)
+                .videoHoverScrub(url: item.url, isVideo: !item.isDirectory && FileHelpers.isVideoFile(item.name), hairlineHeight: 1.5, cornerRadius: AppRadius.xs)
                 .opacity(!item.isDirectory && vm.flag(for: item.path) == .reject ? 0.38 : 1)
 
             nameView

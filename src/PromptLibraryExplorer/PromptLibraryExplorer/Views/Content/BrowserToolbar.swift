@@ -244,7 +244,7 @@ struct BrowserToolbar: CustomizableToolbarContent {
     private var sortMenu: some View {
         Menu {
             if vm.isVirtualListingMode {
-                Toggle("Similarity (Most Similar First)", isOn: Binding(
+                Toggle(vm.isInboxListingActive ? "Inbox Order (Newest First)" : "Similarity (Most Similar First)", isOn: Binding(
                     get: { vm.virtualListingRanked },
                     set: { if $0 { vm.restoreVirtualListingRank() } }
                 ))

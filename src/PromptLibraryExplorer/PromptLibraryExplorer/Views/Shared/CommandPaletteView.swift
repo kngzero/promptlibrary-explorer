@@ -79,6 +79,22 @@ struct CommandPaletteView: View {
                 : ("Similar Images", "square.on.square", { vm.showSimilarImagesPage() }),
         ]
 
+        // Viewing tools (Views/Compare, Views/Viewing).
+        if vm.canCompareImages, !vm.isComparePageActive {
+            actions.append(("Compare Images", "rectangle.split.2x1", { vm.compareImagesCommand() }))
+        }
+        if vm.canStartSlideshow {
+            actions.append(("Start Slideshow", "play.rectangle", { vm.startSlideshow() }))
+        }
+
+        // Ingest inbox (only with a watched folder).
+        if IngestController.shared.hasSources {
+            actions += [
+                ("Show Inbox", "tray.and.arrow.down", { vm.openInbox() }),
+                ("Mark Inbox as Seen", "checkmark.circle", { vm.markInboxSeen() }),
+            ]
+        }
+
         // Export suite (selection, else the listing).
         if vm.canExport {
             actions += [
@@ -86,6 +102,14 @@ struct CommandPaletteView: View {
                 ("Export for Sharing (Strip AI Metadata)…", "lock.shield", { vm.openExportForSharing() }),
                 ("Export Contact Sheet…", "rectangle.grid.3x2", { vm.openContactSheet() }),
             ]
+        }
+
+        // Video tools (the selected video).
+        if vm.canSaveMiddleFrame {
+            actions.append(("Save Middle Frame", "photo.badge.arrow.down", { vm.saveMiddleFramesForTarget() }))
+        }
+        if vm.canTrimVideo {
+            actions.append(("Trim & Export Clip…", "timeline.selection", { vm.openTrimForTarget() }))
         }
 
         for (name, icon, action) in actions where q.isEmpty || name.lowercased().contains(q) {

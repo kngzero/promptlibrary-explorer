@@ -35,6 +35,15 @@ struct AppearanceSettingsPage: View {
                     set: { vm.showTileColorStrip = $0 }
                 )
             )
+
+            SettingsToggleRow(
+                title: "Scrub videos by hovering over their tiles",
+                detail: "Move the pointer across a video's thumbnail (grid or list) to preview it; a thin line shows the position. Leaving the tile shows the poster frame again.",
+                isOn: Binding(
+                    get: { MediaController.shared.hoverScrubEnabled },
+                    set: { MediaController.shared.hoverScrubEnabled = $0 }
+                )
+            )
         }
     }
 }

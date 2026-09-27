@@ -276,6 +276,8 @@ struct VirtualListing: Identifiable, Equatable, Sendable {
         case palette(colors: [String])
         /// One group from the Similar Images page, in the group's own order.
         case similarGroup(exact: Bool)
+        /// The ingest Inbox (all sources, or one), newest first.
+        case inbox(sourceID: UUID?)
     }
 
     /// What closing the listing returns to.
@@ -304,6 +306,7 @@ struct VirtualListing: Identifiable, Equatable, Sendable {
         case .similarTo: return "sparkle.magnifyingglass"
         case .palette: return "paintpalette"
         case .similarGroup: return "square.on.square"
+        case .inbox: return "tray.and.arrow.down"
         }
     }
 

@@ -24,7 +24,12 @@ struct SimilarComparisonView: View {
                 VStack(spacing: 0) {
                     groupHeader(set, index: index)
                     Divider().background(Color.appBorder)
-                    cards(for: set)
+                    // Compare toggle: the synced compare (Views/Compare) instead of the cards.
+                    if ViewingController.shared.similarPageCompare, set.paths.count >= CompareEligibility.minimumCount {
+                        SimilarGroupCompareView(set: set)
+                    } else {
+                        cards(for: set)
+                    }
                 }
             } else {
                 emptyState
@@ -45,6 +50,7 @@ struct SimilarComparisonView: View {
                 .font(.appCaption)
                 .foregroundStyle(Color.appMuted)
             Spacer(minLength: AppSpacing.md)
+            SimilarCompareToggle()
             ForEach(SimilarGroupPageAction.displayOrder) { action in
                 groupActionControl(action, set: set, index: index)
             }

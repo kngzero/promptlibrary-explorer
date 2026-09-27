@@ -127,6 +127,19 @@ enum HelpContent {
             ]
         ),
         HelpFileTypeDescription(
+            id: "video-audio-tools",
+            extensionLabel: "Video & Audio",
+            title: "Hover Scrubbing, Frames, Trimming and Waveforms",
+            description: "Tools for video and audio files in the grid, the list, the lightbox and the details panel. The original file is never modified or overwritten: everything is written as a new file.",
+            highlights: [
+                "Hover scrubbing: move the pointer across a video's tile (grid or list) to see the frame at that point, with a thin line for the position; leaving the tile shows the poster again. Settings ▸ Appearance turns it off.",
+                "Frames: in the lightbox, Save Frame… saves the frame on screen at full resolution as PNG or JPEG (named like \"clip @ 00m12s.png\"), Copy Frame puts it on the clipboard, and Frame Strip… saves a contact strip of 4–24 evenly spaced frames with timecodes. Save Middle Frame (context menu, File menu) writes a PNG of each selected video's midpoint next to it.",
+                "Trim & Export Clip… (lightbox Trim…, context menu, File menu): drag the in and out handles over the frame strip, play the range, then export as MP4 (H.264 or HEVC) or an animated GIF (5–30 fps, a maximum width, loop or play once). An MP4 whose codec matches the source is copied without re-encoding. Clips are saved next to the original as \"clip (trim).mp4\" / \"clip.gif\" (numbered if the name is taken) or wherever you choose; the export shows progress and can be cancelled.",
+                "Audio files show their waveform as the thumbnail. The lightbox and details audio player shows a large waveform: click to seek, drag to select a region, then Loop plays just that region.",
+                "Beat (BPM) and key detection aren't included."
+            ]
+        ),
+        HelpFileTypeDescription(
             id: "visual-search",
             extensionLabel: "Visual Search",
             title: "Similar Images, More Like This and Colour Search",
@@ -144,6 +157,20 @@ enum HelpContent {
             ]
         ),
         HelpFileTypeDescription(
+            id: "viewing-tools",
+            extensionLabel: "Viewing",
+            title: "Compare Images, Loupe, Histogram and Slideshow",
+            description: "Tools for looking closely. None of them changes, marks or deletes a file.",
+            highlights: [
+                "Compare Images (select 2 to 4 images or videos, then View ▸ Compare Images, the context menu or the command palette) opens a page over the browser and details panel; the sidebar stays. Side by Side shows every file with the same zoom and pan: pinch, the mouse wheel or Cmd-scroll zoom around the pointer, dragging (or a two-finger scroll) pans every pane together, and double-click switches between Fit and 100 %. The toolbar has Fit, 50, 100, 200 and 400 %.",
+                "Same Framing (the default) lines up images of different sizes, so a master and its upscale show the same part of the picture; Actual Pixels makes 100 % one image pixel per screen pixel for each file. Each pane's bar shows its name, pixel size, file size and its own zoom, with Reveal in Finder, Copy Path and Copy Prompt. Videos compare as a frame.",
+                "A/B Wipe shows two files in one view with a divider you drag; switch it to a horizontal divider, pick which files are A and B, or swap them. Images are decoded at the size the screen needs, and at full resolution only once you zoom to 100 % or more. Done, Esc or View ▸ Show Browser returns to the browser as you left it.",
+                "On the Similar Images page, the group header's Compare button shows the group in the same synced compare instead of the cards (four files at a time; ← / → move through a larger group).",
+                "In the lightbox, the magnifier button (or View ▸ Loupe) shows a loupe that follows the pointer at 2× or 4× the image's own pixels, with the pixel's position and RGB value; Crisp Pixels (View ▸ Loupe Magnification) shows hard pixel edges. The chart button (or View ▸ Histogram) shows the RGB and luminance histogram with shadow and highlight clipping.",
+                "View ▸ Start Slideshow plays the selection (2 or more files), or else the whole folder, collection or listing in its current order and with its filters (hidden rejects stay hidden), full screen on the display the window is on. Move the mouse for the controls; the options set the interval (2–30 s), transition (none, crossfade, slide), shuffle, loop, background, caption (file name, prompt excerpt, rating) and whether videos play (the slideshow moves on when one ends)."
+            ]
+        ),
+        HelpFileTypeDescription(
             id: "curation-data",
             extensionLabel: "Your Data",
             title: "Backups, Export and Sync Between Macs",
@@ -154,6 +181,22 @@ enum HelpContent {
                 "Sync between Macs (on by default): each library gets a hidden .promptlibrary/curation.json with its files' curation and library-relative paths, so it works where Dropbox lives at another path. Changes are written about two seconds after you make them and merged value by value when another Mac's changes arrive — the newest change wins, removals don't come back, simultaneous edits keep this Mac's value, and Dropbox conflicted copies are merged and removed.",
                 "Finder tags (on by default): the app's tags are mirrored to Finder tags and Finder tags show up as app tags; removing one on either side removes it on the other. Finder's colour tags stay labels. Tag changes never alter file contents or modification dates.",
                 "XMP sidecars (off by default): a Lightroom / Bridge style <name>.xmp next to each image, video or audio file holds its rating, label, tags, flag and prompts. Existing sidecars (including Lightroom's) fill in ratings, labels and keywords the app doesn't have yet. Sidecars move, rename and go to the Trash (and come back on undo) with their files; Library ▸ Write XMP Sidecars Now and the context menu write them on demand. Originals are never modified."
+            ]
+        ),
+        HelpFileTypeDescription(
+            id: "ingest",
+            extensionLabel: "Ingest",
+            title: "Live Folder Updates and the Ingest Inbox",
+            description: "The open folder updates by itself when files change on disk, and watched folders (a ComfyUI output folder, Downloads…) feed new files into the sidebar's Inbox — optionally copied or moved into your library, renamed, tagged and collected on the way. Settings ▸ Ingest has every control.",
+            highlights: [
+                "Live updates (on by default): new, changed and removed files appear in the open folder within a second or two without reloading it — your selection and scroll position stay — and go straight into library search and the visual index. Files still being written (large PNGs, videos) are picked up once their size stops changing. The app's own data (.promptlibrary, XMP sidecars), temporary and partial-download files and Dropbox's cache are ignored.",
+                "Watched folders: Settings ▸ Ingest ▸ Add Folder… Each folder has rules for NEW files (files already there are left alone unless you choose Process Existing Files): which types (images, videos, audio, Art Official documents), a minimum size and ignore patterns such as *_temp_*.",
+                "What happens: Leave in Place (just show it in the Inbox), Copy or Move into a library folder, optionally into dated subfolders (yyyy/MM-dd makes 2026/09-27). A Batch Rename template ({date}_{model}_{counter:3}…) can rename files on the way; names are never overwritten. Moves and renames can be undone with Edit ▸ Undo.",
+                "Tags and collections: add fixed tags, tag with the model name read from the file's generation data, and add new files to a collection.",
+                "Duplicates are never copied twice and never deleted: when an identical file (same SHA-256) is already in the destination, the copy or move is skipped, the Inbox links the existing file, the new one is left where it is, and the log says so.",
+                "The sidebar's Inbox shows files ingested in the last 7 days, with a badge for the new ones; click it (or a folder under it) for an Inbox listing, newest first. Mark All Seen clears the badge; Clear Inbox empties the list without touching files. Library ▸ Show Inbox, Mark Inbox as Seen and Ingest Log… do the same.",
+                "Folders on external, network or Dropbox volumes work; a folder that disappears is marked Unavailable and picked up again when it comes back. With \u{201C}Process files added while the app was closed\u{201D} (on by default) files that arrived while the app wasn't running are processed at the next launch (\u{201C}N new files since last run\u{201D}).",
+                "Activity shows in the status bar's indexing indicator; problems appear as a message and in the Ingest Log (the last 200 events)."
             ]
         )
     ]
@@ -235,6 +278,18 @@ enum HelpContent {
                 HelpShortcutItem(id: "similar-more", keys: ["M"], description: "More Like This for the focused file (opens in the browser)."),
                 HelpShortcutItem(id: "similar-cull", keys: ["P", "X", "U", "0 – 9"], description: "Flag, rate or label the focused file (with Culling Mode's auto-advance, focus moves to the next file)."),
                 HelpShortcutItem(id: "similar-leave", keys: ["Esc"], description: "Back to the browser.")
+            ]
+        ),
+        HelpShortcutGroup(
+            id: "compare-slideshow",
+            title: "Compare Images And Slideshow",
+            description: "Keys on the Compare page and in a slideshow. Zoom, pan and the loupe use the mouse or trackpad; there are no new letter shortcuts.",
+            items: [
+                HelpShortcutItem(id: "compare-leave", keys: ["Esc"], description: "Leave the Compare page (back to the browser). Other bare keys do nothing there, so nothing reaches the browser behind it."),
+                HelpShortcutItem(id: "compare-zoom", keys: ["Pinch / Cmd scroll"], description: "Zoom every pane around the pointer. Double-click switches between Fit and 100 %."),
+                HelpShortcutItem(id: "slideshow-nav", keys: ["←", "→"], description: "Previous or next slide."),
+                HelpShortcutItem(id: "slideshow-play", keys: ["Space"], description: "Pause or play (videos too)."),
+                HelpShortcutItem(id: "slideshow-end", keys: ["Esc"], description: "End the slideshow. Cmd W does the same.")
             ]
         ),
         HelpShortcutGroup(

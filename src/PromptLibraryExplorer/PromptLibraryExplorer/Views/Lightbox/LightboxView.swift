@@ -272,6 +272,20 @@ struct LightboxView: View {
                         .padding(.horizontal, 56)
                 }
 
+                // Viewing tools: loupe + histogram (Views/Viewing). Take no clicks.
+                if let image = currentImage {
+                    LightboxViewingOverlays(context: LightboxViewingContext(
+                        filePath: currentDocument == nil && currentImageIndex == 0 && FileHelpers.isImageFile(currentItem?.name ?? "") ? currentItem?.path : nil,
+                        image: image,
+                        imageKey: "\(currentItem?.path ?? "")#\(currentImageIndex)#\(documentImageKey)",
+                        viewport: geometry.size,
+                        padding: viewportPadding,
+                        zoomScale: zoomScale,
+                        offset: imageOffset,
+                        topInset: vm.cullingModeEnabled || currentDocument != nil ? 76 : AppSpacing.xl
+                    ))
+                }
+
                 if let image = currentImage {
                     zoomToolbar(for: image, viewportSize: geometry.size)
                         .padding(.bottom, (currentEntry?.images.count ?? 0) > 1 ? 82 : 28)
@@ -284,6 +298,14 @@ struct LightboxView: View {
             .contentShape(Rectangle())
             .onHover { hovering in
                 isHoveringViewport = hovering
+            }
+            // The loupe follows the pointer (only tracked while it's on).
+            .onContinuousHover { phase in
+                if case let .active(location) = phase {
+                    ViewingController.shared.updateLightboxPointer(location)
+                } else {
+                    ViewingController.shared.updateLightboxPointer(nil)
+                }
             }
             .onAppear {
                 viewportSize = geometry.size
@@ -307,6 +329,7 @@ struct LightboxView: View {
                     .font(.appIcon(16, weight: .semibold))
                     .foregroundStyle(Color.appPrimaryText)
                 Spacer()
+                LightboxViewingChromeButtons()
                 cullingChromeButtons
                 Button { closeLightbox() } label: {
                     Image(systemName: "xmark")
@@ -435,7 +458,13 @@ struct LightboxView: View {
             // Bottom action buttons
             if let entry = vm.selectedPromptEntry {
                 VStack(spacing: AppSpacing.md) {
-                    if entry.videoURL != nil {
+                    if let videoURL = entry.videoURL {
+                        // Frame export and Trim (Views/Media).
+                        MediaLightboxVideoActions(
+                            videoURL: videoURL,
+                            player: videoPlayer,
+                            displayName: currentItem?.name ?? videoURL.lastPathComponent
+                        )
                         actionButton(icon: "arrow.down.circle", label: "Save Video") {
                             saveCurrentVideo(entry: entry)
                         }

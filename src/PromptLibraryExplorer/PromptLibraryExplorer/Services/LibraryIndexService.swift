@@ -323,6 +323,54 @@ actor LibraryIndexService {
         }
     }
 
+    /// Per-path update for live folder changes and ingest: each path that is a new
+    /// or changed (mtime + size) indexable file is re-extracted; paths that no longer
+    /// exist lose their rows (and descendants). Unchanged files are skipped.
+    func index(paths: [String]) async {
+        guard openIfNeeded(), !paths.isEmpty else { return }
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]
+        var candidates: [LibraryIndexCandidate] = []
+        var missing: [String] = []
+        for raw in Set(paths) {
+            let path = Self.normalizedPath(raw)
+            let url = URL(fileURLWithPath: path)
+            let name = url.lastPathComponent
+            guard FileManager.default.fileExists(atPath: path) else {
+                missing.append(path)
+                continue
+            }
+            guard Self.isIndexable(name),
+                  let values = try? url.resourceValues(forKeys: keys), values.isRegularFile == true
+            else { continue }
+            let mtime = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+            let size = Int64(values.fileSize ?? 0)
+            var unchanged = false
+            query("SELECT mtime, size FROM files WHERE path = ?", [.text(path)]) { stmt in
+                unchanged = abs(sqlite3_column_double(stmt, 0) - mtime) < 0.0005 && sqlite3_column_int64(stmt, 1) == size
+            }
+            if unchanged { continue }
+            candidates.append(LibraryIndexCandidate(
+                path: path, name: name, folder: url.deletingLastPathComponent().path, mtime: mtime, size: size
+            ))
+        }
+        if !missing.isEmpty {
+            for path in missing { noteMutation(path) }
+            transaction {
+                for path in missing {
+                    deleteRow(path: path)
+                    let (lower, upper) = Self.descendantRange(path)
+                    deleteRange(lower: lower, upper: upper)
+                }
+            }
+        }
+        guard !candidates.isEmpty else { return }
+        let records = await Self.extractRecords(candidates)
+        transaction {
+            // A file removed while it was being read must not come back as a ghost row.
+            for record in records where FileManager.default.fileExists(atPath: record.path) { upsert(record) }
+        }
+    }
+
     private func noteMutation(_ path: String) {
         guard activeBuildCount > 0 else { return }
         pathsMutatedDuringBuilds.append(path)

@@ -2,8 +2,9 @@ import AVFoundation
 import Combine
 import SwiftUI
 
-/// A styled audio player UI for the lightbox, showing waveform icon, playback controls,
-/// a seek slider, and time labels.
+/// A styled audio player UI for the lightbox and details panel: a scrubbable waveform
+/// (click to seek, drag to select a region, loop the region), playback controls and
+/// time labels.
 struct AudioPlayerView: View {
     let player: AVPlayer
     let fileName: String
@@ -13,17 +14,23 @@ struct AudioPlayerView: View {
     @State private var duration: TimeInterval = 0
     @State private var isSeeking = false
     @State private var timeObserver: Any?
+    /// The playing file (for the waveform); follows `player.currentItem`.
+    @State private var audioURL: URL?
+    /// Waveform region (seconds) and whether playback loops inside it.
+    @State private var selection: ClosedRange<Double>?
+    @State private var loopsSelection = false
+    @State private var lastObservedTime: TimeInterval = 0
 
     var body: some View {
-        VStack(spacing: AppSpacing.xxl) {
+        VStack(spacing: AppSpacing.xl) {
             // Album art placeholder
             ZStack {
-                RoundedRectangle(cornerRadius: AppRadius.xxl, style: .continuous)
+                RoundedRectangle(cornerRadius: AppRadius.xl, style: .continuous)
                     .fill(Color.badgeAudio.opacity(0.15))
-                    .frame(width: 180, height: 180)
+                    .frame(width: 72, height: 72)
 
                 Image(systemName: "waveform")
-                    .font(.appIcon(64, weight: .light))
+                    .font(.appIcon(30, weight: .light))
                     .foregroundStyle(Color.badgeAudioText)
             }
 
@@ -34,29 +41,21 @@ struct AudioPlayerView: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
 
-            // Time + seek bar
-            VStack(spacing: AppSpacing.xs) {
-                Slider(
-                    value: Binding(
-                        get: { duration > 0 ? currentTime / duration : 0 },
-                        set: { newValue in
-                            isSeeking = true
-                            currentTime = newValue * duration
-                        }
-                    ),
-                    in: 0...1,
-                    onEditingChanged: { editing in
-                        if !editing {
-                            let target = CMTime(seconds: currentTime, preferredTimescale: 600)
-                            player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
-                            isSeeking = false
-                        }
-                    }
-                )
-                .tint(Color.badgeAudio)
-                .accessibilityLabel("Playback Position")
-                .accessibilityValue("\(formatTime(currentTime)) of \(formatTime(duration))")
+            // Waveform: click to seek, drag to select a region.
+            ScrubbableWaveformView(
+                url: audioURL,
+                currentTime: currentTime,
+                duration: duration,
+                selection: $selection,
+                onSeek: { seek(to: $0) }
+            )
+            .frame(height: 88)
+            .onChange(of: selection) { _, newValue in
+                if newValue == nil { loopsSelection = false }
+            }
 
+            // Time labels (the waveform above is the seek bar)
+            VStack(spacing: AppSpacing.xs) {
                 HStack {
                     Text(formatTime(currentTime))
                         .font(.system(size: 11, design: .monospaced))
@@ -103,6 +102,8 @@ struct AudioPlayerView: View {
                 .help("Skip Forward 10 Seconds")
                 .accessibilityLabel("Skip Forward 10 Seconds")
             }
+
+            selectionControls
         }
         .padding(AppSpacing.xxxl)
         .background(
@@ -121,10 +122,71 @@ struct AudioPlayerView: View {
         }
         // AVPlayer isn't observable by SwiftUI, so `onChange(of: player.currentItem)`
         // never fires. KVO the current item instead.
-        .onReceive(player.publisher(for: \.currentItem)) { _ in
+        .onReceive(player.publisher(for: \.currentItem)) { item in
             currentTime = 0
+            selection = nil
+            loopsSelection = false
+            audioURL = (item?.asset as? AVURLAsset)?.url
             updateDuration()
         }
+        // The item ends before a region at the very end loops: start the region again.
+        .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.didPlayToEndTimeNotification)) { note in
+            guard let item = note.object as? AVPlayerItem, item === player.currentItem,
+                  loopsSelection, let selection else { return }
+            seek(to: selection.lowerBound)
+            player.play()
+        }
+    }
+
+    /// Loop Selection and Clear Selection, shown once a region is selected.
+    @ViewBuilder
+    private var selectionControls: some View {
+        HStack(spacing: AppSpacing.md) {
+            if let selection {
+                Text("\(MediaTimeMath.displayTimecode(selection.lowerBound)) – \(MediaTimeMath.displayTimecode(selection.upperBound))")
+                    .font(.appMono)
+                    .foregroundStyle(Color.appMuted)
+            } else {
+                Text("Drag across the waveform to select a region")
+                    .font(.appCaption)
+                    .foregroundStyle(Color.appMuted)
+            }
+            Spacer(minLength: 0)
+            Button {
+                loopsSelection.toggle()
+                if loopsSelection, let selection {
+                    if !(selection.lowerBound...selection.upperBound).contains(currentTime) {
+                        seek(to: selection.lowerBound)
+                    }
+                    player.play()
+                }
+            } label: {
+                Image(systemName: "repeat")
+                    .font(.appIcon(13, weight: .medium))
+            }
+            .buttonStyle(AppIconButtonStyle(restingForeground: loopsSelection ? Color.badgeAudioText : Color.appMuted))
+            .disabled(selection == nil)
+            .help(loopsSelection ? "Stop Looping the Selection" : "Loop the Selection")
+            .accessibilityLabel("Loop Selection")
+            .accessibilityValue(loopsSelection ? "On" : "Off")
+
+            Button {
+                selection = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.appIcon(12, weight: .medium))
+            }
+            .buttonStyle(AppIconButtonStyle(restingForeground: Color.appMuted))
+            .disabled(selection == nil)
+            .help("Clear Selection")
+            .accessibilityLabel("Clear Selection")
+        }
+    }
+
+    private func seek(to seconds: TimeInterval) {
+        currentTime = seconds
+        lastObservedTime = seconds
+        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
     private func togglePlayback() {
@@ -156,6 +218,15 @@ struct AudioPlayerView: View {
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
             if !isSeeking {
                 currentTime = time.seconds.isNaN ? 0 : time.seconds
+            }
+            // Loop inside the selected region: crossing its end jumps back to its start.
+            let now = time.seconds.isNaN ? 0 : time.seconds
+            if loopsSelection, let selection, player.timeControlStatus == .playing,
+               lastObservedTime < selection.upperBound, now >= selection.upperBound
+            {
+                seek(to: selection.lowerBound)
+            } else {
+                lastObservedTime = now
             }
             isPlaying = player.timeControlStatus == .playing
             // Fallback in case the async duration load hasn't landed yet.

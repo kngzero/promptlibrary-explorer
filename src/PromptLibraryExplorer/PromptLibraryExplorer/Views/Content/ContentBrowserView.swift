@@ -936,6 +936,9 @@ private struct ExplorerItemView: View {
                     thumbnailView
                 }
                 .frame(width: size, height: size)
+                // Video tiles: hover across to scrub (Settings ▸ Appearance). Hover only;
+                // FileDragSource keeps clicks and drags.
+                .videoHoverScrub(url: item.url, isVideo: !item.isDirectory && FileHelpers.isVideoFile(item.name))
                 .background(Color.appSurface)
                 // Rejects stay listed but recede.
                 .opacity(flag == .reject ? 0.38 : 1)

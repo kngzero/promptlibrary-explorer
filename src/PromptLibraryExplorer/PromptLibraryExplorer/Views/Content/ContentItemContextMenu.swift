@@ -69,6 +69,12 @@ struct ContentItemContextMenu: View {
             ArtOfficialItemMenuItems(item: item, kind: kind)
         }
 
+        // Video tools: Save Middle Frame, Trim & Export Clip… (Views/Media).
+        if !item.isDirectory, FileHelpers.isVideoFile(item.name) {
+            Divider()
+            MediaItemMenuItems(item: item)
+        }
+
         // Visual search (inspection only: opens a ranked listing, changes nothing)
         if !item.isDirectory, VisualSearchEligibility.hasPalette(item.name) {
             Divider()
@@ -143,6 +149,11 @@ struct ContentItemContextMenu: View {
         // (right-clicking an unselected item selects just that item).
         if targets.count == 2 {
             Button("Compare Prompts", action: onSelection { vm.openPromptDiff() })
+        }
+
+        // 2–4 images / videos side by side with synced zoom (Views/Compare).
+        if let comparePaths = CompareEligibility.paths(for: targets) {
+            Button("Compare Images", action: onSelection { vm.openComparePage(paths: comparePaths) })
         }
 
         if targets.count > 1, targets.contains(where: { vm.isEmbeddableImageFile($0.name) }) {

@@ -91,6 +91,7 @@ enum ContentThumbnailLoader {
         guard !item.isDirectory else { return nil }
         if FileHelpers.isImageFile(item.name) || FileHelpers.isVideoFile(item.name)
             || FileHelpers.isArtOfficialDocumentFile(item.name)
+            || FileHelpers.isAudioFile(item.name)   // waveform thumbnails
         {
             // Mood boards / Story projects render through ThumbnailService's
             // Art Official hook (memory + disk cache, off the main actor).

@@ -622,6 +622,7 @@ final class ExplorerViewModel {
         }
 
         installCurationHooks()
+        installIngestHooks()
 
         let mode = appearanceMode
         DispatchQueue.main.async { mode.applyToApp() }
@@ -906,6 +907,7 @@ final class ExplorerViewModel {
         if let rootToEstablish {
             autoIndexLibraryIfNeeded(root: rootToEstablish)
             curationRootDidOpen(rootToEstablish)
+            liveUpdatesRootDidOpen(rootToEstablish)
             // Visual index: automatic, low priority, incremental — unless the
             // user stopped it in Settings ▸ Search Index.
             if VisualIndexController.shared.isEnabled {
@@ -3386,6 +3388,7 @@ final class ExplorerViewModel {
         guard oldPath != newPath else { return }
         // Sidecars and the Finder tag mirror follow the item.
         CurationController.shared.itemDidMove(from: oldPath, to: newPath)
+        IngestController.shared.itemDidMove(from: oldPath, to: newPath)
 
         CollectionService.shared.migratePaths(from: oldPath, to: newPath)
         collections = CollectionService.shared.all()
@@ -4556,5 +4559,53 @@ extension GroupByField {
         case .model, .sampler, .seed: return true
         case .none, .day, .type, .flag, .label, .colorFamily: return false
         }
+    }
+}
+
+// MARK: - Live folder updates & ingest hooks (need file-private state)
+//
+// Glue and state live in ExplorerViewModel+Ingest.swift, FolderWatcherController
+// and IngestController; these two only reach the private refresh / undo machinery.
+
+extension ExplorerViewModel {
+    /// Applies changes made outside the app through the incremental change-set
+    /// refresh (per-path cache invalidation and prompt-index patching, no full
+    /// reload). Selection and scroll are kept; a rewritten primary file reloads
+    /// its details.
+    func refreshListingForExternalChanges(removed: [String], added: [String], modified: [String]) async {
+        guard !(removed.isEmpty && added.isEmpty && modified.isEmpty) else { return }
+        var changes = ListingPathChanges()
+        // A rewritten file is dropped from the prompt index and parsed again.
+        changes.removed = removed + modified
+        changes.added = added + modified
+        await refreshFolder(changes: changes)
+        if let primary = primarySelectionPath, modified.contains(primary) {
+            let items = processedFolderContents
+            if selectedItemIndex >= 0, selectedItemIndex < items.count, items[selectedItemIndex].path == primary {
+                loadPromptEntry(for: items[selectedItemIndex])
+            }
+        }
+    }
+
+    /// Only the sidebar folder tree changed (a folder appeared or went away elsewhere).
+    func refreshFolderTreeForExternalChanges() async {
+        await refreshFolderTree()
+    }
+
+    /// Moves and renames the ingest inbox performed: metadata keys follow the
+    /// files, the listing refreshes without touching the selection, and the moves
+    /// become one undoable step (Undo moves the files back). Copies only refresh;
+    /// undoing them would mean trashing files, which ingest never does.
+    func recordIngestFileOperations(moves: [(from: URL, to: URL)], copies: [URL], title: String) async {
+        let records = moves.map { PathMoveRecord(from: $0.from.standardizedFileURL, to: $0.to.standardizedFileURL) }
+        var changes = ListingPathChanges()
+        for record in records {
+            migrateMetadataKeys(from: record.from.path, to: record.to.path)
+            changes.moves.append((record.from.path, record.to.path))
+        }
+        changes.added = copies.map { $0.standardizedFileURL.path }
+        await refreshFolder(changes: changes)
+        guard !records.isEmpty else { return }
+        recordFolderHistoryEntry(makeMoveBatchHistoryEntry(MoveBatch(moves: invertedMoveRecords(records)), title: title))
     }
 }

@@ -11,7 +11,9 @@ struct VisualIndexStatusItem: View {
     private var controller: VisualIndexController { .shared }
 
     private var visualActive: Bool { controller.state == .indexing || controller.state == .paused }
-    private var isVisible: Bool { vm.isLibraryIndexing || visualActive || showsPopover }
+    private var isVisible: Bool { vm.isLibraryIndexing || visualActive || ingestActive || showsPopover }
+    /// Ingest inbox processing new files (its row in the popover).
+    private var ingestActive: Bool { IngestController.shared.isBusy }
 
     var body: some View {
         if isVisible {
@@ -54,6 +56,10 @@ struct VisualIndexStatusItem: View {
     private var onlyPaused: Bool { controller.state == .paused && !vm.isLibraryIndexing }
 
     private var summary: String {
+        if ingestActive, !vm.isLibraryIndexing, !visualActive {
+            let ingest = IngestController.shared
+            return "Ingesting \((ingest.processingCount + ingest.waitingCount).formatted())…"
+        }
         if onlyPaused { return "Indexing paused" }
         guard let combined else { return "Indexing…" }
         return "Indexing \(combined.done.formatted()) / \(combined.total.formatted())"
@@ -139,6 +145,8 @@ private struct IndexingStatusPopover: View {
             )
 
             visualControls
+
+            IngestStatusSection()
 
             Divider()
 
@@ -264,5 +272,58 @@ private struct IndexingStatusPopover: View {
     private func accessibilitySummary(title: String, status: String, progress: (done: Int, total: Int)?) -> String {
         guard let progress, progress.total > 0 else { return "\(title): \(status)" }
         return "\(title): \(status), \(progress.done) of \(progress.total) files"
+    }
+}
+
+// MARK: - Ingest row
+
+/// The ingest inbox's line in the indexing popover (only with a watched folder).
+private struct IngestStatusSection: View {
+    private var controller: IngestController { .shared }
+
+    var body: some View {
+        if controller.hasSources {
+            Divider()
+            VStack(alignment: .leading, spacing: AppSpacing.xs) {
+                HStack(spacing: AppSpacing.sm) {
+                    Image(systemName: "tray.and.arrow.down")
+                        .font(.appIcon(12, weight: .medium))
+                        .foregroundStyle(Color.appAccent)
+                        .accessibilityHidden(true)
+                    Text("Ingest Inbox")
+                        .font(.appHeadline)
+                        .foregroundStyle(Color.appPrimaryText)
+                    Spacer(minLength: 0)
+                    Button("Show Log…") { controller.logSheetOpen = true }
+                        .buttonStyle(AppLabeledButtonStyle(height: 22))
+                        .font(.appCaption)
+                        .help("Show the last 200 ingest events")
+                }
+                Text(status)
+                    .font(.appCaption)
+                    .foregroundStyle(Color.appMuted)
+                if controller.isBusy {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .tint(Color.appAccent)
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Ingest Inbox: \(status)")
+        }
+    }
+
+    private var status: String {
+        if controller.processingCount > 0 {
+            return "Processing \(controller.processingCount) new file\(controller.processingCount == 1 ? "" : "s")…"
+        }
+        if controller.waitingCount > 0 {
+            return "Waiting for \(controller.waitingCount) file\(controller.waitingCount == 1 ? "" : "s") to finish writing"
+        }
+        let active = controller.sources.filter { $0.isEnabled && controller.isAvailable($0) }.count
+        let unavailable = controller.unavailableSourceIDs.count
+        var text = "Watching \(active) folder\(active == 1 ? "" : "s")"
+        if unavailable > 0 { text += " · \(unavailable) unavailable" }
+        return text
     }
 }
