@@ -94,6 +94,10 @@ mkdir -p "$STAGED_APP/Contents/MacOS" "$STAGED_APP/Contents/Resources"
 
 echo "==> Assembling bundle ($APP_ID $VERSION, $GIT_SHA)"
 cp "$RES/Info.plist" "$STAGED_APP/Contents/Info.plist"
+# Build number: the git commit count, so it always increases (the marketing version
+# MAJOR.FEATURE.FIXES lives in Resources/Info.plist; see scripts/bump_version.sh).
+BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$STAGED_APP/Contents/Info.plist"
 # Build identity for the About panel (not in the tracked plist: it changes every commit).
 /usr/libexec/PlistBuddy -c "Add :PLXGitCommit string $GIT_SHA" "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
     || /usr/libexec/PlistBuddy -c "Set :PLXGitCommit $GIT_SHA" "$STAGED_APP/Contents/Info.plist"

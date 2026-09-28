@@ -1181,12 +1181,15 @@ enum AboutPanel {
     @MainActor
     static func show() {
         let info = Bundle.main.infoDictionary ?? [:]
-        let version = info["CFBundleShortVersionString"] as? String ?? "1.0"
+        // MAJOR.FEATURE.FIXES (scripts/bump_version.sh); build = git commit count.
+        let version = info["CFBundleShortVersionString"] as? String ?? "1.0.00"
+        let build = info["CFBundleVersion"] as? String
         let commit = info["PLXGitCommit"] as? String
+        let buildText = [build.map { "Build \($0)" }, commit].compactMap { $0 }.joined(separator: " · ")
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "PromptLibrary Explorer",
             .applicationVersion: version,
-            .version: commit.map { "Build \($0)" } ?? "",
+            .version: buildText,
             .credits: credits
         ])
         NSApp.activate(ignoringOtherApps: true)

@@ -23,3 +23,6 @@ logs
 *.njsproj
 *.sln
 *.sw?
+
+# Local work logs (yyyymmdd-name.md) — kept local, not pushed
+logs/
