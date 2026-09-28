@@ -91,19 +91,6 @@
 			</array>
 		</dict>
 	</array>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Viewer</string>
-			<key>CFBundleURLName</key>
-			<string>com.artofficial.promptlibrary-explorer.automation</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>promptlibrary</string>
-			</array>
-		</dict>
-	</array>
 	<key>CFBundleExecutable</key>
 	<string>PromptLibraryExplorer</string>
 	<key>CFBundleIconFile</key>
@@ -118,6 +105,19 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>com.artofficial.promptlibrary-explorer.automation</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>promptlibrary</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>1.0</string>
 	<key>LSApplicationCategoryType</key>
@@ -126,6 +126,8 @@
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 ArtOfficial. All rights reserved.</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
 	<key>UTExportedTypeDeclarations</key>

@@ -8,7 +8,13 @@ enum LoupeGeometry {
     /// `padding`, centred, scaled by `zoomScale` about its centre, then
     /// shifted by `offset` (mirrors LightboxView's modifiers).
     static func lightboxImageRect(imageSize: CGSize, viewport: CGSize, padding: CGFloat, zoomScale: CGFloat, offset: CGSize) -> CGRect {
-        let available = CGSize(width: max(viewport.width - padding * 2, 1), height: max(viewport.height - padding * 2, 1))
+        lightboxImageRect(imageSize: imageSize, viewport: viewport, horizontalPadding: padding, verticalPadding: padding, zoomScale: zoomScale, offset: offset)
+    }
+
+    /// As above, with separate horizontal (arrow gutters) and vertical insets.
+    static func lightboxImageRect(imageSize: CGSize, viewport: CGSize, horizontalPadding: CGFloat, verticalPadding: CGFloat, zoomScale: CGFloat, offset: CGSize) -> CGRect {
+        let padding = (h: horizontalPadding, v: verticalPadding)
+        let available = CGSize(width: max(viewport.width - padding.h * 2, 1), height: max(viewport.height - padding.v * 2, 1))
         guard imageSize.width > 0, imageSize.height > 0 else { return .zero }
         let fit = min(available.width / imageSize.width, available.height / imageSize.height)
         let size = CGSize(width: imageSize.width * fit * zoomScale, height: imageSize.height * fit * zoomScale)

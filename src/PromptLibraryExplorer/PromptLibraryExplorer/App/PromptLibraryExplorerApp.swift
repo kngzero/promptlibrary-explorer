@@ -853,6 +853,11 @@ struct PromptLibraryExplorerApp: App {
                 // Edit ▸ Edit Image… / Save Edited Copy… / Revert to Original.
                 editorCommands
 
+                // PromptLibrary Explorer ▸ About: the standard panel with ArtOfficial credits.
+                CommandGroup(replacing: .appInfo) {
+                    Button("About PromptLibrary Explorer") { AboutPanel.show() }
+                }
+
                 CommandGroup(replacing: .help) {
                     Button("PromptLibrary Explorer Help") {
                         explorerVM.helpOpen = true
@@ -884,7 +889,7 @@ struct PromptLibraryExplorerApp: App {
 
                     Divider()
 
-                    Button("Developer Website") {
+                    Button("Visit artofficial.world") {
                         explorerVM.openDeveloperWebsite()
                     }
                 }
@@ -1163,5 +1168,52 @@ struct PromptLibraryExplorerApp: App {
 
         guard explorerVM.canRedoFolderAction else { return }
         Task { await explorerVM.redoLastFolderAction() }
+    }
+}
+
+// MARK: - About
+
+/// The About panel: app icon, name, version and build, plus "Made by ArtOfficial"
+/// with a link to artofficial.world. Copyright comes from NSHumanReadableCopyright.
+enum AboutPanel {
+    static let websiteURL = URL(string: "https://artofficial.world")!
+
+    @MainActor
+    static func show() {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "1.0"
+        let commit = info["PLXGitCommit"] as? String
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "PromptLibrary Explorer",
+            .applicationVersion: version,
+            .version: commit.map { "Build \($0)" } ?? "",
+            .credits: credits
+        ])
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    static var credits: NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.paragraphSpacing = 4
+        let body: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .paragraphStyle: paragraph
+        ]
+        let text = NSMutableAttributedString(
+            string: "A prompt-aware library for AI images, video and audio.\n",
+            attributes: body
+        )
+        text.append(NSAttributedString(string: "Made by ", attributes: body))
+        var strong = body
+        strong[.font] = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+        strong[.foregroundColor] = NSColor.labelColor
+        text.append(NSAttributedString(string: "ArtOfficial", attributes: strong))
+        text.append(NSAttributedString(string: "\n", attributes: body))
+        var link = body
+        link[.link] = websiteURL
+        text.append(NSAttributedString(string: "artofficial.world", attributes: link))
+        return text
     }
 }

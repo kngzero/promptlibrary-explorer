@@ -29,6 +29,11 @@ struct LightboxView: View {
 
     private let detailsSidebarWidth: CGFloat = 320
     private let viewportPadding: CGFloat = 18
+    /// Side strips reserved for the ‹ › arrows (40 pt button + 16 pt either side),
+    /// so the image, video and audio player never sit under them or run into the
+    /// details panel's border.
+    private let navGutter: CGFloat = 72
+    private let navArrowSize: CGFloat = 40
     private let minimumZoomScale: CGFloat = 1
     private let maximumControlZoomScale: CGFloat = 4
     private let zoomStep: CGFloat = 0.25
@@ -194,7 +199,8 @@ struct LightboxView: View {
                         .scaleEffect(zoomScale)
                         .offset(imageOffset)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(viewportPadding)
+                        .padding(.horizontal, navGutter)
+                        .padding(.vertical, viewportPadding)
                         .contentShape(Rectangle())
                         .gesture(dragGesture(for: image, viewportSize: geometry.size))
                         .simultaneousGesture(
@@ -221,12 +227,14 @@ struct LightboxView: View {
                         isPictureInPictureActive: $isVideoPictureInPictureActive
                     )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(viewportPadding)
+                        .padding(.horizontal, navGutter)
+                        .padding(.vertical, viewportPadding)
                 } else if currentAudioURL != nil {
                     AudioPlayerView(player: videoPlayer, fileName: currentItem?.name ?? "Audio")
                         .frame(maxWidth: 480)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(viewportPadding)
+                        .padding(.horizontal, navGutter)
+                        .padding(.vertical, viewportPadding)
                 }
 
                 HStack {
@@ -234,7 +242,8 @@ struct LightboxView: View {
                     Spacer()
                     navArrow(systemName: "chevron.right", label: "Next Item") { navigateToNext() }
                 }
-                .padding(.horizontal, AppSpacing.lg)
+                // Centred in their gutters, clear of the image and the panel border.
+                .padding(.horizontal, (navGutter - navArrowSize) / 2)
 
                 if let entry = currentEntry, entry.images.count > 1 {
                     VStack {
@@ -288,7 +297,8 @@ struct LightboxView: View {
                         image: image,
                         imageKey: "\(currentItem?.path ?? "")#\(currentImageIndex)#\(documentImageKey)",
                         viewport: geometry.size,
-                        padding: viewportPadding,
+                        padding: navGutter,
+                        verticalPadding: viewportPadding,
                         zoomScale: zoomScale,
                         offset: imageOffset,
                         topInset: vm.cullingModeEnabled || currentDocument != nil ? 76 : AppSpacing.xl
@@ -707,7 +717,7 @@ struct LightboxView: View {
             Image(systemName: systemName)
                 .font(.appLargeTitle)
                 .foregroundStyle(Color.appPrimaryText)
-                .frame(width: 40, height: 40)
+                .frame(width: navArrowSize, height: navArrowSize)
                 .background(Color.appOverlaySurface.opacity(0.75), in: Circle())
         }
         .buttonStyle(AppAdaptiveButtonStyle())
@@ -1221,7 +1231,7 @@ struct LightboxView: View {
         guard zoomScale > 1.0001 else { return .zero }
 
         let availableSize = CGSize(
-            width: max(viewportSize.width - (viewportPadding * 2), 1),
+            width: max(viewportSize.width - (navGutter * 2), 1),
             height: max(viewportSize.height - (viewportPadding * 2), 1)
         )
         let fittedSize = fittedImageSize(for: image.size, in: availableSize)

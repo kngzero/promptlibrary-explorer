@@ -12,7 +12,10 @@ struct LightboxViewingContext {
     /// Identifies `image` when there's no file path (item + image index / step).
     var imageKey: String
     var viewport: CGSize
+    /// Horizontal inset of the image (the arrow gutters).
     var padding: CGFloat
+    /// Vertical inset of the image.
+    var verticalPadding: CGFloat
     var zoomScale: CGFloat
     var offset: CGSize
     /// Room left at the top for the culling bar / document step bar.
@@ -81,7 +84,8 @@ private struct LightboxLoupe: View {
         let rect = LoupeGeometry.lightboxImageRect(
             imageSize: context.image.size,
             viewport: context.viewport,
-            padding: context.padding,
+            horizontalPadding: context.padding,
+            verticalPadding: context.verticalPadding,
             zoomScale: context.zoomScale,
             offset: context.offset
         )

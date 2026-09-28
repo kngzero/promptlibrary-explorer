@@ -94,6 +94,9 @@ mkdir -p "$STAGED_APP/Contents/MacOS" "$STAGED_APP/Contents/Resources"
 
 echo "==> Assembling bundle ($APP_ID $VERSION, $GIT_SHA)"
 cp "$RES/Info.plist" "$STAGED_APP/Contents/Info.plist"
+# Build identity for the About panel (not in the tracked plist: it changes every commit).
+/usr/libexec/PlistBuddy -c "Add :PLXGitCommit string $GIT_SHA" "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Set :PLXGitCommit $GIT_SHA" "$STAGED_APP/Contents/Info.plist"
 cp "$BUILD_DIR/$EXEC_NAME" "$STAGED_APP/Contents/MacOS/$EXEC_NAME"
 # Existing convention: a second copy named after the display name. Keep both.
 cp "$BUILD_DIR/$EXEC_NAME" "$STAGED_APP/Contents/MacOS/PromptLibrary Explorer"
