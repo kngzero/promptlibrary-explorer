@@ -1,5 +1,7 @@
 # User Account Functionality Plan
 
+> **Update 2026-09-27:** the backend this plan assumed already exists. It is the shared Art Official Supabase project used by Prompt Library and Stack, not the website repo. See `ROADMAP_FORMATS_AND_MEDIA.md` ▸ Part 3 for the researched auth flows, tables, the `gemini-proxy` generation function, the online-library persistence flag and the risks. The architecture below (AccountService, Keychain, ASWebAuthenticationSession, Account page) still applies, and "Website / Backend Contract Required" is mostly already met.
+
 ## Goal
 Add native user account functionality to PromptLibrary Explorer so the app can authenticate against `artofficial.world`, show account status inside the macOS app, and later call Art Official generation endpoints using the authenticated session.
 

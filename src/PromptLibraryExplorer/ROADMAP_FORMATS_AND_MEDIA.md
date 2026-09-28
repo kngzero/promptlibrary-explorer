@@ -183,3 +183,88 @@ These are ideas that build on what exists: collections and sets, smart folders, 
 6. **Send to Mood / Send to Story** (D). Ecosystem round trip, using the same parsers in reverse.
 7. **Privacy export + export presets** (D). Cheap once the writers exist, and very useful for sharing.
 8. **Watched folders + Ingest inbox** (A). Makes the app the landing point for new generations.
+
+---
+
+## Part 3 — TODO: Art Official account + Stack (researched 2026-09-27, not built)
+
+Both items are feasible. They are not built yet. Everything below comes from reading the owner apps' code, not from live testing.
+
+### Background: the account system that already exists
+
+The Art Official apps share one Supabase project: Prompt Library (`apps/prompt-library`) and Stack (`apps/stack`). The public anon key is already in client code: `apps/prompt-library/src/services/supabaseClient.ts`. No secret is needed for user features.
+
+The artofficial.world website repo (`/Art Official/website`) is only a static marketing site. The accounts live in that shared Supabase project, not on the website.
+
+- **Sign-in:** email + password (usable from a native app today), Google OAuth with PKCE, and email magic link. No Apple sign-in. The existing custom scheme `artofficial://auth-callback` is used by the Android build. A Mac callback URL must be added to Supabase's allowed redirect URLs, following the precedent of Stack's entries in `uri_allow_list`.
+- **Account data:**
+  - `profiles` holds credits and tier (`free | pro | ultra | god | infinity`), and users can read their own row.
+  - `credit_ledger` holds the history, also readable per user.
+  - A server trigger stops users changing their own credits or tier.
+- **Generation:** everything goes through the Edge Function `gemini-proxy`, with actions `generate-image`, `generate-video`, `poll-video` and `enhance-prompt`.
+  - **Images** are synchronous: the full base64 images come back in the response. A client-supplied `jobId` guards against running and charging twice.
+  - **Video** is infinity tier only and asynchronous: a 202 start response, then polling, then a signed URL from `generation-outputs/{uid}/{jobId}/`.
+  - **Credits** are checked before generating and charged only on success.
+- **Online library:** `generations` rows plus the private buckets `generation-outputs` and `generation-staging`. Whether finished images are kept depends on `site_settings.config.generation_persistence_enabled`, which defaults to off.
+  - **Flag off:** outputs sit in staging only, and a cleanup job deletes them after 30 minutes to 24 hours.
+  - **Flag on:** outputs are kept for 365 days.
+  - The live value of the flag is unknown; the app can read it from `site_settings`.
+
+### TODO 1 — "Send to Stack" (JPG / PNG → Stack element `.aoe`)
+
+**What is possible today, with no Stack changes:**
+- The app sends the image to Stack's `POST /api/analyze`, authenticated with the user's Supabase JWT, then builds the `.aoe` locally.
+- Stack's `.aoe` shape is `{timestamp, image: {base64 JPEG ≤1536 px q0.8, thumbnail/previewUrl data-URL ≤1024 px q0.6}, analysis, model, hint, mode}`.
+- **Cost:** a single image is free but limited to one every 10 seconds per user. `bulk: true` costs 1 credit per 5 images.
+- **Modes:** PROMPT, IDENTITY, WARDROBE, OBJECT, LOCATION, FOCUSED (VIDEO for clips).
+
+**Plan:**
+1. Account sign-in (TODO 2, step 1) is a prerequisite.
+2. Add **Send to Stack…** to the context menu and File menu for images. A sheet offers a mode picker and a hint field, and warns about cost when more than one image is selected.
+3. Downscale and encode exactly as Stack does, call `/api/analyze`, and write `<name>.aoe` next to the source (never overwriting), or into a chosen folder.
+4. The new `.aoe` then shows up in the explorer with its analysis, since the app already reads `.aoe` files.
+5. Offer **Open Stack** (stack.artofficial.world) as a link.
+
+**Limits and risks:**
+- `/api/analyze` is an internal, undocumented endpoint and may change.
+- The live Stack web app cannot open `.aoe` files. The only importer is an unused legacy component.
+- Stack has no URL or deep-link preload. Its only handoff is a single-image `postMessage` from its Chrome extension, which doesn't start the analysis.
+
+**Needs Stack changes, to hand off *into* the Stack UI rather than just making the element:**
+- a preload link or deep link
+- multi-image import
+- opening `.aoe` files in the live app
+- optionally, a documented API
+
+### TODO 2 — Link the Art Official account: generate locally, view the online library, generate straight into folders
+
+**Plan** (this replaces the assumptions in `ACCOUNT_FUNCTIONALITY_PLAN.md`; its architecture still applies):
+1. **Sign in / account page.**
+   - Email + password works today. Google via `ASWebAuthenticationSession` + PKCE needs the Mac callback URL added to the redirect list. That's a one-time dashboard change: **your action**.
+   - Tokens go in the Keychain.
+   - An Account page in Settings shows tier, credits (live, since `profiles` updates in real time), the ledger and sign-out, plus "Manage on artofficial.world".
+2. **Generate into a folder** (images, any tier with credits):
+   - A Generate panel reuses the Prompt Builder: prompt, negative, reference images, model tier, aspect ratio, resolution, count ≤4.
+   - It calls `gemini-proxy` with a UUID `jobId` and writes the returned images **straight into the chosen folder** — by default the folder you're browsing, or a "Generations" subfolder.
+   - The prompt and settings are embedded in each file (A1111-style `parameters` / XMP) so the app's own features work on them immediately.
+   - The ingest and inbox machinery picks the new files up.
+3. **Video** (infinity tier): start the job, poll with progress, download the signed URL into the folder.
+4. **Online library:** a sidebar "Online Library" source.
+   - It lists `generations` rows (thumbnails via signed URLs), offers Download to folder or Download all new, and marks what's already local.
+   - This only works when the persistence flag is on. When it's off, the app explains that only generations from the last ~24 h are available and offers Download now.
+   - Always filter on `user_id`: admin accounts can read every user's rows.
+5. **Safety:**
+   - Save outputs locally right away, because cleanup deletes staging after 30 minutes to 24 hours and permanent outputs after 12 months.
+   - Use long `URLSession` timeouts, because there are no server rate limits and generation holds the connection open.
+   - Never write to `generations` rows. Users are allowed to update their own rows, so a buggy client could corrupt them.
+
+**Risks:**
+- `gemini-proxy`'s request and response shape is internal and undocumented; each web client copies it by hand.
+- Some production schema, such as the protective trigger and `handle_new_user`, isn't in the repo's migrations.
+
+**Open questions for you:**
+1. Is `generation_persistence_enabled` on in production? This decides whether an online library exists.
+2. Mac callback: reuse `artofficial://auth-callback`, or register a Mac-specific one (e.g. `promptlibrary://auth-callback`, since the app already owns `promptlibrary://`)?
+3. Should Stack get a preload link or `.aoe` import (TODO 1, "needs Stack changes"), so Send to Stack can open the element in Stack?
+
+**Suggested order:** account sign-in + account page → generate into folder (images) → Send to Stack → online library (once the persistence flag is confirmed) → video.
