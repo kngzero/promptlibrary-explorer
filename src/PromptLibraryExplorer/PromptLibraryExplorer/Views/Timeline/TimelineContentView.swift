@@ -97,21 +97,25 @@ private struct TimelineScrollView: View {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                         ForEach(controller.sections) { section in
                             Section {
-                                // Scroll anchor for the scrubber and Show in Timeline.
-                                Color.clear.frame(height: 0).id(section.id)
-                                let rowCount = (section.items.count + columns - 1) / columns
-                                ForEach(0..<rowCount, id: \.self) { row in
-                                    let start = row * columns
-                                    let end = min(start + columns, section.items.count)
+                                // Every row needs an identity that is unique across the
+                                // WHOLE lazy stack. Plain 0..<n row indexes repeat in every
+                                // section, and with pinned headers the LazyVStack then
+                                // recycled the wrong rows: the same image reappeared at the
+                                // top while scrolling and other rows went blank.
+                                // The first row doubles as the section's scroll anchor.
+                                ForEach(TimelineRow.rows(for: section, columns: columns)) { row in
                                     HStack(spacing: Self.spacing) {
-                                        ForEach(section.items[start..<end]) { item in
+                                        ForEach(row.items) { item in
                                             TimelineTile(item: item, size: tile)
+                                                // Fresh thumbnail state per file, so a reused
+                                                // cell never shows another file's image.
+                                                .id(item.path)
                                         }
                                     }
                                     .padding(.horizontal, Self.horizontalPadding)
                                     .padding(.bottom, Self.spacing)
+                                    .padding(.bottom, row.isLast ? AppSpacing.md : 0)
                                 }
-                                Color.clear.frame(height: AppSpacing.md)
                             } header: {
                                 TimelineSectionHeader(section: section)
                             }
@@ -147,6 +151,32 @@ private struct TimelineScrollView: View {
                 }
             }
         }
+    }
+}
+
+/// One row of tiles in a timeline section, with a globally unique id.
+private struct TimelineRow: Identifiable {
+    /// The section's id for its first row (the scroll anchor), else "section|index".
+    let id: String
+    let items: ArraySlice<TimelineItem>
+    let isLast: Bool
+
+    static func rows(for section: TimelineSection, columns: Int) -> [TimelineRow] {
+        let columns = max(1, columns)
+        var rows: [TimelineRow] = []
+        var start = 0
+        var index = 0
+        while start < section.items.count {
+            let end = min(start + columns, section.items.count)
+            rows.append(TimelineRow(
+                id: index == 0 ? section.id : "\(section.id)|\(index)",
+                items: section.items[start..<end],
+                isLast: end == section.items.count
+            ))
+            start = end
+            index += 1
+        }
+        return rows
     }
 }
 
@@ -212,7 +242,8 @@ private struct TimelineSectionHeader: View {
         .padding(.horizontal, AppSpacing.xl)
         .padding(.vertical, AppSpacing.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.appBackground.opacity(0.96))
+        // Opaque: pinned over scrolling tiles, a translucent header showed them through.
+        .background(Color.appBackground)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(title), \(count) files")
     }

@@ -252,6 +252,8 @@ struct MapTimelineThumbnail: View {
     var cornerRadius: CGFloat = AppRadius.sm
 
     @State private var image: NSImage?
+    /// The path `image` belongs to (cells can be reused for another file).
+    @State private var loadedPath: String?
 
     private var url: URL { URL(fileURLWithPath: path) }
     private var name: String { url.lastPathComponent }
@@ -296,10 +298,14 @@ struct MapTimelineThumbnail: View {
                 image = cached
                 return
             }
-            image = nil
+            // Keep showing an image only if it's this file's; never another file's.
+            if loadedPath != path { image = nil }
             let loaded = await ThumbnailService.shared.thumbnail(for: url, size: requested)
-            guard !Task.isCancelled else { return }
+            // A load cancelled by fast scrolling leaves the current image alone; the
+            // task runs again when the tile reappears.
+            guard !Task.isCancelled, let loaded else { return }
             image = loaded
+            loadedPath = path
         }
     }
 }
