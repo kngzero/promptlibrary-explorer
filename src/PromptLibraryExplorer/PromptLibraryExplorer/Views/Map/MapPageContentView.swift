@@ -390,6 +390,10 @@ private struct MapClusterStrip: View {
                         .font(.appCaption)
                         .foregroundStyle(Color.appMuted)
                         .lineLimit(2)
+                    HStack(spacing: AppSpacing.sm) {
+                        MapTimelineLocateButtons(path: path)
+                    }
+                    .padding(.top, AppSpacing.xs)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(AppSpacing.md)

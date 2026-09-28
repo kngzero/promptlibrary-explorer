@@ -99,6 +99,12 @@ struct FileListView: View {
                             proxy.scrollTo(items[newIndex].id)
                         }
                     }
+                    // Show in Folder / reveal: scroll even when the index didn't change.
+                    .onReceive(NotificationCenter.default.publisher(for: .scrollToRevealedFile)) { note in
+                        guard let path = note.object as? String,
+                              vm.processedFolderContents.contains(where: { $0.id == path }) else { return }
+                        proxy.scrollTo(path, anchor: .center)
+                    }
                 }
             }
         }

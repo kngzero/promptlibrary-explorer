@@ -67,7 +67,7 @@ enum OnboardingTip: String, CaseIterable, Identifiable, Codable, Sendable {
         case .promptSelected:
             return "The details panel shows the prompt and settings. ⇧⌘C copies it; Edit ▸ Copy Prompt As… gives Midjourney, Stable Diffusion or JSON, and Prompt Tools opens the Builder and Lineage."
         case .lightboxOpened:
-            return "P pick · X reject · U unflag · 0–5 stars · 6–9 colour labels. The loupe and histogram buttons at the top look closer; M finds more like this."
+            return "P pick · X reject · U unflag · 0–5 stars · 6–9 colour labels. The loupe button at the top looks closer (View ▸ Histogram shows levels in the details panel); M finds more like this."
         case .compareSelection:
             return "View ▸ Compare Images shows 2–4 files with synced zoom and an A/B wipe. With two selected, ⌘D compares their prompts."
         case .largeFolder:

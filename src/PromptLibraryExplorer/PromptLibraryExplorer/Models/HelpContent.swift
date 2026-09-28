@@ -166,7 +166,7 @@ enum HelpContent {
                 "Same Framing (the default) lines up images of different sizes, so a master and its upscale show the same part of the picture; Actual Pixels makes 100 % one image pixel per screen pixel for each file. Each pane's bar shows its name, pixel size, file size and its own zoom, with Reveal in Finder, Copy Path and Copy Prompt. Videos compare as a frame.",
                 "A/B Wipe shows two files in one view with a divider you drag; switch it to a horizontal divider, pick which files are A and B, or swap them. Images are decoded at the size the screen needs, and at full resolution only once you zoom to 100 % or more. Done, Esc or View ▸ Show Browser returns to the browser as you left it.",
                 "On the Similar Images page, the group header's Compare button shows the group in the same synced compare instead of the cards (four files at a time; ← / → move through a larger group).",
-                "In the lightbox, the magnifier button (or View ▸ Loupe) shows a loupe that follows the pointer at 2× or 4× the image's own pixels, with the pixel's position and RGB value; Crisp Pixels (View ▸ Loupe Magnification) shows hard pixel edges. The chart button (or View ▸ Histogram) shows the RGB and luminance histogram with shadow and highlight clipping.",
+                "In the lightbox, the magnifier button (or View ▸ Loupe) shows a loupe that follows the pointer at 2× or 4× the image's own pixels, with the pixel's position and RGB value; Crisp Pixels (View ▸ Loupe Magnification) shows hard pixel edges. View ▸ Histogram shows the RGB and luminance histogram, with shadow and highlight clipping, at the top of the details panel for the selected image — it never covers the image.",
                 "View ▸ Start Slideshow plays the selection (2 or more files), or else the whole folder, collection or listing in its current order and with its filters (hidden rejects stay hidden), full screen on the display the window is on. Move the mouse for the controls; the options set the interval (2–30 s), transition (none, crossfade, slide), shuffle, loop, background, caption (file name, prompt excerpt, rating) and whether videos play (the slideshow moves on when one ends)."
             ]
         ),
@@ -182,7 +182,8 @@ enum HelpContent {
                 "Map: files with a location, clustered by zoom level; each badge shows the newest file and the count. Click a cluster to list its files beside the map, double-click it to zoom in; Show in Browser opens them as a listing. Most AI images have no location — photos and phone videos usually do.",
                 "Privacy: locations are read from the files only (EXIF GPS, QuickTime ISO 6709). The map downloads its tiles from Apple; nothing else is sent unless you click Look Up Place Names, which asks Apple for the names of the places in view one at a time and remembers them.",
                 "Dates and locations are stored in the library index. Files indexed before this existed are read in the background when a page opens (the Dating… progress in the page's bar and in the indexing status popover, with Stop and Resume). Online-only cloud files are skipped rather than downloaded.",
-                "In the browser, Sort By ▸ Capture Date and Group By ▸ Month / Year use the same date. Right-click an image or video for Show in Timeline or Show on Map (they open with This Folder, at the file)."
+                "In the browser, Sort By ▸ Capture Date and Group By ▸ Month / Year use the same date. Right-click an image or video for Show in Timeline or Show on Map (they open with This Folder, at the file).",
+                "To get back to a file: select it and click Show in Folder (on the Timeline's bottom bar, or under the Map's file strip), or right-click it ▸ Show in Folder. The page closes, the browser opens the file's folder, expands it in the sidebar and scrolls to the file, selected. Reveal in Finder is next to it."
             ]
         ),
         HelpFileTypeDescription(
@@ -863,7 +864,7 @@ extension HelpContent {
             summary: "Space or Return opens the selected file large; ← / → move through the listing and Esc closes it. ⌘Y opens Quick Look instead.",
             details: [
                 "Control = and Control − zoom an image; scroll to pan once zoomed.",
-                "The culling keys, M (More Like This), the loupe and the histogram all work in the lightbox.",
+                "The culling keys, M (More Like This) and the loupe all work in the lightbox.",
                 "Videos and audio play in place: Space plays and pauses.",
                 "Mood boards and Story projects: ← / → step through their images or shots; ↑ / ↓ move to the next file."
             ],

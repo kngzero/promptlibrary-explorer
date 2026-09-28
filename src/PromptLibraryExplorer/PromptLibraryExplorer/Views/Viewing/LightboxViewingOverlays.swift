@@ -19,20 +19,15 @@ struct LightboxViewingContext {
     var topInset: CGFloat
 }
 
-/// Loupe and histogram over the lightbox image (View ▸ Loupe / Histogram,
-/// or the buttons in the lightbox header). Neither takes clicks.
+/// The loupe over the lightbox image (View ▸ Loupe, or the lightbox header
+/// button). It never takes clicks. The histogram lives at the top of the
+/// details panel (`DetailsHistogramCard`) so it never covers the image.
 struct LightboxViewingOverlays: View {
     let context: LightboxViewingContext
     private var viewing: ViewingController { .shared }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            if viewing.histogramEnabled {
-                LightboxHistogramPanel(context: context)
-                    .padding(.leading, AppSpacing.xl)
-                    .padding(.top, context.topInset)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
             if viewing.loupeEnabled {
                 LightboxLoupe(context: context)
             }
@@ -167,12 +162,12 @@ private struct LightboxLoupe: View {
 
 // MARK: - Histogram
 
-private struct LightboxHistogramPanel: View {
-    let context: LightboxViewingContext
+/// Histogram card at the top of the details panel (View ▸ Histogram): RGB +
+/// luminance for the selected image, with shadow / highlight clipping.
+struct DetailsHistogramCard: View {
+    let path: String
     @State private var data: HistogramData?
     @State private var dataKey = ""
-
-    private var key: String { context.filePath ?? context.imageKey }
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppSpacing.xs) {
@@ -181,19 +176,29 @@ private struct LightboxHistogramPanel: View {
                     .font(.appCaptionEmphasis)
                     .foregroundStyle(Color.appPrimaryText)
                 Spacer(minLength: 0)
-                if let data, dataKey == key {
+                if let data, dataKey == path {
                     clipLamp("Shadows", on: data.isShadowClipped, fraction: data.shadowClippedFraction)
                     clipLamp("Highlights", on: data.isHighlightClipped, fraction: data.highlightClippedFraction)
                 }
+                Button {
+                    ViewingController.shared.histogramEnabled = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.appIcon(9, weight: .semibold))
+                }
+                .buttonStyle(AppIconButtonStyle(width: 18, height: 18, cornerRadius: AppRadius.xs, showsRestingChrome: false))
+                .help("Hide Histogram (View ▸ Histogram)")
+                .accessibilityLabel("Hide Histogram")
             }
             ZStack {
-                if let data, dataKey == key {
+                if let data, dataKey == path {
                     HistogramPlot(data: data)
                 } else {
                     ProgressView().controlSize(.mini)
                 }
             }
-            .frame(width: 256, height: 96)
+            .frame(maxWidth: .infinity)
+            .frame(height: 72)
             .background(RoundedRectangle(cornerRadius: AppRadius.sm).fill(Color.appCanvasBackground.opacity(0.6)))
             HStack(spacing: AppSpacing.md) {
                 legend("R", color: .labelRed)
@@ -202,25 +207,15 @@ private struct LightboxHistogramPanel: View {
                 legend("Luminance", color: .appPrimaryText)
             }
         }
-        .padding(AppSpacing.md)
-        .background(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous).fill(Color.appOverlaySurface))
-        .overlay(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous).strokeBorder(Color.appOverlayStroke, lineWidth: 1))
-        .task(id: key) { await load() }
-        .accessibilityElement(children: .ignore)
+        .task(id: path) { await load() }
+        .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilitySummary)
     }
 
     private func load() async {
-        let requested = key
-        let result: HistogramData?
-        if let path = context.filePath {
-            result = await HistogramService.shared.histogram(forFileAt: URL(fileURLWithPath: path))
-        } else if let cgImage = context.image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-            result = await HistogramService.shared.histogram(for: cgImage, key: context.imageKey)
-        } else {
-            result = nil
-        }
-        guard !Task.isCancelled, requested == key else { return }
+        let requested = path
+        let result = await HistogramService.shared.histogram(forFileAt: URL(fileURLWithPath: requested))
+        guard !Task.isCancelled, requested == path else { return }
         data = result
         dataKey = requested
     }
@@ -248,13 +243,13 @@ private struct LightboxHistogramPanel: View {
     }
 
     private var accessibilitySummary: String {
-        guard let data, dataKey == key else { return "Histogram loading" }
+        guard let data, dataKey == path else { return "Histogram loading" }
         return "Histogram. Shadow clipping \(String(format: "%.1f", data.shadowClippedFraction * 100)) percent, highlight clipping \(String(format: "%.1f", data.highlightClippedFraction * 100)) percent."
     }
 }
 
 /// RGB channels as translucent fills, luminance as a line.
-private struct HistogramPlot: View {
+struct HistogramPlot: View {
     let data: HistogramData
 
     var body: some View {
@@ -310,23 +305,5 @@ struct LightboxViewingChromeButtons: View {
         .help(viewing.loupeEnabled ? "Loupe On (\(viewing.loupeMagnification)×) — click to turn off, hold for options" : "Loupe — click to turn on, hold for options")
         .accessibilityLabel("Loupe")
         .accessibilityValue(viewing.loupeEnabled ? "On, \(viewing.loupeMagnification)×" : "Off")
-
-        Button {
-            viewing.histogramEnabled.toggle()
-        } label: {
-            Image(systemName: "chart.bar.xaxis")
-                .font(.appIcon(13, weight: .medium))
-        }
-        .buttonStyle(
-            AppIconButtonStyle(
-                width: 30,
-                height: 30,
-                cornerRadius: AppRadius.md,
-                restingForeground: viewing.histogramEnabled ? Color.appAccent : Color.appMuted
-            )
-        )
-        .help(viewing.histogramEnabled ? "Hide Histogram" : "Show Histogram")
-        .accessibilityLabel("Histogram")
-        .accessibilityValue(viewing.histogramEnabled ? "On" : "Off")
     }
 }

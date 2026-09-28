@@ -39,6 +39,18 @@ struct MetadataPanelView: View {
                         Divider().background(Color.appBorder)
                     }
 
+                    // View ▸ Histogram: pinned at the top of the panel, clear of the image.
+                    if ViewingController.shared.histogramEnabled,
+                       let path = entry.sourcePath,
+                       FileHelpers.isImageFile(URL(fileURLWithPath: path).lastPathComponent) {
+                        DetailsHistogramCard(path: path)
+                            .padding(.horizontal, AppSpacing.xl)
+                            .padding(.vertical, AppSpacing.md)
+                            .overlay(alignment: .bottom) {
+                                Divider().background(Color.appBorder)
+                            }
+                    }
+
                     GeometryReader { geometry in
                         detailSplitView(entry: entry, availableHeight: geometry.size.height)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)

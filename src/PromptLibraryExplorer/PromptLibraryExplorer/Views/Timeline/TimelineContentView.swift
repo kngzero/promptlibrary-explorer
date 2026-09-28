@@ -317,6 +317,7 @@ private struct TimelineSelectionBar: View {
                 .lineLimit(1)
             }
             Spacer(minLength: AppSpacing.md)
+            MapTimelineLocateButtons(path: item.path)
             if item.coordinate != nil {
                 Button {
                     vm.mapTimeline.mapFocusPath = item.path

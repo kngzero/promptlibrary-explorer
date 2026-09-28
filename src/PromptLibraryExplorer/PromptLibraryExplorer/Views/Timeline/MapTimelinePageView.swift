@@ -313,12 +313,44 @@ struct MapTimelineThumbnail: View {
 /// Right-click menu for a Timeline / Map file: the browser's normal item menu
 /// when the file is in the browser's listing, otherwise the actions that don't
 /// need the listing.
+/// "Where is this file?" buttons for the Timeline / Map selection areas.
+struct MapTimelineLocateButtons: View {
+    @Environment(ExplorerViewModel.self) private var vm
+    let path: String
+
+    var body: some View {
+        Button {
+            vm.revealMapTimelineItem(path)
+        } label: {
+            Label("Show in Folder", systemImage: "folder")
+                .font(.appCaption)
+        }
+        .buttonStyle(AppLabeledButtonStyle(height: 24, horizontalPadding: AppSpacing.md))
+        .help("Close this view and open the file's folder in the browser, with the file selected")
+        .accessibilityLabel("Show in Folder")
+
+        Button {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        } label: {
+            Image(systemName: "arrow.up.forward.app")
+                .font(.appCaption)
+        }
+        .buttonStyle(AppLabeledButtonStyle(height: 24, horizontalPadding: AppSpacing.sm))
+        .help("Reveal in Finder")
+        .accessibilityLabel("Reveal in Finder")
+    }
+}
+
 struct MapTimelineItemMenu: View {
     @Environment(ExplorerViewModel.self) private var vm
     let path: String
 
     var body: some View {
         if let listed = vm.listedEntry(for: path) {
+            // Listed files get the browser's own menu, which has no way back to the
+            // file itself — so the page puts that first.
+            Button("Show in Folder") { vm.revealMapTimelineItem(path) }
+            Divider()
             ContentItemContextMenu(
                 item: listed.entry,
                 index: listed.index,

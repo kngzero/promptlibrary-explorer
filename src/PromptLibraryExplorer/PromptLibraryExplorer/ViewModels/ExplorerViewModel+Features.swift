@@ -279,6 +279,13 @@ extension ExplorerViewModel {
             clearAllFilters()
             selectPath(fileURL.path)
         }
+        // The grid only scrolls on selection *changes*; after a folder switch the
+        // revealed file can be selected yet off screen, so ask for it explicitly
+        // once the new listing has laid out.
+        let revealed = fileURL.path
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            NotificationCenter.default.post(name: .scrollToRevealedFile, object: revealed)
+        }
     }
 
     /// Breadcrumb-bar drop: a folder opens (staying under the current root when it
@@ -431,4 +438,9 @@ extension ExplorerViewModel {
         return prefix + flattened[start..<range.lowerBound] + "«" + flattened[range] + "»"
             + flattened[range.upperBound..<end] + suffix
     }
+}
+
+extension Notification.Name {
+    /// Posted with the revealed file's path; the grid / list scroll it into view.
+    static let scrollToRevealedFile = Notification.Name("scrollToRevealedFile")
 }
