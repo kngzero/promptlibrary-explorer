@@ -12,6 +12,9 @@ Docs-only changes don't bump the version. The version lives in `src/PromptLibrar
 
 Versions before 1.11.01 were assigned retroactively to the commits on `app-overhaul-2026-09`.
 
+## 1.11.02 — Neutral sidebar and raised surfaces
+- The dark sidebar is a neutral `#1E1E1E` (was the blue-tinted `#1E1E21`), and raised surfaces are neutral `#262626` / `#D9D9D9` (were `#262630` / `#D9D9DE`). These now match Mood and Story, per the suite design decision of 2026-09-28.
+
 ## 1.11.01 — Lightbox media fills the viewport
 - Images and video fill the lightbox again. The previous/next arrows float over the media, fully inside its edge, with a stronger backdrop so they stay readable.
 

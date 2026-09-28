@@ -114,7 +114,7 @@ extension Color {
     static let appSurface = ThemePalette.color(dark: (0x10, 0x10, 0x10), light: (0xEF, 0xEF, 0xEF))
 
     /// Elevated button/background surface for controls on dark panels
-    static let appElevatedSurface = ThemePalette.color(dark: (0x26, 0x26, 0x30), light: (0xD9, 0xD9, 0xDE))
+    static let appElevatedSurface = ThemePalette.color(dark: (0x26, 0x26, 0x26), light: (0xD9, 0xD9, 0xD9))   // neutral (owner, 2026-09-28)
 
     /// Primary accent: fuchsia on dark (#d946ef), deeper magenta on light (#a726bd)
     static let appAccent = ThemePalette.color(dark: (0xD9, 0x46, 0xEF), light: (0xA7, 0x26, 0xBD))
@@ -159,7 +159,7 @@ extension Color {
     static let appError = ThemePalette.color(dark: (0xEF, 0x44, 0x44), light: (0xDC, 0x26, 0x26))
 
     /// Sidebar backgrounds used by detail-heavy panels
-    static let appSidebarBackground = ThemePalette.color(dark: (0x1E, 0x1E, 0x21), light: (0xE1, 0xE1, 0xDE))
+    static let appSidebarBackground = ThemePalette.color(dark: (0x1E, 0x1E, 0x1E), light: (0xE1, 0xE1, 0xDE))   // neutral dark (owner, 2026-09-28)
 
     /// Sidebar top-level section headers (Favorites, Recent, …). ~15:1 on the light sidebar.
     static let appSidebarHeaderText = ThemePalette.color(dark: (0xA1, 0xA1, 0xAA), light: (0x1A, 0x1A, 0x1A))

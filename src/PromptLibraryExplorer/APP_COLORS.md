@@ -8,7 +8,7 @@ This document lists the design tokens defined in `PromptLibraryExplorer/App/Them
 | --- | --- | --- | --- |
 | `appBackground` | Main app background | `#171717` | `#E8E8E8` |
 | `appSurface` | Inset panel and tile surface | `#101010` | `#EFEFEF` |
-| `appElevatedSurface` | Buttons and elevated controls | `#262630` | `#D9D9DE` |
+| `appElevatedSurface` | Buttons and elevated controls (neutral) | `#262626` | `#D9D9D9` |
 | `appAccent` | Primary accent (fuchsia on dark, deeper magenta on light) | `#D946EF` | `#A726BD` |
 | `appAccentHover` | Accent hover state | `#F0ABFC` | `#8E1F9F` |
 | `appThumb` | Scrollbar thumb | `#3F3F46` | `#C0C0B9` |
@@ -20,7 +20,7 @@ This document lists the design tokens defined in `PromptLibraryExplorer/App/Them
 | `appControlBorder` | Stronger control border | `rgba(255, 255, 255, 0.16)` | `rgba(0, 0, 0, 0.14)` |
 | `appSuccess` | Success state | `#22C55E` | `#16A34A` |
 | `appError` | Error state | `#EF4444` | `#DC2626` |
-| `appSidebarBackground` | Sidebar and detail-heavy panel background | `#1E1E21` | `#E1E1DE` |
+| `appSidebarBackground` | Sidebar and detail-heavy panel background (neutral dark) | `#1E1E1E` | `#E1E1DE` |
 | `appCanvasBackground` | Lightbox / fullscreen canvas background | `#000000` | `#F7F7F7` |
 | `appOverlaySurface` | Floating overlay surface | `rgba(0, 0, 0, 0.62)` | `rgba(255, 255, 255, 0.90)` |
 | `appOverlayStroke` | Overlay border | `rgba(255, 255, 255, 0.12)` | `rgba(0, 0, 0, 0.08)` |
