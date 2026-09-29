@@ -139,6 +139,12 @@ extension Color {
     /// Accent hover: light fuchsia on dark (#f0abfc), darker magenta on light (#8e1f9f)
     static let appAccentHover = ThemePalette.color(dark: (0xF0, 0xAB, 0xFC), light: (0x8E, 0x1F, 0x9F))
 
+    /// Explorer glyph cells (suite branding package): one colour per app it opens.
+    static let brandMood = ThemePalette.color(dark: (0xE8, 0x79, 0xF9), light: (0xC0, 0x26, 0xD3))
+    static let brandStory = ThemePalette.color(dark: (0xFF, 0x8A, 0x7A), light: (0xE0, 0x44, 0x5E))
+    static let brandImages = ThemePalette.color(dark: (0x7C, 0xB4, 0xFF), light: (0x3B, 0x63, 0xD9))
+    static let brandStack = ThemePalette.color(dark: (0xFB, 0xBF, 0x24), light: (0xD9, 0x77, 0x06))
+
     /// Scrollbar thumb (#3f3f46)
     static let appThumb = ThemePalette.color(dark: (0x3F, 0x3F, 0x46), light: (0xC0, 0xC0, 0xB9))
 

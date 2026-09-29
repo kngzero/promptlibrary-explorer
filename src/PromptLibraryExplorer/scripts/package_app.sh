@@ -104,7 +104,9 @@ BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 1)"
 cp "$BUILD_DIR/$EXEC_NAME" "$STAGED_APP/Contents/MacOS/$EXEC_NAME"
 # Existing convention: a second copy named after the display name. Keep both.
 cp "$BUILD_DIR/$EXEC_NAME" "$STAGED_APP/Contents/MacOS/PromptLibrary Explorer"
-cp "$RES/AppIcon.icns" "$STAGED_APP/Contents/Resources/AppIcon.icns"
+# App and .plib/.aoe document icons: flat builds from the suite branding package
+# (apps/app branding/ArtOfficial-Flat); the .svg next to each .icns is its source.
+cp "$RES/AppIcon.icns" "$RES/PlibDocument.icns" "$RES/AoeDocument.icns" "$STAGED_APP/Contents/Resources/"
 
 # App Intents metadata (Shortcuts actions). SwiftPM doesn't run Xcode's "Extract App
 # Intents Metadata" phase, so do it here: the release build emits the compiler's const

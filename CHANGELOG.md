@@ -12,6 +12,12 @@ Docs-only changes don't bump the version. The version lives in `src/PromptLibrar
 
 Versions before 1.11.01 were assigned retroactively to the commits on `app-overhaul-2026-09`.
 
+## 1.15.01 — Flat suite icons
+
+- **New branding.** The app icon is the suite's flat Explorer icon: the 2 × 2 glyph (Mood arch, Story bubble, images circle, Stack S) in its app colours on a solid `#141414` tile, with no gradient or sheen. The titlebar shows the same glyph, in the light or dark cell colours to match the appearance, instead of the Art Official mark.
+- `.plib` and `.aoe` files have document icons in Finder (`Resources/PlibDocument.icns`, `AoeDocument.icns`): the Art Official or Stack glyph with a PLIB or AOE label on a white page. `src/plib-icon.svg` and `src/aoe-icon.svg` are the new designs.
+- The icons are made by `build_flat_icons.py` in `apps/app branding/ArtOfficial-Flat`; each `.icns` has its `.svg` source next to it.
+
 ## 1.15.00 — Trim page with real-time scrubbing
 - **Trim is a full page**, like Crop & Adjust: it covers the browser and the details panel (the sidebar stays) with the player filling the page, the in / out handles over the frame strip (or waveform) below it, and Format and Save To in an inspector. Cancel and Export are in the header, with the export's progress and Cancel Export while it runs. It replaces the Trim sheet, and opens from Tools, the context menu, File ▸ Trim & Export Clip… and the lightbox's Trim… (which closes the lightbox).
 - **Real-time scrubbing**: dragging a handle or the timeline chases the pointer — each seek starts the moment the previous one lands, always to the newest position — so frames keep up while you drag. Scrubbing audio plays a short burst at each position.
