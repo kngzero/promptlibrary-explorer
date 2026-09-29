@@ -4,22 +4,14 @@ import Foundation
 import Observation
 import UniformTypeIdentifiers
 
-/// State and commands for the video & audio tools: the hover-scrub setting, the Trim sheet,
+/// State and commands for the video & audio tools: the hover-scrub setting, the Trim page,
 /// clip-export progress, and frame export (Save Frame…, Copy Frame, Save Frame Strip…,
 /// Save Middle Frame). Views and the view model reach the tools only through this.
 @MainActor @Observable
 final class MediaController {
     static let shared = MediaController()
 
-    /// A request to show the Trim sheet for one video.
-    struct TrimRequest: Identifiable, Equatable {
-        let id = UUID()
-        let url: URL
-        /// Where the lightbox player was, so the sheet can open at the same frame.
-        var startTime: Double = 0
-    }
-
-    /// Clip-export progress while the Trim sheet exports.
+    /// Clip-export progress while the Trim page exports.
     struct ExportJob: Equatable {
         let destination: URL
         var progress: Double
@@ -36,7 +28,8 @@ final class MediaController {
 
     // MARK: State
 
-    var trimRequest: TrimRequest?
+    /// The open Trim page (video or audio), over the browser and details panel.
+    private(set) var trimSession: MediaTrimSession?
     private(set) var exportJob: ExportJob?
     /// Frame / strip saves in flight (buttons show a spinner, repeat clicks are ignored).
     private(set) var isSavingFrame = false
@@ -50,6 +43,8 @@ final class MediaController {
     @ObservationIgnored var toast: (String, ToastType) -> Void = { _, _ in }
     /// Called after a file was written into a folder, so the listing can refresh.
     @ObservationIgnored var didWriteFiles: ([URL]) -> Void = { _ in }
+    /// Called before the Trim page opens (the view model closes the lightbox and other pages).
+    @ObservationIgnored var willOpenTrim: () -> Void = {}
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -58,12 +53,23 @@ final class MediaController {
 
     // MARK: Trim
 
+    /// Opens the Trim page; `startTime` is where the lightbox player was.
     func openTrim(for url: URL, startTime: Double = 0) {
         guard !isExporting else {
             toast("A clip is still exporting.", .info)
             return
         }
-        trimRequest = TrimRequest(url: url, startTime: startTime)
+        guard trimSession?.url != url else { return }
+        willOpenTrim()
+        trimSession?.tearDown()
+        trimSession = MediaTrimSession(url: url, startTime: startTime)
+    }
+
+    /// Closes the Trim page (not while it exports).
+    func closeTrim() {
+        guard !isExporting else { return }
+        trimSession?.tearDown()
+        trimSession = nil
     }
 
     /// Default output for a trim: next to the source, never over it or an existing file.

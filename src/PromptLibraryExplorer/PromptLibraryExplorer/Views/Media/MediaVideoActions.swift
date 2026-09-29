@@ -77,22 +77,20 @@ struct MediaItemMenuItems: View {
                 .disabled(MediaController.shared.isSavingFrame)
             Button("Trim & Export Clip…") { vm.openTrim(for: item) }
                 .disabled(MediaController.shared.isExporting)
+        } else if !item.isDirectory, FileHelpers.isAudioFile(item.name) {
+            Button("Trim & Export Audio…") { vm.openTrim(for: item) }
+                .disabled(MediaController.shared.isExporting)
         }
     }
 }
 
-/// Presents the Trim sheet on the main window (applied once in the App file) and installs
-/// the media controller's hooks into the view model.
+/// Installs the media controller's hooks into the view model (applied once in the App
+/// file). The Trim page itself is an overlay in MainContentView.
 struct MediaSheetsHost: ViewModifier {
     @Environment(ExplorerViewModel.self) private var vm
-    @Bindable private var media = MediaController.shared
 
     func body(content: Content) -> some View {
         content
-            .sheet(item: $media.trimRequest) { request in
-                MediaTrimSheet(request: request)
-                    .environment(vm)
-            }
             .onAppear { vm.installMediaHooks() }
     }
 }

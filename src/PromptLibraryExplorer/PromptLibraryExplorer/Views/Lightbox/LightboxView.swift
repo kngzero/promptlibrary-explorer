@@ -372,9 +372,15 @@ struct LightboxView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: AppSpacing.lg) {
                     if let entry = vm.selectedPromptEntry {
+                        // Same section as the browser's details panel (the header's
+                        // Histogram toggle expands it). The file itself, not a document's page.
+                        if currentDocument == nil, let item = currentItem, FileHelpers.isImageFile(item.name) {
+                            DetailsHistogramSection(path: item.path)
+                        }
+
                         // File Name card
                         if let item = currentItem {
-                            cardSection(title: "File Name") {
+                            cardSection(title: "File Name", collapsible: false) {
                                 Text(item.name)
                                     .font(.appBody)
                                     .foregroundStyle(Color.appPrimaryText)
@@ -404,29 +410,38 @@ struct LightboxView: View {
 
                         // Prompt card
                         if !entry.prompt.isEmpty {
+                            let promptExpanded = DetailSectionState.shared.binding(for: "Prompt")
                             cardSection(title: nil) {
                                 HStack(alignment: .top, spacing: AppSpacing.sm) {
-                                    Image(systemName: "text.quote")
-                                        .font(.appCallout)
-                                        .foregroundStyle(Color.appAccent)
-                                    Text("Prompt")
-                                        .font(.appHeadline)
-                                        .foregroundStyle(Color.appPrimaryText)
+                                    DetailSectionToggle(title: "Prompt", isExpanded: promptExpanded) {
+                                        HStack(spacing: AppSpacing.sm) {
+                                            DetailSectionChevron(isExpanded: promptExpanded.wrappedValue)
+                                                .foregroundStyle(Color.appMuted)
+                                            Image(systemName: "text.quote")
+                                                .font(.appCallout)
+                                                .foregroundStyle(Color.appAccent)
+                                            Text("Prompt")
+                                                .font(.appHeadline)
+                                                .foregroundStyle(Color.appPrimaryText)
+                                        }
+                                    }
                                     Spacer()
                                     copyButton(entry.prompt)
                                 }
-                                Text(entry.prompt)
-                                    .font(.appBody)
-                                    .foregroundStyle(Color.appPrimaryText.opacity(0.9))
-                                    .textSelection(.enabled)
-                                    .padding(.top, AppSpacing.xs)
+                                if promptExpanded.wrappedValue {
+                                    Text(entry.prompt)
+                                        .font(.appBody)
+                                        .foregroundStyle(Color.appPrimaryText.opacity(0.9))
+                                        .textSelection(.enabled)
+                                        .padding(.top, AppSpacing.xs)
+                                }
                             }
                         }
 
                         // Generation Info card
                         if entry.generationInfo.model != "N/A" {
                             cardSection(title: "Generation Info") {
-                                genInfoGrid(entry.generationInfo)
+                                GenerationInfoGrid(info: entry.generationInfo, pixelSize: entry.fileMetadata?.pixelSize)
                             }
                         }
 
@@ -579,57 +594,14 @@ struct LightboxView: View {
 
     // MARK: - Card Section
 
-    @ViewBuilder
-    private func cardSection(title: String?, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: AppSpacing.sm) {
-            if let title {
-                Text(title)
-                    .font(.appIcon(11, weight: .medium))
-                    .foregroundStyle(Color.appMuted)
-            }
-            VStack(alignment: .leading, spacing: AppSpacing.sm) {
-                content()
-            }
-            .padding(AppSpacing.lg)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.appSurface.opacity(0.6))
-            .cornerRadius(AppRadius.lg)
-        }
-    }
-
-    // MARK: - Generation Info Grid
-
-    @ViewBuilder
-    private func genInfoGrid(_ info: GenerationInfo) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: AppSpacing.md) {
-            genInfoCell(title: "Model", value: info.model)
-            genInfoCell(title: "Aspect Ratio", value: info.aspectRatio.rawValue)
-        }
-        if !info.timestamp.isEmpty {
-            genInfoCell(title: "Timestamp", value: formatTimestamp(info.timestamp))
-        }
-    }
-
-    @ViewBuilder
-    private func genInfoCell(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: AppSpacing.xxs) {
-            Text(title)
-                .font(.appFootnote)
-                .foregroundStyle(Color.appMuted)
-            Text(value)
-                .font(.appIcon(13, weight: .medium))
-                .foregroundStyle(Color.appPrimaryText)
-                .lineLimit(1)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.appSurface)
-        .cornerRadius(AppRadius.md)
+    private func cardSection(title: String?, sectionID: String? = nil, collapsible: Bool = true, @ViewBuilder content: () -> some View) -> some View {
+        let content = content()
+        return DetailCard(title: title, sectionID: sectionID, collapsible: collapsible) { content }
     }
 
     @ViewBuilder
     private func fileInfoRows(_ meta: FileMetadata) -> some View {
-        VStack(alignment: .leading, spacing: AppSpacing.xs) {
+        VStack(alignment: .leading, spacing: AppSpacing.md) {
             fileInfoRow(label: "Type", value: meta.fileType)
             if let w = meta.width, let h = meta.height {
                 fileInfoRow(label: "Dimensions", value: "\(w) x \(h)")
@@ -832,24 +804,6 @@ struct LightboxView: View {
         .buttonStyle(AppAdaptiveButtonStyle())
         .help(label)
         .accessibilityLabel(label)
-    }
-
-    private func formatTimestamp(_ ts: String) -> String {
-        let isoFormatter = ISO8601DateFormatter()
-        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = isoFormatter.date(from: ts) {
-            let df = DateFormatter()
-            df.dateFormat = "yyyy-MM-dd, h:mm:ss a"
-            return df.string(from: date)
-        }
-        // Try without fractional seconds
-        isoFormatter.formatOptions = [.withInternetDateTime]
-        if let date = isoFormatter.date(from: ts) {
-            let df = DateFormatter()
-            df.dateFormat = "yyyy-MM-dd, h:mm:ss a"
-            return df.string(from: date)
-        }
-        return ts
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {
@@ -1098,7 +1052,8 @@ struct LightboxView: View {
                     .textSelection(.enabled)
             }
         case .shot(let step, let project, let showsProject):
-            cardSection(title: step.positionLabel) {
+            // One collapse state for every shot (the title is "Shot 3 of 12").
+            cardSection(title: step.positionLabel, sectionID: "Shot") {
                 if showsProject {
                     Text(project.title)
                         .font(.appFootnote)

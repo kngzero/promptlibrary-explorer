@@ -228,18 +228,18 @@ final class ViewingControllerSettingsTests: XCTestCase {
         XCTAssertFalse(controller.loupeEnabled)
         XCTAssertEqual(controller.loupeMagnification, 2)
         XCTAssertTrue(controller.loupeNearestNeighbour)
-        XCTAssertFalse(controller.histogramEnabled)
+        XCTAssertTrue(controller.histogramEnabled, "the Histogram section starts expanded")
 
         controller.loupeEnabled = true
         controller.loupeMagnification = 4
         controller.loupeNearestNeighbour = false
-        controller.histogramEnabled = true
+        controller.histogramEnabled = false
 
         let reloaded = ViewingController(defaults: defaults)
         XCTAssertTrue(reloaded.loupeEnabled)
         XCTAssertEqual(reloaded.loupeMagnification, 4)
         XCTAssertFalse(reloaded.loupeNearestNeighbour)
-        XCTAssertTrue(reloaded.histogramEnabled)
+        XCTAssertFalse(reloaded.histogramEnabled)
     }
 
     func testPointerIsOnlyTrackedWhileTheLoupeIsOn() throws {

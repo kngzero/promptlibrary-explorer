@@ -193,6 +193,7 @@ struct MainContentView: View {
                     ContentBrowserView(collapsedGroups: $collapsedGroups)
                         .coveredBySimilarImagesPage(vm.isSimilarImagesPageActive || vm.isComparePageActive)
                         .coveredBySimilarImagesPage(vm.isEditorPageActive)   // Views/Editor
+                        .coveredBySimilarImagesPage(vm.isTrimPageActive)   // Views/Media (Trim)
                         .coveredBySimilarImagesPage(vm.isMapTimelinePageActive)   // Views/Timeline, Views/Map
                         .background(SizeReporter(size: $contentColumnSize))
                         .navigationSplitViewColumnWidth(min: 400, ideal: 600)
@@ -200,6 +201,7 @@ struct MainContentView: View {
                     MetadataPanelView()
                         .coveredBySimilarImagesPage(vm.isSimilarImagesPageActive || vm.isComparePageActive)
                         .coveredBySimilarImagesPage(vm.isEditorPageActive)   // Views/Editor
+                        .coveredBySimilarImagesPage(vm.isTrimPageActive)   // Views/Media (Trim)
                         .coveredBySimilarImagesPage(vm.isMapTimelinePageActive)   // Views/Timeline, Views/Map
                         .background(SizeReporter(size: $detailColumnSize))
                         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 400)
@@ -233,6 +235,16 @@ struct MainContentView: View {
                 .overlay(alignment: .bottomTrailing) {
                     if vm.isMapTimelinePageActive, contentColumnSize.width > 0 {
                         MapTimelinePageView()
+                            .frame(width: similarPageWidth, height: max(0, contentColumnSize.height))
+                            .transition(.opacity.animation(.easeInOut(duration: 0.12)))
+                    }
+                }
+                // Trim page (Tools ▸ Trim, Trim & Export Clip / Audio…, Views/Media):
+                // same footprint, above the other pages while it's open.
+                .overlay(alignment: .bottomTrailing) {
+                    if let trim = MediaController.shared.trimSession, contentColumnSize.width > 0 {
+                        MediaTrimPageView(session: trim)
+                            .id(trim.id)
                             .frame(width: similarPageWidth, height: max(0, contentColumnSize.height))
                             .transition(.opacity.animation(.easeInOut(duration: 0.12)))
                     }
@@ -357,6 +369,15 @@ struct MainContentView: View {
 
         // No root path = nothing to navigate
         guard vm.explorerRootPath != nil else { return false }
+
+        // The Trim page: Esc closes, Space plays; the browser's bare keys stop here.
+        if vm.isTrimPageActive {
+            return vm.handleTrimPageKey(
+                keyCode: event.keyCode,
+                characters: event.charactersIgnoringModifiers,
+                modifiers: event.modifierFlags
+            )
+        }
 
         // The image editor page: Esc cancels (asking when there are changes);
         // the browser's bare keys stop here.

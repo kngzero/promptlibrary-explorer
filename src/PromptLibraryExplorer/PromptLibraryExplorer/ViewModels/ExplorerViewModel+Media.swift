@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 // MARK: - Video & audio tools glue (state lives in MediaController)
 
@@ -8,6 +8,15 @@ extension ExplorerViewModel {
     func installMediaHooks() {
         let media = MediaController.shared
         media.toast = { [weak self] message, type in self?.showToast(message, type: type) }
+        media.willOpenTrim = { [weak self] in
+            guard let self else { return }
+            // The Trim page covers the browser like the image editor: nothing else stays over it.
+            if self.commandPaletteOpen { self.commandPaletteOpen = false }
+            if QuickLookController.isPanelVisible { QuickLookController.shared.close() }
+            if self.isComparePageActive { self.closeComparePage() }
+            if self.lightboxOpen { self.lightboxOpen = false }
+            ModalKeyGuard.mainBrowserWindow?.makeFirstResponder(nil)
+        }
         media.didWriteFiles = { [weak self] urls in
             guard let self else { return }
             let folder = self.selectedFolderPath?.standardizedFileURL.path
@@ -66,8 +75,48 @@ extension ExplorerViewModel {
         MediaController.shared.openTrim(for: item.url)
     }
 
+    /// Trim & Export Clip… (video) or Trim & Export Audio… (audio files).
     func openTrim(for item: FileEntry) {
-        guard FileHelpers.isVideoFile(item.name) else { return }
+        guard FileHelpers.isVideoFile(item.name) || FileHelpers.isAudioFile(item.name) else { return }
         MediaController.shared.openTrim(for: item.url)
+    }
+
+    // MARK: Trim page
+
+    var isTrimPageActive: Bool { MediaController.shared.trimSession != nil }
+
+    /// Keys on the Trim page: Esc closes, Space plays the range, ← / → step a
+    /// frame (a tenth of a second for audio), I / O set the in and out points.
+    /// The browser's bare keys stop here.
+    func handleTrimPageKey(keyCode: UInt16, characters: String?, modifiers: NSEvent.ModifierFlags) -> Bool {
+        guard let session = MediaController.shared.trimSession else { return false }
+        if modifiers.contains(.command) || modifiers.contains(.control) || modifiers.contains(.option) { return false }
+        switch keyCode {
+        case KeyCode.escape.rawValue:
+            MediaController.shared.closeTrim()
+            return true
+        case KeyCode.space.rawValue:
+            session.togglePlay()
+            return true
+        case KeyCode.leftArrow.rawValue:
+            session.nudge(by: modifiers.contains(.shift) ? -10 : -1)
+            return true
+        case KeyCode.rightArrow.rawValue:
+            session.nudge(by: modifiers.contains(.shift) ? 10 : 1)
+            return true
+        case KeyCode.upArrow.rawValue, KeyCode.downArrow.rawValue, KeyCode.returnKey.rawValue,
+             KeyCode.delete.rawValue, KeyCode.forwardDelete.rawValue:
+            return true
+        default:
+            break
+        }
+        switch characters?.lowercased() {
+        case "i": session.setIn(); return true
+        case "o": session.setOut(); return true
+        default: break
+        }
+        if let characters, CullAction(keyCharacters: characters) != nil { return true }
+        if VisualSearchKeys.isMoreLikeThis(characters: characters, modifiers: modifiers) { return true }
+        return false
     }
 }

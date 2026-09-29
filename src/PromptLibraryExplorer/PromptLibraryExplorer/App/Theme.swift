@@ -17,28 +17,18 @@ enum AppAppearanceMode: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The scheme to hand `.preferredColorScheme(_:)`. `nil` for `.system`, so
-    /// the window follows the OS appearance (every palette colour is a dynamic
-    /// `NSColor` keyed on the effective appearance, so it resolves itself).
-    var preferredColorScheme: ColorScheme? {
+    /// The scheme to hand `.preferredColorScheme(_:)`. Always explicit: for
+    /// `.system` it is the Mac's current setting. SwiftUI's
+    /// `.preferredColorScheme(nil)` releases the window's AppKit appearance but
+    /// leaves SwiftUI's own `colorScheme` on the last forced scheme, so Dark →
+    /// System turned only the AppKit-drawn parts light.
+    @MainActor
+    var preferredColorScheme: ColorScheme {
         switch self {
-        case .system: return nil
+        case .system: return SystemAppearance.shared.colorScheme
         case .dark: return .dark
         case .light: return .light
         }
-    }
-
-    /// Kept for existing call sites (`.preferredColorScheme(mode.colorScheme)`).
-    /// Optional so `.system` stays `nil` and does not pin the window to a scheme.
-    var colorScheme: ColorScheme? { preferredColorScheme }
-
-    /// The scheme currently in effect, resolving `.system` against the app's
-    /// effective appearance.
-    @MainActor
-    var resolvedColorScheme: ColorScheme {
-        if let preferredColorScheme { return preferredColorScheme }
-        let match = NSApp?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
-        return match == .darkAqua ? .dark : .light
     }
 
     /// AppKit appearance for this mode (`nil` = inherit from the system).
@@ -50,16 +40,43 @@ enum AppAppearanceMode: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Applies the mode at the AppKit level too. SwiftUI's
-    /// `.preferredColorScheme(nil)` does not always release a window that was
-    /// previously forced dark or light, so switching back to System clears the
-    /// explicit appearances here.
+    /// Applies the mode at the AppKit level too (menus, panels, alerts). For
+    /// System it clears the explicit appearances, then re-reads the Mac's
+    /// setting so `preferredColorScheme` resolves against it.
     @MainActor
     func applyToApp() {
         NSApp?.appearance = nsAppearance
         for window in NSApp?.windows ?? [] {
             window.appearance = nsAppearance
         }
+        SystemAppearance.shared.refresh()
+    }
+}
+
+/// The Mac's light/dark setting, which `.system` resolves to.
+@MainActor
+@Observable
+final class SystemAppearance {
+    static let shared = SystemAppearance()
+
+    private(set) var colorScheme: ColorScheme = .dark
+    @ObservationIgnored private var observation: NSKeyValueObservation?
+
+    private init() { refresh() }
+
+    /// NSApp's effective appearance is the system's only while the app sets
+    /// none, so it is read only then. `applyToApp()` calls this after clearing
+    /// it for `.system`; KVO calls it when the Mac's setting changes.
+    func refresh() {
+        guard let app = NSApp else { return }
+        if observation == nil {
+            observation = app.observe(\.effectiveAppearance) { _, _ in
+                Task { @MainActor in SystemAppearance.shared.refresh() }
+            }
+        }
+        guard app.appearance == nil else { return }
+        let scheme: ColorScheme = app.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
+        if scheme != colorScheme { colorScheme = scheme }
     }
 }
 

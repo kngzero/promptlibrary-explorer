@@ -23,8 +23,8 @@ struct LightboxViewingContext {
 }
 
 /// The loupe over the lightbox image (View ▸ Loupe, or the lightbox header
-/// button). It never takes clicks. The histogram lives at the top of the
-/// details panel (`DetailsHistogramCard`) so it never covers the image.
+/// button). It never takes clicks. The histogram is a details-panel section
+/// (`DetailsHistogramSection`) so it never covers the image.
 struct LightboxViewingOverlays: View {
     let context: LightboxViewingContext
     private var viewing: ViewingController { .shared }
@@ -166,8 +166,21 @@ private struct LightboxLoupe: View {
 
 // MARK: - Histogram
 
-/// Histogram card at the top of the details panel (View ▸ Histogram): RGB +
-/// luminance for the selected image, with shadow / highlight clipping.
+/// The details panels' Histogram section (browser and lightbox), first for
+/// images. View ▸ Histogram and the lightbox's header menu expand or collapse
+/// it; collapsed, nothing is computed.
+struct DetailsHistogramSection: View {
+    let path: String
+    @Bindable private var viewing = ViewingController.shared
+
+    var body: some View {
+        DetailCard(title: "Histogram", isExpanded: $viewing.histogramEnabled) {
+            DetailsHistogramCard(path: path)
+        }
+    }
+}
+
+/// RGB + luminance for one image, with shadow / highlight clipping.
 struct DetailsHistogramCard: View {
     let path: String
     @State private var data: HistogramData?
@@ -175,40 +188,31 @@ struct DetailsHistogramCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppSpacing.xs) {
-            HStack(spacing: AppSpacing.sm) {
-                Text("Histogram")
-                    .font(.appCaptionEmphasis)
-                    .foregroundStyle(Color.appPrimaryText)
-                Spacer(minLength: 0)
-                if let data, dataKey == path {
-                    clipLamp("Shadows", on: data.isShadowClipped, fraction: data.shadowClippedFraction)
-                    clipLamp("Highlights", on: data.isHighlightClipped, fraction: data.highlightClippedFraction)
-                }
-                Button {
-                    ViewingController.shared.histogramEnabled = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.appIcon(9, weight: .semibold))
-                }
-                .buttonStyle(AppIconButtonStyle(width: 18, height: 18, cornerRadius: AppRadius.xs, showsRestingChrome: false))
-                .help("Hide Histogram (View ▸ Histogram)")
-                .accessibilityLabel("Hide Histogram")
-            }
             ZStack {
-                if let data, dataKey == path {
+                if dataKey != path {
+                    ProgressView().controlSize(.mini)
+                } else if let data, data.pixelCount > 0 {
                     HistogramPlot(data: data)
                 } else {
-                    ProgressView().controlSize(.mini)
+                    // Unreadable (or a cloud placeholder not downloaded yet), or no visible pixels.
+                    Text("No histogram for this file")
+                        .font(.appCaption)
+                        .foregroundStyle(Color.appMuted)
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 72)
+            .frame(height: 120)
             .background(RoundedRectangle(cornerRadius: AppRadius.sm).fill(Color.appCanvasBackground.opacity(0.6)))
             HStack(spacing: AppSpacing.md) {
                 legend("R", color: .labelRed)
                 legend("G", color: .labelGreen)
                 legend("B", color: .labelBlue)
                 legend("Luminance", color: .appPrimaryText)
+                Spacer(minLength: 0)
+                if let data, dataKey == path {
+                    clipLamp("Shadows", on: data.isShadowClipped, fraction: data.shadowClippedFraction)
+                    clipLamp("Highlights", on: data.isHighlightClipped, fraction: data.highlightClippedFraction)
+                }
             }
         }
         .task(id: path) { await load() }
@@ -247,7 +251,8 @@ struct DetailsHistogramCard: View {
     }
 
     private var accessibilitySummary: String {
-        guard let data, dataKey == path else { return "Histogram loading" }
+        guard dataKey == path else { return "Histogram loading" }
+        guard let data, data.pixelCount > 0 else { return "No histogram for this file" }
         return "Histogram. Shadow clipping \(String(format: "%.1f", data.shadowClippedFraction * 100)) percent, highlight clipping \(String(format: "%.1f", data.highlightClippedFraction * 100)) percent."
     }
 }

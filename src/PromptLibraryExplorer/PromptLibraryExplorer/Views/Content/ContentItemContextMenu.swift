@@ -10,6 +10,10 @@ struct ContentItemContextMenu: View {
     let onRename: () -> Void
     let onNewCollection: () -> Void
 
+    /// Settings ▸ Appearance ▸ Right-Click Menu. On by default.
+    @AppStorage(ContentItemContextMenu.compactKey) private var compact = true
+    static let compactKey = "contextMenu.hideDetailsPanelItems"
+
     private var targets: [FileEntry] {
         if vm.selectedPaths.contains(item.path), !vm.selectedItems.isEmpty {
             return vm.selectedItems
@@ -24,6 +28,22 @@ struct ContentItemContextMenu: View {
     /// Targets that take flags and ratings (files only).
     private var cullFiles: [FileEntry] {
         targets.filter { !$0.isDirectory }
+    }
+
+    /// True when the listing is the file's own folder, so "Show in Folder" would
+    /// go nowhere. Collections, virtual listings (More Like This, palette
+    /// matches…) and anything listed from another folder return false.
+    private var isInOwnFolder: Bool {
+        let parent = item.url.deletingLastPathComponent().standardizedFileURL.path
+        return vm.isFolderListing && vm.selectedFolderPath?.standardizedFileURL.path == parent
+    }
+
+    /// One file, which the details panel shows once it's selected: its Tools,
+    /// Prompt, Prompt Tools, Dominant Colours and Rating & Tags cover these
+    /// items, so the menu leaves them out (when `compact`). Several files keep
+    /// everything, since the panel acts on one.
+    private var detailsPanelCoversItem: Bool {
+        compact && targets.count == 1 && !item.isDirectory
     }
 
     /// The value when every element agrees; nil when mixed or empty.
@@ -48,14 +68,17 @@ struct ContentItemContextMenu: View {
             }
         }
 
-        Button("Quick Look", action: onSelection { vm.quickLookSelection() })
+        // Opens the file's folder in the browser with the file selected, as on the Timeline and Map.
+        if !item.isDirectory, !isInOwnFolder {
+            Button("Show in Folder") { Task { await vm.revealFile(at: item.url) } }
+        }
 
         Button("Reveal in Finder", action: onSelection { vm.revealSelectionInFinder() })
 
         // Online-only cloud files: Download / Make Available Offline… (nothing otherwise).
         CloudItemMenuItems(targets: targets)
 
-        if !item.isDirectory, FileHelpers.isImageFile(item.name) || FileHelpers.isVideoFile(item.name) {
+        if !detailsPanelCoversItem, !item.isDirectory, FileHelpers.isImageFile(item.name) || FileHelpers.isVideoFile(item.name) {
             let apps = FileSystemService.applicationsForFile(url: item.url)
             if !apps.isEmpty {
                 Menu("Open In...") {
@@ -73,16 +96,18 @@ struct ContentItemContextMenu: View {
         }
 
         // Non-destructive image edits (Views/Editor); hidden for non-images.
-        EditorItemMenuItems(item: item, index: index, targets: targets)
+        if !detailsPanelCoversItem {
+            EditorItemMenuItems(item: item, index: index, targets: targets)
+        }
 
-        // Video tools: Save Middle Frame, Trim & Export Clip… (Views/Media).
-        if !item.isDirectory, FileHelpers.isVideoFile(item.name) {
+        // Video and audio tools: Save Middle Frame, Trim & Export Clip / Audio… (Views/Media).
+        if !detailsPanelCoversItem, !item.isDirectory, FileHelpers.isVideoFile(item.name) || FileHelpers.isAudioFile(item.name) {
             Divider()
             MediaItemMenuItems(item: item)
         }
 
         // Visual search (inspection only: opens a ranked listing, changes nothing)
-        if !item.isDirectory, VisualSearchEligibility.hasPalette(item.name) {
+        if !detailsPanelCoversItem, !item.isDirectory, VisualSearchEligibility.hasPalette(item.name) {
             Divider()
             if VisualSearchEligibility.isVisual(item.name) {
                 Button("More Like This") { vm.showMoreLikeThis(for: item) }
@@ -100,7 +125,7 @@ struct ContentItemContextMenu: View {
         Divider()
 
         // Copy
-        if targetsHaveFiles {
+        if targetsHaveFiles, !detailsPanelCoversItem {
             Button("Copy Prompt", action: onSelection { vm.copyPromptOfSelection() })
 
             Menu("Copy As") {
@@ -118,27 +143,9 @@ struct ContentItemContextMenu: View {
             SharePresenter.share(urls)
         }
 
-        Divider()
-
-        CullActionMenus(
-            flag: commonValue(cullFiles.map { vm.flag(for: $0.path) }),
-            rating: commonValue(cullFiles.map { vm.rating(for: $0.path) }),
-            label: commonValue(targets.map { FinderLabel(labelNumber: $0.labelNumber) }),
-            includesFileActions: targetsHaveFiles,
-            perform: { action in
-                // Flags and ratings are for files; Finder labels go on folders too.
-                let items = action.appliesToFolders ? targets : cullFiles
-                ContentItemActions.ensureSelected(item, at: index, vm: vm)
-                vm.apply(action, to: items)
-            }
-        )
-
-        Button(vm.isFavorite(path: item.path) ? "Unpin" : "Pin") {
-            vm.toggleFavorite(path: item.path)
-        }
-
-        Menu("Tags") {
-            TagAssignmentMenu(paths: targets.map(\.path))
+        if !detailsPanelCoversItem {
+            Divider()
+            cullingItems
         }
 
         // Suggested tags (review sheet) and version stacks (Views/Stacks).
@@ -168,8 +175,10 @@ struct ContentItemContextMenu: View {
         }
 
         // Prompt workflows: lineage, builder, send to generator (Views/Prompts).
-        PromptItemMenuItems(item: item, targets: targets) {
-            ContentItemActions.ensureSelected(item, at: index, vm: vm)
+        if !detailsPanelCoversItem {
+            PromptItemMenuItems(item: item, targets: targets) {
+                ContentItemActions.ensureSelected(item, at: index, vm: vm)
+            }
         }
 
         // 2–4 images / videos side by side with synced zoom (Views/Compare).
@@ -224,6 +233,31 @@ struct ContentItemContextMenu: View {
 
         Button("Delete Permanently") {
             vm.requestPermanentDelete(for: targets)
+        }
+    }
+
+    /// Flag, Rating, Label, Pin and Tags (the details panel's Rating & Tags).
+    @ViewBuilder
+    private var cullingItems: some View {
+        CullActionMenus(
+            flag: commonValue(cullFiles.map { vm.flag(for: $0.path) }),
+            rating: commonValue(cullFiles.map { vm.rating(for: $0.path) }),
+            label: commonValue(targets.map { FinderLabel(labelNumber: $0.labelNumber) }),
+            includesFileActions: targetsHaveFiles,
+            perform: { action in
+                // Flags and ratings are for files; Finder labels go on folders too.
+                let items = action.appliesToFolders ? targets : cullFiles
+                ContentItemActions.ensureSelected(item, at: index, vm: vm)
+                vm.apply(action, to: items)
+            }
+        )
+
+        Button(vm.isFavorite(path: item.path) ? "Unpin" : "Pin") {
+            vm.toggleFavorite(path: item.path)
+        }
+
+        Menu("Tags") {
+            TagAssignmentMenu(paths: targets.map(\.path))
         }
     }
 }

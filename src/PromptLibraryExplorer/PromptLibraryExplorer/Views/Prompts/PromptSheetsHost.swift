@@ -87,10 +87,7 @@ struct PromptWorkflowDetailCard: View {
 
     var body: some View {
         if let item, hasPromptData, entry.artOfficialDocument == nil {
-            VStack(alignment: .leading, spacing: AppSpacing.sm) {
-                Text("Prompt Tools")
-                    .font(.appIcon(11, weight: .medium))
-                    .foregroundStyle(Color.appMuted)
+            DetailCard(title: "Prompt Tools") {
                 PromptFlowLayout(spacing: AppSpacing.sm, lineSpacing: AppSpacing.sm) {
                     Button {
                         vm.openPromptBuilder(from: item)
@@ -130,10 +127,6 @@ struct PromptWorkflowDetailCard: View {
                         .help("Generate with Automatic1111 / Forge from this prompt and its parameters")
                     }
                 }
-                .padding(AppSpacing.lg)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.appSurface.opacity(0.6))
-                .cornerRadius(AppRadius.lg)
             }
         }
     }

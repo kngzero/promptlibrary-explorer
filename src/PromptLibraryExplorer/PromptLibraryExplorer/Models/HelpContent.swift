@@ -134,7 +134,8 @@ enum HelpContent {
             highlights: [
                 "Hover scrubbing: move the pointer across a video's tile (grid or list) to see the frame at that point, with a thin line for the position; leaving the tile shows the poster again. Settings ▸ Appearance turns it off.",
                 "Frames: in the lightbox, Save Frame… saves the frame on screen at full resolution as PNG or JPEG (named like \"clip @ 00m12s.png\"), Copy Frame puts it on the clipboard, and Frame Strip… saves a contact strip of 4–24 evenly spaced frames with timecodes. Save Middle Frame (context menu, File menu) writes a PNG of each selected video's midpoint next to it.",
-                "Trim & Export Clip… (lightbox Trim…, context menu, File menu): drag the in and out handles over the frame strip, play the range, then export as MP4 (H.264 or HEVC) or an animated GIF (5–30 fps, a maximum width, loop or play once). An MP4 whose codec matches the source is copied without re-encoding. Clips are saved next to the original as \"clip (trim).mp4\" / \"clip.gif\" (numbered if the name is taken) or wherever you choose; the export shows progress and can be cancelled.",
+                "Trim & Export Clip… (details panel ▸ Tools ▸ Trim Video, lightbox Trim…, context menu, File menu) opens the Trim page over the browser, like Crop & Adjust: drag the in and out handles over the frame strip (scrubbing is real time), play the range (Space), step with ← / →, set the in and out points with I / O, then export as MP4 (H.264 or HEVC) or an animated GIF (5–30 fps, a maximum width, loop or play once). An MP4 whose codec matches the source is copied without re-encoding. Clips are saved next to the original as \"clip (trim).mp4\" / \"clip.gif\" (numbered if the name is taken) or wherever you choose; the export shows progress and can be cancelled.",
+                "Trim & Export Audio… (context menu, details panel ▸ Tools ▸ Trim Audio): the same page with the handles over the waveform (scrubbing plays short bursts so you hear where you are), exported as M4A (AAC) next to the original as \"song (trim).m4a\" or wherever you choose.",
                 "Audio files show their waveform as the thumbnail. The lightbox and details audio player shows a large waveform: click to seek, drag to select a region, then Loop plays just that region.",
                 "Beat (BPM) and key detection aren't included."
             ]
@@ -146,7 +147,7 @@ enum HelpContent {
             description: "A background visual index (images and videos — a frame from the middle of each clip) powers searching by look and by colour. It builds automatically when a folder opens; the indicator in the bottom status bar shows its progress, and clicking it gives Pause, Resume and Stop. Settings ▸ Search Index has the same controls and a full rebuild.",
             highlights: [
                 "Library ▸ Similar Images (also in the command palette) turns the main window into the Similar Images page: the sidebar stays, and the browser and details panel make way for it. The left column lists the groups — exact copies (identical files, labelled Exact) and near-duplicates (labelled Similar) — in This Folder or the Whole Library, with a strictness slider, an Include Videos switch and Find. Drag the divider to resize it.",
-                "Select a group to see its files large, side by side, in folder-then-name order, each with its folder, pixel size, file size, date, flag / rating / label and prompt. Hover a file (or right-click it) for Open in Lightbox, Reveal in Finder, More Like This, Copy Prompt and the Flag, Rating and Label menus; the group's header has Select in Browser, Add to Collection… and Open Group as Listing.",
+                "Select a group to see its files large, side by side, in folder-then-name order, each with its folder, pixel size, file size, date, flag / rating / label and prompt. Hover a file (or right-click it) for Open in Lightbox, Show in Folder, Reveal in Finder, More Like This, Copy Prompt and the Flag, Rating and Label menus; the group's header has Select in Browser, Add to Collection… and Open Group as Listing.",
                 "Every file is kept: nothing in a group is marked, pre-selected, ranked or suggested for removal — a larger copy is often an upscale of the master — and the page has no delete button.",
                 "Clicking a folder in the sidebar keeps the page (with This Folder it searches the new folder); a collection or smart folder shows in the browser. Done, Esc or View ▸ Show Browser returns to the browser exactly as you left it; results are remembered, so coming back is instant.",
                 "More Like This (press M in the grid or lightbox, or use the context menu, the details panel or the Library menu) lists the files that look most like the selected one, most similar first, as \"Similar to <name>\". Library ▸ Visual Search Scope chooses This Folder or Whole Library for every visual search.",
@@ -166,7 +167,7 @@ enum HelpContent {
                 "Same Framing (the default) lines up images of different sizes, so a master and its upscale show the same part of the picture; Actual Pixels makes 100 % one image pixel per screen pixel for each file. Each pane's bar shows its name, pixel size, file size and its own zoom, with Reveal in Finder, Copy Path and Copy Prompt. Videos compare as a frame.",
                 "A/B Wipe shows two files in one view with a divider you drag; switch it to a horizontal divider, pick which files are A and B, or swap them. Images are decoded at the size the screen needs, and at full resolution only once you zoom to 100 % or more. Done, Esc or View ▸ Show Browser returns to the browser as you left it.",
                 "On the Similar Images page, the group header's Compare button shows the group in the same synced compare instead of the cards (four files at a time; ← / → move through a larger group).",
-                "In the lightbox, the magnifier button (or View ▸ Loupe) shows a loupe that follows the pointer at 2× or 4× the image's own pixels, with the pixel's position and RGB value; Crisp Pixels (View ▸ Loupe Magnification) shows hard pixel edges. View ▸ Histogram shows the RGB and luminance histogram, with shadow and highlight clipping, at the top of the details panel for the selected image — it never covers the image.",
+                "In the lightbox, the magnifier button (or View ▸ Loupe) shows a loupe that follows the pointer at 2× or 4× the image's own pixels, with the pixel's position and RGB value; Crisp Pixels (View ▸ Loupe Magnification) shows hard pixel edges. The RGB and luminance histogram, with shadow and highlight clipping, is the first section of the details panel for an image, in the browser and the lightbox; View ▸ Histogram (or the lightbox header's menu) expands or collapses it. It never covers the image.",
                 "View ▸ Start Slideshow plays the selection (2 or more files), or else the whole folder, collection or listing in its current order and with its filters (hidden rejects stay hidden), full screen on the display the window is on. Move the mouse for the controls; the options set the interval (2–30 s), transition (none, crossfade, slide), shuffle, loop, background, caption (file name, prompt excerpt, rating) and whether videos play (the slideshow moves on when one ends)."
             ]
         ),
@@ -183,7 +184,7 @@ enum HelpContent {
                 "Privacy: locations are read from the files only (EXIF GPS, QuickTime ISO 6709). The map downloads its tiles from Apple; nothing else is sent unless you click Look Up Place Names, which asks Apple for the names of the places in view one at a time and remembers them.",
                 "Dates and locations are stored in the library index. Files indexed before this existed are read in the background when a page opens (the Dating… progress in the page's bar and in the indexing status popover, with Stop and Resume). Online-only cloud files are skipped rather than downloaded.",
                 "In the browser, Sort By ▸ Capture Date and Group By ▸ Month / Year use the same date. Right-click an image or video for Show in Timeline or Show on Map (they open with This Folder, at the file).",
-                "To get back to a file: select it and click Show in Folder (on the Timeline's bottom bar, or under the Map's file strip), or right-click it ▸ Show in Folder. The page closes, the browser opens the file's folder, expands it in the sidebar and scrolls to the file, selected. Reveal in Finder is next to it."
+                "To get back to a file: select it and click Show in Folder (on the Timeline's bottom bar, or under the Map's file strip), or right-click it ▸ Show in Folder. The page closes, the browser opens the file's folder, expands it in the sidebar and scrolls to the file, selected. Reveal in Finder is next to it. Files in a collection, a More Like This or palette listing, or on the Similar Images page have Show in Folder in their right-click menu too."
             ]
         ),
         HelpFileTypeDescription(
@@ -848,12 +849,16 @@ extension HelpContent {
             label: "Details",
             summary: "Select a file to see its prompt, negative prompt, model, seed, sampler, steps and size, any structured analysis, and your rating, flag, label and tags.",
             details: [
+                "Click a section's title (Histogram, Prompt, File Info…) to collapse or expand it. The panel remembers which sections are collapsed, in the lightbox too.",
+                "Images start with a Histogram section: RGB and luminance, with shadow and highlight clipping.",
+                "Tools shows what fits the file: Crop & Adjust, Save Edited Copy and Revert for images, Trim Video and Save Middle Frame for video, Trim Audio for audio, Edit Metadata, Export…, and Open With (every app that opens the file, or Other…).",
+                "For one file, the right-click menu leaves out what the details panel has (Settings ▸ Appearance ▸ Right-Click Menu brings it all back); with several files selected it keeps everything.",
                 "Copy buttons copy each field; Edit ▸ Copy Prompt As… copies it in another format.",
                 "Prompt Tools opens the Prompt Builder, Prompt Lineage and Send to Generator for the file.",
                 "PNG and JPEG metadata can be edited (right-click ▸ Batch Edit Metadata for several files); the change is written into the file.",
                 "View ▸ Hide Preview Pane hides the panel for a wider grid."
             ],
-            keywords: ["metadata", "inspector", "prompt", "seed", "parameters", "preview pane", "edit metadata"],
+            keywords: ["metadata", "inspector", "prompt", "seed", "parameters", "preview pane", "edit metadata", "histogram", "collapse", "sections"],
             showMe: .togglePreviewPane
         ),
         HelpEntry(

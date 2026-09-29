@@ -39,18 +39,6 @@ struct MetadataPanelView: View {
                         Divider().background(Color.appBorder)
                     }
 
-                    // View ▸ Histogram: pinned at the top of the panel, clear of the image.
-                    if ViewingController.shared.histogramEnabled,
-                       let path = entry.sourcePath,
-                       FileHelpers.isImageFile(URL(fileURLWithPath: path).lastPathComponent) {
-                        DetailsHistogramCard(path: path)
-                            .padding(.horizontal, AppSpacing.xl)
-                            .padding(.vertical, AppSpacing.md)
-                            .overlay(alignment: .bottom) {
-                                Divider().background(Color.appBorder)
-                            }
-                    }
-
                     GeometryReader { geometry in
                         detailSplitView(entry: entry, availableHeight: geometry.size.height)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -195,25 +183,47 @@ struct MetadataPanelView: View {
     private func metadataPane(entry: PromptEntry) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppSpacing.lg) {
+                // Directly under the preview, and always shown.
+                if let meta = entry.fileMetadata {
+                    detailCard(title: "File Name", collapsible: false) {
+                        Text(meta.fileName)
+                            .font(.appBody)
+                            .foregroundStyle(Color.appPrimaryText)
+                            .textSelection(.enabled)
+                    }
+                }
+
+                // View ▸ Histogram expands or collapses it.
+                if let path = entry.sourcePath, FileHelpers.isImageFile(URL(fileURLWithPath: path).lastPathComponent) {
+                    DetailsHistogramSection(path: path)
+                }
+
                 if let document = entry.artOfficialDocument, let path = entry.sourcePath {
                     ArtOfficialDocumentDetailView(document: document, fileURL: URL(fileURLWithPath: path))
                         .id(path)
                 }
 
-                // Non-destructive edits: Edited badge, Edit / Save Copy / Revert (Views/Editor).
-                if let path = entry.sourcePath {
-                    EditorDetailsCard(path: path)
+                // Tools for this file type, ending with Open With (Views/Detail/ToolsDetailCard.swift).
+                if let path = entry.sourcePath, entry.artOfficialDocument == nil {
+                    ToolsDetailCard(entry: entry, path: path)
                 }
 
                 if !entry.prompt.isEmpty {
+                    let promptExpanded = DetailSectionState.shared.binding(for: "Prompt")
                     detailCard(title: nil) {
                         HStack(alignment: .top, spacing: AppSpacing.sm) {
-                            Image(systemName: "text.quote")
-                                .font(.appCallout)
-                                .foregroundStyle(Color.appAccent)
-                            Text("Prompt")
-                                .font(.appHeadline)
-                                .foregroundStyle(Color.appPrimaryText)
+                            DetailSectionToggle(title: "Prompt", isExpanded: promptExpanded) {
+                                HStack(spacing: AppSpacing.sm) {
+                                    DetailSectionChevron(isExpanded: promptExpanded.wrappedValue)
+                                        .foregroundStyle(Color.appMuted)
+                                    Image(systemName: "text.quote")
+                                        .font(.appCallout)
+                                        .foregroundStyle(Color.appAccent)
+                                    Text("Prompt")
+                                        .font(.appHeadline)
+                                        .foregroundStyle(Color.appPrimaryText)
+                                }
+                            }
                             Spacer()
                             PromptExportMenu(entry: entry, title: "Copy As") { formatName in
                                 vm.showToast("Copied as \(formatName)", type: .success)
@@ -238,40 +248,14 @@ struct MetadataPanelView: View {
                             .help("Copy Prompt")
                             .accessibilityLabel("Copy Prompt")
                         }
-                        Text(entry.prompt)
-                            .font(.appBody)
-                            .foregroundStyle(Color.appPrimaryText.opacity(0.9))
-                            .textSelection(.enabled)
-                            .padding(.top, AppSpacing.xs)
-                    }
-                }
-
-                if isEmbeddableMetadataFile(entry), let path = entry.sourcePath {
-                    let hasMetadata = !entry.prompt.isEmpty
-                        || !entry.embeddedMetadata.isEmpty
-                        || entry.generationInfo.model != "N/A"
-                    let actionTitle = metadataActionTitle(for: path, hasMetadata: hasMetadata)
-                    Button {
-                        vm.openMetadataEditor(for: path)
-                    } label: {
-                        HStack(spacing: AppSpacing.sm) {
-                            Image(systemName: hasMetadata ? "pencil.line" : "plus.square")
-                                .font(.appCallout)
-                            Text(actionTitle)
-                                .font(.appIcon(12, weight: .medium))
+                        if promptExpanded.wrappedValue {
+                            Text(entry.prompt)
+                                .font(.appBody)
+                                .foregroundStyle(Color.appPrimaryText.opacity(0.9))
+                                .textSelection(.enabled)
+                                .padding(.top, AppSpacing.xs)
                         }
-                        .foregroundStyle(Color.appAccent)
-                        .padding(.horizontal, AppSpacing.lg)
-                        .padding(.vertical, 7)
-                        .frame(maxWidth: .infinity)
-                        .background(Color.appAccent.opacity(0.12))
-                        .cornerRadius(AppRadius.md)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: AppRadius.md)
-                                .strokeBorder(Color.appAccent.opacity(0.25), lineWidth: 1)
-                        )
                     }
-                    .buttonStyle(AppAdaptiveButtonStyle())
                 }
 
                 if entry.comfyWorkflowJSON != nil || entry.comfyPromptJSON != nil {
@@ -285,115 +269,15 @@ struct MetadataPanelView: View {
 
                 if entry.generationInfo.model != "N/A" {
                     detailCard(title: "Generation Info") {
-                        genInfoGrid(entry.generationInfo)
+                        GenerationInfoGrid(info: entry.generationInfo, pixelSize: entry.fileMetadata?.pixelSize)
                     }
                 }
 
                 if let meta = entry.fileMetadata {
-                    detailCard(title: "File Name") {
-                        Text(meta.fileName)
-                            .font(.appBody)
-                            .foregroundStyle(Color.appPrimaryText)
-                            .textSelection(.enabled)
-                    }
-
-                    // Star Rating & Favorite
+                    // Rating, pin, flag, Finder label and tags: one collapsible card.
                     if let path = entry.sourcePath {
-                        HStack {
-                            Text("Rating")
-                                .font(.appCalloutEmphasis)
-                                .foregroundStyle(Color.appMuted)
-                                .lineLimit(1)
-                                .fixedSize()
-                                .layoutPriority(1)
-                            Spacer()
-
-                            // Favorite toggle
-                            Button {
-                                vm.toggleFavorite(path: path)
-                            } label: {
-                                Image(systemName: vm.isFavorite(path: path) ? "pin.fill" : "pin")
-                                    .font(.appCallout)
-                            }
-                            .buttonStyle(
-                                AppIconButtonStyle(
-                                    width: 24,
-                                    height: 24,
-                                    cornerRadius: AppRadius.sm,
-                                    showsRestingChrome: false,
-                                    restingForeground: vm.isFavorite(path: path) ? Color.favoriteGoldText : Color.appMuted
-                                )
-                            )
-                            .help(vm.isFavorite(path: path) ? "Unpin" : "Pin")
-                            .accessibilityLabel(vm.isFavorite(path: path) ? "Unpin" : "Pin")
-
-                            StarRatingView(rating: vm.rating(for: path), size: 16) { newRating in
-                                vm.setRating(newRating, for: path)
-                            }
-                        }
-                        .padding(.horizontal, AppSpacing.xl)
-                        .padding(.vertical, AppSpacing.md)
-
-                        // Flag & Finder label
-                        HStack(spacing: AppSpacing.sm) {
-                            Text("Flag")
-                                .font(.appCalloutEmphasis)
-                                .foregroundStyle(Color.appMuted)
-                                .lineLimit(1)
-                                .fixedSize()
-                                .layoutPriority(1)
-                            Spacer()
-                            FlagSegmentedControl(flag: vm.flag(for: path)) { flag in
-                                applyCull(.flag(flag), to: path)
-                            }
-                        }
-                        .padding(.horizontal, AppSpacing.xl)
-                        .padding(.vertical, AppSpacing.xs)
-
-                        HStack(spacing: AppSpacing.sm) {
-                            Text("Label")
-                                .font(.appCalloutEmphasis)
-                                .foregroundStyle(Color.appMuted)
-                                .lineLimit(1)
-                                .fixedSize()
-                                .layoutPriority(1)
-                            Spacer()
-                            LabelSwatchRow(label: FinderLabel(labelNumber: vm.labelNumber(for: path))) { label in
-                                applyCull(.label(label), to: path)
-                            }
-                        }
-                        .padding(.horizontal, AppSpacing.xl)
-                        .padding(.vertical, AppSpacing.xs)
-
-                        // Tags
-                        let fileTags = vm.tagsForFile(at: path)
-                        if !fileTags.isEmpty || !vm.allTags.isEmpty {
-                            HStack(spacing: AppSpacing.sm) {
-                                Text("Tags")
-                                    .font(.appCalloutEmphasis)
-                                    .foregroundStyle(Color.appMuted)
-                                    .lineLimit(1)
-                                    .fixedSize()
-                                    .layoutPriority(1)
-
-                                TagPillsView(tags: fileTags)
-
-                                Spacer()
-
-                                Menu {
-                                    TagAssignmentMenu(paths: [path])
-                                } label: {
-                                    Image(systemName: "plus.circle")
-                                        .font(.appCaption)
-                                        .foregroundStyle(Color.appMuted)
-                                }
-                                .menuStyle(.borderlessButton)
-                                .fixedSize()
-                                .help("Assign Tags")
-                                .accessibilityLabel("Assign Tags")
-                            }
-                            .padding(.horizontal, AppSpacing.xl)
-                            .padding(.vertical, AppSpacing.xs)
+                        detailCard(title: "Rating & Tags") {
+                            ratingAndTagsRows(path: path)
                         }
                     }
 
@@ -514,62 +398,114 @@ struct MetadataPanelView: View {
         vm.showToast("Saved snippet \"\(snippet.title)\"", type: .success)
     }
 
-    private func metadataActionTitle(for path: String, hasMetadata: Bool) -> String {
-        if vm.isEmbeddableAudioFile(path) {
-            return hasMetadata ? "Edit Audio Tags" : "Add Audio Tags"
-        }
+    /// Rating (and pin), flag, Finder label and tags for the file shown.
+    private func ratingAndTagsRows(path: String) -> some View {
+        VStack(alignment: .leading, spacing: AppSpacing.lg) {
+            HStack {
+                Text("Rating")
+                    .font(.appCalloutEmphasis)
+                    .foregroundStyle(Color.appMuted)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .layoutPriority(1)
+                Spacer()
 
-        return hasMetadata ? "Edit Metadata" : "Add Metadata"
+                // Favorite toggle
+                Button {
+                    vm.toggleFavorite(path: path)
+                } label: {
+                    Image(systemName: vm.isFavorite(path: path) ? "pin.fill" : "pin")
+                        .font(.appCallout)
+                }
+                .buttonStyle(
+                    AppIconButtonStyle(
+                        width: 24,
+                        height: 24,
+                        cornerRadius: AppRadius.sm,
+                        showsRestingChrome: false,
+                        restingForeground: vm.isFavorite(path: path) ? Color.favoriteGoldText : Color.appMuted
+                    )
+                )
+                .help(vm.isFavorite(path: path) ? "Unpin" : "Pin")
+                .accessibilityLabel(vm.isFavorite(path: path) ? "Unpin" : "Pin")
+
+                StarRatingView(rating: vm.rating(for: path), size: 16) { newRating in
+                    vm.setRating(newRating, for: path)
+                }
+            }
+            // Every row the same height (the flag control is the tallest).
+            .frame(minHeight: RatingRowMetrics.height)
+
+            // Flag & Finder label
+            HStack(spacing: AppSpacing.sm) {
+                Text("Flag")
+                    .font(.appCalloutEmphasis)
+                    .foregroundStyle(Color.appMuted)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .layoutPriority(1)
+                Spacer()
+                FlagSegmentedControl(flag: vm.flag(for: path)) { flag in
+                    applyCull(.flag(flag), to: path)
+                }
+            }
+            .frame(minHeight: RatingRowMetrics.height)
+
+            HStack(spacing: AppSpacing.sm) {
+                Text("Label")
+                    .font(.appCalloutEmphasis)
+                    .foregroundStyle(Color.appMuted)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .layoutPriority(1)
+                Spacer()
+                LabelSwatchRow(label: FinderLabel(labelNumber: vm.labelNumber(for: path))) { label in
+                    applyCull(.label(label), to: path)
+                }
+            }
+            .frame(minHeight: RatingRowMetrics.height)
+
+            // Tags
+            let fileTags = vm.tagsForFile(at: path)
+            if !fileTags.isEmpty || !vm.allTags.isEmpty {
+                HStack(spacing: AppSpacing.sm) {
+                    Text("Tags")
+                        .font(.appCalloutEmphasis)
+                        .foregroundStyle(Color.appMuted)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .layoutPriority(1)
+
+                    TagPillsView(tags: fileTags)
+
+                    Spacer()
+
+                    Menu {
+                        TagAssignmentMenu(paths: [path])
+                    } label: {
+                        Image(systemName: "plus.circle")
+                            .font(.appCaption)
+                            .foregroundStyle(Color.appMuted)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Assign Tags")
+                    .accessibilityLabel("Assign Tags")
+                }
+                .frame(minHeight: RatingRowMetrics.height)
+            }
+        }
+    }
+
+    private enum RatingRowMetrics {
+        static let height: CGFloat = 40
     }
 
     // MARK: - Card wrapper (shared with Lightbox style)
 
-    @ViewBuilder
-    private func detailCard(title: String?, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: AppSpacing.sm) {
-            if let title {
-                Text(title)
-                    .font(.appIcon(11, weight: .medium))
-                    .foregroundStyle(Color.appMuted)
-            }
-            VStack(alignment: .leading, spacing: AppSpacing.sm) {
-                content()
-            }
-            .padding(AppSpacing.lg)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.appSurface.opacity(0.6))
-            .cornerRadius(AppRadius.lg)
-        }
-    }
-
-    // MARK: - Generation Info Grid (matches Lightbox)
-
-    @ViewBuilder
-    private func genInfoGrid(_ info: GenerationInfo) -> some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: AppSpacing.md) {
-            genInfoCell(title: "Model", value: info.model)
-            genInfoCell(title: "Aspect Ratio", value: info.aspectRatio.rawValue)
-        }
-        if !info.timestamp.isEmpty {
-            genInfoCell(title: "Timestamp", value: formatTimestamp(info.timestamp))
-        }
-    }
-
-    @ViewBuilder
-    private func genInfoCell(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: AppSpacing.xxs) {
-            Text(title)
-                .font(.appFootnote)
-                .foregroundStyle(Color.appMuted)
-            Text(value)
-                .font(.appIcon(13, weight: .medium))
-                .foregroundStyle(Color.appPrimaryText)
-                .lineLimit(2)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.appSurface)
-        .cornerRadius(AppRadius.md)
+    private func detailCard(title: String?, collapsible: Bool = true, @ViewBuilder content: () -> some View) -> some View {
+        let content = content()
+        return DetailCard(title: title, collapsible: collapsible) { content }
     }
 
     // MARK: - File Info Card
@@ -577,7 +513,7 @@ struct MetadataPanelView: View {
     @ViewBuilder
     private func fileInfoCard(_ meta: FileMetadata, path: String? = nil) -> some View {
         detailCard(title: "File Info") {
-            VStack(alignment: .leading, spacing: AppSpacing.xs) {
+            VStack(alignment: .leading, spacing: AppSpacing.md) {
                 fileInfoRow(label: "Type", value: meta.fileType)
                 // Capture date (says Captured / Created / Modified) and location (Views/Timeline).
                 if let path {
@@ -669,23 +605,6 @@ struct MetadataPanelView: View {
                     saveReferenceImage(image, index: index, fileName: fileName)
                 }
             }
-    }
-
-    private func formatTimestamp(_ ts: String) -> String {
-        let isoFormatter = ISO8601DateFormatter()
-        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = isoFormatter.date(from: ts) {
-            let df = DateFormatter()
-            df.dateFormat = "yyyy-MM-dd, h:mm:ss a"
-            return df.string(from: date)
-        }
-        isoFormatter.formatOptions = [.withInternetDateTime]
-        if let date = isoFormatter.date(from: ts) {
-            let df = DateFormatter()
-            df.dateFormat = "yyyy-MM-dd, h:mm:ss a"
-            return df.string(from: date)
-        }
-        return ts
     }
 
     private func formatDuration(_ duration: TimeInterval) -> String {

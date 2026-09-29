@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AppearanceSettingsPage: View {
     @Environment(ExplorerViewModel.self) private var vm
+    @AppStorage(ContentItemContextMenu.compactKey) private var compactContextMenu = true
 
     var body: some View {
         SettingsCard(title: "Theme", icon: "circle.lefthalf.filled") {
@@ -43,6 +44,14 @@ struct AppearanceSettingsPage: View {
                     get: { MediaController.shared.hoverScrubEnabled },
                     set: { MediaController.shared.hoverScrubEnabled = $0 }
                 )
+            )
+        }
+
+        SettingsCard(title: "Right-Click Menu", icon: "contextualmenu.and.cursorarrow") {
+            SettingsToggleRow(
+                title: "Leave out what the details panel has",
+                detail: "For one file, the menu skips Open In, Edit Image, trim and frame tools, More Like This, palette search, Copy Prompt, Copy As, Flag, Rating, Label, Pin, Tags and the prompt tools: they're in the details panel (Tools, Prompt, Prompt Tools, Dominant Colours, Rating & Tags). With several files selected the menu keeps everything.",
+                isOn: $compactContextMenu
             )
         }
 

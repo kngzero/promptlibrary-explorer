@@ -997,7 +997,7 @@ struct PromptLibraryExplorerApp: App {
     /// The Similar Images page covers the browser: browser-only commands are
     /// disabled; Cull, Copy Prompt, Copy Path, Reveal and More Like This act on
     /// the page's focused card instead of the hidden selection.
-    private var browserHidden: Bool { explorerVM.isSimilarImagesPageActive || explorerVM.isComparePageActive || explorerVM.isEditorPageActive || explorerVM.isMapTimelinePageActive }
+    private var browserHidden: Bool { explorerVM.isSimilarImagesPageActive || explorerVM.isComparePageActive || explorerVM.isEditorPageActive || explorerVM.isMapTimelinePageActive || explorerVM.isTrimPageActive }
 
     /// Cull menu actions: the lightbox's item while it's open, else the selection.
     private func cull(_ action: CullAction) {

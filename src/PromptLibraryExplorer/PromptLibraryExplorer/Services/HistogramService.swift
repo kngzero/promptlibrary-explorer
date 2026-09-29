@@ -127,7 +127,10 @@ enum HistogramComputer {
     }
 
     /// A ~`maxDimension` px downsample of the file (ImageIO, oriented), counted.
+    /// PSDs whose extra channels aren't transparency are read directly
+    /// (`PSDCompositeReader`): ImageIO would hide pixels behind a saved selection.
     static func compute(fileURL: URL, maxDimension: Int = 512) -> HistogramData? {
+        if let psd = computePSDComposite(fileURL: fileURL, maxDimension: maxDimension) { return psd }
         guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceThumbnailMaxPixelSize: maxDimension,
@@ -136,6 +139,18 @@ enum HistogramComputer {
         ]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         return compute(image: image, maxDimension: maxDimension)
+    }
+
+    /// nil unless the file is a PSD that ImageIO would misread.
+    static func computePSDComposite(fileURL: URL, maxDimension: Int) -> HistogramData? {
+        guard fileURL.pathExtension.lowercased() == "psd",
+              let data = try? Data(contentsOf: fileURL, options: .alwaysMapped),
+              let header = PSDCompositeReader.header(of: data), header.imageIOMisreadsExtraChannel,
+              let sample = PSDCompositeReader.sampledRGBA(of: data, header: header, maxDimension: maxDimension)
+        else { return nil }
+        return sample.pixels.withUnsafeBufferPointer {
+            compute(rgba: $0, width: sample.width, height: sample.height, bytesPerRow: sample.width * 4)
+        }
     }
 }
 

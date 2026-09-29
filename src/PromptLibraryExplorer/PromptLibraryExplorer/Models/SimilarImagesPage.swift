@@ -97,6 +97,7 @@ struct SimilarPageModeState: Equatable, Sendable {
 /// menu. The flag / rating / label submenus are the regular culling actions.
 enum SimilarCardAction: String, CaseIterable, Identifiable, Sendable {
     case openInLightbox
+    case showInFolder
     case revealInFinder
     case moreLikeThis
     case copyPrompt
@@ -106,6 +107,7 @@ enum SimilarCardAction: String, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .openInLightbox: return "Open in Lightbox"
+        case .showInFolder: return "Show in Folder"
         case .revealInFinder: return "Reveal in Finder"
         case .moreLikeThis: return "More Like This"
         case .copyPrompt: return "Copy Prompt"
@@ -115,14 +117,15 @@ enum SimilarCardAction: String, CaseIterable, Identifiable, Sendable {
     var systemImage: String {
         switch self {
         case .openInLightbox: return "arrow.up.left.and.arrow.down.right"
-        case .revealInFinder: return "folder"
+        case .showInFolder: return "folder"
+        case .revealInFinder: return "arrow.up.forward.app"
         case .moreLikeThis: return "sparkle.magnifyingglass"
         case .copyPrompt: return "doc.on.doc"
         }
     }
 
     /// Hover buttons and context-menu items, in display order.
-    static let displayOrder: [SimilarCardAction] = [.openInLightbox, .revealInFinder, .moreLikeThis, .copyPrompt]
+    static let displayOrder: [SimilarCardAction] = [.openInLightbox, .showInFolder, .revealInFinder, .moreLikeThis, .copyPrompt]
 }
 
 /// What the selected group offers (header of the comparison area).

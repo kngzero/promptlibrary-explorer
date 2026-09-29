@@ -115,7 +115,8 @@ final class ViewingController {
         let magnification = defaults.integer(forKey: Keys.loupeMagnification)
         loupeMagnification = Self.loupeMagnifications.contains(magnification) ? magnification : 2
         loupeNearestNeighbour = defaults.object(forKey: Keys.loupeNearest) as? Bool ?? true
-        histogramEnabled = defaults.bool(forKey: Keys.histogram)
+        // On by default: it's a collapsible details section, so it stays findable.
+        histogramEnabled = defaults.object(forKey: Keys.histogram) as? Bool ?? true
         slideshowOptions = SlideshowOptions.load(from: defaults)
     }
 }

@@ -45,16 +45,34 @@ final class MediaGIFWriter {
 struct MediaClipExportOptions: Equatable {
     enum Format: String, CaseIterable, Identifiable {
         case h264, hevc, gif
+        /// Audio files (no video track): AAC in an M4A.
+        case m4a
         var id: String { rawValue }
         var title: String {
             switch self {
             case .h264: return "MP4 (H.264)"
             case .hevc: return "MP4 (HEVC)"
             case .gif: return "Animated GIF"
+            case .m4a: return "M4A (AAC)"
             }
         }
-        var fileExtension: String { self == .gif ? "gif" : "mp4" }
-        var contentType: UTType { self == .gif ? .gif : .mpeg4Movie }
+        var fileExtension: String {
+            switch self {
+            case .gif: return "gif"
+            case .m4a: return "m4a"
+            case .h264, .hevc: return "mp4"
+            }
+        }
+        var contentType: UTType {
+            switch self {
+            case .gif: return .gif
+            case .m4a: return .mpeg4Audio
+            case .h264, .hevc: return .mpeg4Movie
+            }
+        }
+
+        /// What the trim sheet offers for a clip with video.
+        static let videoFormats: [Format] = [.h264, .hevc, .gif]
     }
 
     var format: Format = .h264
@@ -98,6 +116,9 @@ enum MediaClipExporter {
         let passthrough: Bool
         if options.format == .gif {
             try await exportGIF(source: source, range: range, options: options, to: temp, progress: progress)
+            passthrough = false
+        } else if options.format == .m4a {
+            try await exportAudio(source: source, range: range, to: temp, progress: progress)
             passthrough = false
         } else {
             passthrough = try await exportMovie(source: source, range: range, format: options.format, to: temp, progress: progress)
@@ -151,6 +172,35 @@ enum MediaClipExporter {
         if !range.isFullClip {
             session.timeRange = range.timeRange
         }
+        try await run(session, progress: progress)
+        return presetName == AVAssetExportPresetPassthrough
+    }
+
+    // MARK: M4A
+
+    /// Audio files: the range as AAC in an M4A (always re-encoded).
+    private static func exportAudio(
+        source: URL,
+        range: MediaTrimRange,
+        to temp: URL,
+        progress: @escaping @MainActor (Double) -> Void
+    ) async throws {
+        let asset = AVURLAsset(url: source)
+        let info = try await MediaFrameExtractor.info(for: source)
+        guard info.hasAudio else { throw MediaToolError.noAudioTrack }
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            throw MediaToolError.exportFailed("This audio can't be exported as M4A.")
+        }
+        session.outputURL = temp
+        session.outputFileType = .m4a
+        if !range.isFullClip {
+            session.timeRange = range.timeRange
+        }
+        try await run(session, progress: progress)
+    }
+
+    /// Runs `session`, reporting progress, and cancels it with the calling task.
+    private static func run(_ session: AVAssetExportSession, progress: @escaping @MainActor (Double) -> Void) async throws {
         let box = SessionBox(session)
 
         try await withTaskCancellationHandler {
@@ -176,7 +226,6 @@ enum MediaClipExporter {
         } onCancel: {
             box.session.cancelExport()
         }
-        return presetName == AVAssetExportPresetPassthrough
     }
 
     // MARK: GIF

@@ -105,6 +105,9 @@ extension ExplorerViewModel {
         switch action {
         case .openInLightbox:
             openSimilarPageLightbox(at: path)
+        case .showInFolder:
+            // Closes the page (`.fileRevealed`) and opens the file's folder with it selected.
+            Task { await revealFile(at: URL(fileURLWithPath: path)) }
         case .revealInFinder:
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         case .moreLikeThis:

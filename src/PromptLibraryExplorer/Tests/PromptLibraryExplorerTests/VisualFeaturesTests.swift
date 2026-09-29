@@ -202,7 +202,7 @@ final class VisualFeaturesSimilarImagesTests: XCTestCase {
     /// The Similar Images page's card and group actions (the old sheet's
     /// `SimilarGroupAction` was folded into these).
     func testPageExposesNoDeletionAction() {
-        XCTAssertEqual(Set(SimilarCardAction.allCases), [.openInLightbox, .revealInFinder, .moreLikeThis, .copyPrompt])
+        XCTAssertEqual(Set(SimilarCardAction.allCases), [.openInLightbox, .showInFolder, .revealInFinder, .moreLikeThis, .copyPrompt])
         XCTAssertEqual(Set(SimilarGroupPageAction.allCases), [.selectInBrowser, .addToCollection, .openAsListing])
         let texts = SimilarCardAction.allCases.map { $0.rawValue + " " + $0.title + " " + $0.systemImage }
             + SimilarGroupPageAction.allCases.map { $0.rawValue + " " + $0.title + " " + $0.systemImage }

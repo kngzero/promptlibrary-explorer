@@ -318,6 +318,56 @@ final class MediaGIFAndClipTests: TempDirectoryTestCase {
         XCTAssertEqual(second.lastPathComponent, "take (trim) 2.mp4")
     }
 
+    func testAudioTrimExportsTheRangeAsM4A() async throws {
+        let source = try writeFile("song.wav", SineWAVFixture.data(sampleRate: 44100, segments: [
+            (seconds: 3, amplitude: 0.5, frequency: 440),
+        ]))
+        let sourceData = try Data(contentsOf: source)
+        var options = MediaClipExportOptions()
+        options.format = .m4a
+        let destination = MediaExportNaming.uniqueURL(
+            for: MediaExportNaming.trimFileName(videoName: source.lastPathComponent, fileExtension: options.format.fileExtension),
+            in: tempDir, avoiding: source
+        )
+        XCTAssertEqual(destination.lastPathComponent, "song (trim).m4a")
+        try await MediaClipExporter.export(
+            source: source, range: MediaTrimRange(start: 0.5, end: 2, duration: 3), options: options, to: destination
+        ) { _ in }
+
+        let asset = AVURLAsset(url: destination)
+        let duration = try await asset.load(.duration).seconds
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        XCTAssertEqual(duration, 1.5, accuracy: 0.1)
+        XCTAssertFalse(audioTracks.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: source), sourceData, "the original is untouched")
+        XCTAssertEqual(MediaClipExportOptions.Format.videoFormats, [.h264, .hevc, .gif], "M4A isn't offered for video")
+    }
+
+    @MainActor
+    func testTrimSessionForAudioLoadsAsM4AAndMovesInAndOut() async throws {
+        let source = try writeFile("voice.wav", SineWAVFixture.data(sampleRate: 44100, segments: [
+            (seconds: 2, amplitude: 0.5, frequency: 330),
+        ]))
+        let session = MediaTrimSession(url: source)
+        XCTAssertTrue(session.isAudioOnly, "decided from the name before loading")
+        await session.load()
+        defer { session.tearDown() }
+        XCTAssertNil(session.loadError)
+        XCTAssertTrue(session.isAudioOnly)
+        XCTAssertEqual(session.options.format, .m4a)
+        XCTAssertEqual(session.range.duration, 2, accuracy: 0.05)
+        XCTAssertFalse(session.waveform.isEmpty)
+        XCTAssertEqual(session.nudgeStep, 0.1, accuracy: 0.0001)
+
+        session.seek(to: 0.5, pause: true)
+        session.setIn()
+        session.nudge(by: 10)
+        session.setOut()
+        XCTAssertEqual(session.range.start, 0.5, accuracy: 0.001)
+        XCTAssertEqual(session.range.end, 1.5, accuracy: 0.001)
+        XCTAssertTrue(session.canExport)
+    }
+
     func testPassthroughOnlyWhenCodecMatches() {
         XCTAssertEqual(MediaClipExporter.preset(for: .h264, sourceCodec: kCMVideoCodecType_H264, passthroughCompatible: true), AVAssetExportPresetPassthrough)
         XCTAssertEqual(MediaClipExporter.preset(for: .h264, sourceCodec: kCMVideoCodecType_H264, passthroughCompatible: false), AVAssetExportPresetHighestQuality)

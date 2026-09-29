@@ -218,20 +218,7 @@ struct AnalysisDetailCard<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.sm) {
-            if let title {
-                Text(title)
-                    .font(.appIcon(11, weight: .medium))
-                    .foregroundStyle(Color.appMuted)
-            }
-            VStack(alignment: .leading, spacing: AppSpacing.sm) {
-                content()
-            }
-            .padding(AppSpacing.lg)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.appSurface.opacity(0.6))
-            .cornerRadius(AppRadius.lg)
-        }
+        DetailCard(title: title, content: content)
     }
 }
 
